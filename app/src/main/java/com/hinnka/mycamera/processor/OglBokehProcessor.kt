@@ -16,6 +16,7 @@ import com.hinnka.mycamera.utils.PLog
 import java.nio.ByteOrder
 import kotlin.math.ceil
 import kotlin.math.floor
+import kotlin.math.log2
 import kotlin.math.sqrt
 
 class OglBokehProcessor {
@@ -26,7 +27,6 @@ class OglBokehProcessor {
         private const val ANALYTIC_BOKEH_HIGHLIGHTS_ENABLED = true
         private const val HIGHLIGHT_MASK_THRESHOLD = 0.03f
         private const val MIN_ANALYTIC_COC_PIXELS = 20f
-        private const val MIN_BUBBLE_ANALYTIC_COC_PIXELS = 10f
         private const val FOCUS_DEPTH_DEAD_BAND = 0.015f
         // Synthetic-highlight defocus gate. A depth sample is accepted when
         // its absolute focus gap is >= X. The low-depth branch retains the
@@ -37,7 +37,6 @@ class OglBokehProcessor {
         // Tunable highlight-quality gate measured in linear RGB.
         private const val MIN_HIGHLIGHT_NEIGHBOR_LUMA_DIFFERENCE = 0.11f
         private const val HIGHLIGHT_MIN_CENTER_SPACING_SCALE = 0.9f
-        private const val BUBBLE_HIGHLIGHT_MIN_CENTER_SPACING_SCALE = 0.82f
         private const val HIGHLIGHT_PEAK_DISCOVERY_CELL_SCALE = 0.5f
         private const val PREEXISTING_BOKEH_RADIUS_SCALE = 0.05f
         private const val MAX_PREEXISTING_BOKEH_RADIUS_SCALE = 1.5f
@@ -45,6 +44,26 @@ class OglBokehProcessor {
         private const val MIN_PREEXISTING_BOKEH_FILL_RATIO = 0.45f
         private const val MIN_PREEXISTING_BOKEH_ASPECT_RATIO = 0.5f
         private const val HIGHLIGHT_INSTANCE_STRIDE_FLOATS = 6
+
+        // Soap-bubble planning. Sizes are in original-image pixels.
+        // Soap-bubble optics are over-corrected for spherical aberration: only
+        // sources behind focus form a bright rim. A source becomes a bubble once
+        // its normalized depth gap behind focus (same normalization as CoC)
+        // reaches this value; front and near-focus highlights stay soft.
+        private const val MIN_BUBBLE_DEPTH_GAP = 0.3f
+        // Renderability floor only: a ring needs a few pixels to exist.
+        private const val MIN_BUBBLE_COC_PIXELS = 10f
+        // The source pass compares each pixel with a bubble-scale neighborhood.
+        private const val BUBBLE_BACKGROUND_RADIUS_SCALE = 0.6f
+        // A connected source whose equivalent radius does not exceed its bubble
+        // radius is one light and forms exactly one bubble.
+        private const val BUBBLE_POINT_SOURCE_RADIUS_SCALE = 1.0f
+        // One source forms one bubble; bubbles of neighboring sources only
+        // overlap partially. Split centers stay at least this many radii apart.
+        private const val BUBBLE_SOURCE_SPACING_SCALE = 1.25f
+        private const val HEXAGONAL_CELL_AREA_SCALE = 0.8660254f
+        private const val MAX_BUBBLES_PER_COMPONENT = 256
+        private const val MAX_BUBBLES = 4096
     }
 
     private data class AnalyticHighlight(
@@ -79,6 +98,14 @@ class OglBokehProcessor {
         val green: Float,
         val blue: Float,
         val alpha: Float,
+    )
+
+    private data class BubblePlan(
+        val bubbles: List<AnalyticHighlight>,
+        val componentCount: Int,
+        val splitComponentCount: Int,
+        val plannedCount: Int,
+        val cappedCount: Int,
     )
 
     private data class DepthClassification(
@@ -232,12 +259,12 @@ class OglBokehProcessor {
             android.opengl.Matrix.setIdentityM(identity, 0)
 
             val compactHighlightTex = IntArray(1)
+            val bubbleBackgroundRadius = maxBlurRadius * BUBBLE_BACKGROUND_RADIUS_SCALE
             val analyticHighlights = if (ANALYTIC_BOKEH_HIGHLIGHTS_ENABLED) {
-                val depthClassification = if (bokehStyle == BokehStyle.DEFAULT) {
-                    // Only the default style performs CPU highlight topology. Its
-                    // RGBA8 depth/mask copy never feeds the renderer; finalDepthTex
-                    // remains RGBA16F. Avoid this synchronizing readback for the fully
-                    // GPU-integrated natural and bubble styles.
+                val depthClassification = if (bokehStyle != BokehStyle.NATURAL) {
+                    // CPU highlight topology needs an RGBA8 depth/mask copy. It
+                    // never feeds the renderer; finalDepthTex remains RGBA16F.
+                    // Natural bokeh is fully GPU-integrated and skips this sync.
                     GLES30.glGenTextures(1, depthReadbackTex, 0)
                     GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, depthReadbackTex[0])
                     GLES30.glTexImage2D(GLES30.GL_TEXTURE_2D, 0, GLES30.GL_RGBA8, bokehWidth, bokehHeight, 0, GLES30.GL_RGBA, GLES30.GL_UNSIGNED_BYTE, null)
@@ -259,22 +286,25 @@ class OglBokehProcessor {
                 }
                 GLES30.glEnable(GLES30.GL_DITHER)
 
-                // Step 3: Classify only compact, isolated highlights. This prevents
-                // large bright regions from entering the inferred-radiance bokeh path.
-                // Natural bokeh has no analytic overlay and its PSF does not sample
-                // the compact-highlight texture, so skip the complete pass there.
+                // Step 3: Extract highlight sources. Default bokeh classifies only
+                // compact, isolated highlights; bubble bokeh extracts the complete
+                // defocused light-source field with its emitted energy. Natural
+                // bokeh has no analytic overlay and skips the complete pass.
                 if (bokehStyle != BokehStyle.NATURAL) {
+                    val bubbleSourceField = bokehStyle == BokehStyle.BUBBLE
+                    // Bubble energy carries reconstructed clipped radiance above 1.
+                    val halfFloatSource = halfFloatOutput || bubbleSourceField
                     GLES30.glGenTextures(1, compactHighlightTex, 0)
                     GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, compactHighlightTex[0])
                     GLES30.glTexImage2D(
                         GLES30.GL_TEXTURE_2D,
                         0,
-                        if (halfFloatOutput) GLES30.GL_RGBA16F else GLES30.GL_RGBA8,
+                        if (halfFloatSource) GLES30.GL_RGBA16F else GLES30.GL_RGBA8,
                         bokehWidth,
                         bokehHeight,
                         0,
                         GLES30.GL_RGBA,
-                        if (halfFloatOutput) GLES30.GL_HALF_FLOAT else GLES30.GL_UNSIGNED_BYTE,
+                        if (halfFloatSource) GLES30.GL_HALF_FLOAT else GLES30.GL_UNSIGNED_BYTE,
                         null
                     )
                     GLES30.glTexParameteri(
@@ -293,7 +323,9 @@ class OglBokehProcessor {
                         compactHighlightTex[0],
                         0
                     )
-                    requireFramebufferComplete("compact bokeh highlight")
+                    requireFramebufferComplete(
+                        if (bubbleSourceField) "bubble source field" else "compact bokeh highlight"
+                    )
                     GLES30.glViewport(0, 0, bokehWidth, bokehHeight)
                     GLES30.glClear(GLES30.GL_COLOR_BUFFER_BIT)
                     GLES30.glUseProgram(compactHighlightProgramId)
@@ -310,79 +342,131 @@ class OglBokehProcessor {
                         GLES30.glGetUniformLocation(compactHighlightProgramId, "uDepthTexture"),
                         1
                     )
-                    GLES30.glUniformMatrix4fv(
-                        GLES30.glGetUniformLocation(compactHighlightProgramId, "uDepthMatrix"),
-                        1,
-                        false,
-                        identity,
-                        0
-                    )
                     GLES30.glUniform1f(
                         GLES30.glGetUniformLocation(compactHighlightProgramId, "uMaxBlurRadius"),
                         maxBlurRadius
                     )
                     GLES30.glUniform1f(
-                        GLES30.glGetUniformLocation(compactHighlightProgramId, "uAperture"),
-                        HIGHLIGHT_CLASSIFICATION_F_NUMBER
-                    )
-                    GLES30.glUniform1f(
                         GLES30.glGetUniformLocation(compactHighlightProgramId, "uFocusDepth"),
                         focusDepth
-                    )
-                    GLES30.glUniform2f(
-                        GLES30.glGetUniformLocation(compactHighlightProgramId, "uTexelSize"),
-                        1.0f / originalImage.width,
-                        1.0f / originalImage.height
-                    )
-                    GLES30.glUniform1f(
-                        GLES30.glGetUniformLocation(
-                            compactHighlightProgramId,
-                            "uMinNeighborhoodLumaDifference",
-                        ),
-                        MIN_HIGHLIGHT_NEIGHBOR_LUMA_DIFFERENCE,
                     )
                     GLES30.glUniform1i(
                         GLES30.glGetUniformLocation(compactHighlightProgramId, "uLinearInput"),
                         if (linearInput) 1 else 0
                     )
+                    if (bubbleSourceField) {
+                        GLES30.glUniform1f(
+                            GLES30.glGetUniformLocation(compactHighlightProgramId, "uAperture"),
+                            aperture
+                        )
+                        GLES30.glUniform1f(
+                            GLES30.glGetUniformLocation(compactHighlightProgramId, "uMinCocPixels"),
+                            MIN_BUBBLE_COC_PIXELS
+                        )
+                        GLES30.glUniform1f(
+                            GLES30.glGetUniformLocation(compactHighlightProgramId, "uMinBubbleDepthGap"),
+                            MIN_BUBBLE_DEPTH_GAP
+                        )
+                        GLES30.glUniform1f(
+                            GLES30.glGetUniformLocation(compactHighlightProgramId, "uSourceLod"),
+                            log2(originalImage.width.toFloat() / bokehWidth.toFloat())
+                                .coerceAtLeast(0.0f)
+                        )
+                        GLES30.glUniform1f(
+                            GLES30.glGetUniformLocation(compactHighlightProgramId, "uBackgroundLod"),
+                            log2(bubbleBackgroundRadius.coerceAtLeast(1.0f))
+                        )
+                        GLES30.glUniform2f(
+                            GLES30.glGetUniformLocation(compactHighlightProgramId, "uBackgroundStep"),
+                            bubbleBackgroundRadius / originalImage.width,
+                            bubbleBackgroundRadius / originalImage.height
+                        )
+                    } else {
+                        GLES30.glUniformMatrix4fv(
+                            GLES30.glGetUniformLocation(compactHighlightProgramId, "uDepthMatrix"),
+                            1,
+                            false,
+                            identity,
+                            0
+                        )
+                        GLES30.glUniform1f(
+                            GLES30.glGetUniformLocation(compactHighlightProgramId, "uAperture"),
+                            HIGHLIGHT_CLASSIFICATION_F_NUMBER
+                        )
+                        GLES30.glUniform2f(
+                            GLES30.glGetUniformLocation(compactHighlightProgramId, "uTexelSize"),
+                            1.0f / originalImage.width,
+                            1.0f / originalImage.height
+                        )
+                        GLES30.glUniform1f(
+                            GLES30.glGetUniformLocation(
+                                compactHighlightProgramId,
+                                "uMinNeighborhoodLumaDifference",
+                            ),
+                            MIN_HIGHLIGHT_NEIGHBOR_LUMA_DIFFERENCE,
+                        )
+                    }
                     drawQuad(compactHighlightProgramId)
+                    requireNoGlError(
+                        if (bubbleSourceField) "bubble source field RGBA16F" else "compact bokeh highlight"
+                    )
+                    val classification = checkNotNull(depthClassification) {
+                        "Highlight planning requires resolved depth topology"
+                    }
+                    // Read level 0 while it is still the framebuffer attachment,
+                    // then build the mip chain sampled by the PSF gather.
+                    val highlights = if (bubbleSourceField) {
+                        planBubbleHighlights(
+                            width = bokehWidth,
+                            height = bokehHeight,
+                            depthClassification = classification,
+                            originalWidth = originalImage.width,
+                            originalHeight = originalImage.height,
+                            focusDepth = focusDepth,
+                            aperture = aperture,
+                            maxBlurRadius = maxBlurRadius,
+                        ).also { plan ->
+                            PLog.d(
+                                TAG,
+                                "Bubble bokeh plan: fNumber=$aperture, " +
+                                    "components=${plan.componentCount}, " +
+                                    "splitComponents=${plan.splitComponentCount}, " +
+                                    "planned=${plan.plannedCount}, " +
+                                    "capped=${plan.cappedCount}, " +
+                                    "drawn=${plan.bubbles.size}"
+                            )
+                        }.bubbles
+                    } else {
+                        extractAnalyticHighlights(
+                            width = bokehWidth,
+                            height = bokehHeight,
+                            halfFloat = halfFloatSource,
+                            refinedDepthPixels = classification.otherDepth,
+                            subjectMaskPixels = classification.subjectMask,
+                            originalWidth = originalImage.width,
+                            originalHeight = originalImage.height,
+                            focusDepth = focusDepth,
+                            aperture = aperture,
+                            maxBlurRadius = maxBlurRadius,
+                        ).also { extraction ->
+                            PLog.d(
+                                TAG,
+                                "Analytic bokeh highlights: style=$bokehStyle, fNumber=$aperture, " +
+                                    "minNeighborLumaDelta=$MIN_HIGHLIGHT_NEIGHBOR_LUMA_DIFFERENCE, " +
+                                    "candidates=${extraction.eligibleCandidateCount}, " +
+                                    "depthGateRejected=${extraction.depthGateRejectedCount}, " +
+                                    "preExisting=${extraction.preExistingBokehCount}, " +
+                                    "densitySuppressed=${extraction.densitySuppressedCount}, " +
+                                    "accepted=${extraction.highlights.size}"
+                            )
+                        }.highlights
+                    }
                     GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, compactHighlightTex[0])
                     GLES30.glGenerateMipmap(GLES30.GL_TEXTURE_2D)
-                }
-
-                if (bokehStyle == BokehStyle.NATURAL) {
+                    highlights
+                } else {
                     PLog.d(TAG, "Natural bokeh uses integrated radial PSF")
                     emptyList()
-                } else if (bokehStyle == BokehStyle.BUBBLE) {
-                    PLog.d(TAG, "Bubble bokeh uses integrated optical PSF")
-                    emptyList()
-                } else {
-                    extractAnalyticHighlights(
-                        width = bokehWidth,
-                        height = bokehHeight,
-                        halfFloat = halfFloatOutput,
-                        refinedDepthPixels = checkNotNull(depthClassification) {
-                            "Default bokeh requires resolved depth topology"
-                        }.otherDepth,
-                        subjectMaskPixels = depthClassification.subjectMask,
-                        originalWidth = originalImage.width,
-                        originalHeight = originalImage.height,
-                        focusDepth = focusDepth,
-                        aperture = aperture,
-                        maxBlurRadius = maxBlurRadius,
-                        bokehStyle = bokehStyle,
-                    ).also { extraction ->
-                        PLog.d(
-                            TAG,
-                            "Analytic bokeh highlights: style=$bokehStyle, fNumber=$aperture, " +
-                                "minNeighborLumaDelta=$MIN_HIGHLIGHT_NEIGHBOR_LUMA_DIFFERENCE, " +
-                                "candidates=${extraction.eligibleCandidateCount}, " +
-                                "depthGateRejected=${extraction.depthGateRejectedCount}, " +
-                                "preExisting=${extraction.preExistingBokehCount}, " +
-                                "densitySuppressed=${extraction.densitySuppressedCount}, " +
-                                "accepted=${extraction.highlights.size}"
-                        )
-                    }.highlights
                 }
             } else {
                 GLES30.glEnable(GLES30.GL_DITHER)
@@ -437,6 +521,13 @@ class OglBokehProcessor {
             GLES30.glUniform1f(GLES30.glGetUniformLocation(bokehProgramId, "uFocusDepth"), focusDepth)
             GLES30.glUniform2f(GLES30.glGetUniformLocation(bokehProgramId, "uTexelSize"), 1.0f / originalImage.width, 1.0f / originalImage.height)
             GLES30.glUniformMatrix4fv(GLES30.glGetUniformLocation(bokehProgramId, "uDepthMatrix"), 1, false, identity, 0)
+            GLES30.glUniform1f(
+                GLES30.glGetUniformLocation(bokehProgramId, "uBubbleBackgroundLod"),
+                log2(
+                    (2.0f * bubbleBackgroundRadius * bokehWidth / originalImage.width)
+                        .coerceAtLeast(1.0f)
+                ),
+            )
 
             drawQuad(bokehProgramId)
             requireNoGlError("PSF linear background / support RGBA16F")
@@ -709,7 +800,6 @@ class OglBokehProcessor {
         focusDepth: Float,
         aperture: Float,
         maxBlurRadius: Float,
-        bokehStyle: BokehStyle,
     ): AnalyticHighlightExtraction {
         val pixelCount = width.toLong() * height.toLong()
         check(pixelCount == refinedDepthPixels.size.toLong()) {
@@ -792,10 +882,7 @@ class OglBokehProcessor {
 
             val originalPixelsPerWorkingX = originalWidth.toFloat() / width.toFloat()
             val originalPixelsPerWorkingY = originalHeight.toFloat() / height.toFloat()
-            val minimumSpacing = minimumHighlightCenterSpacing(
-                maxBlurRadius,
-                bokehStyle,
-            )
+            val minimumSpacing = minimumHighlightCenterSpacing(maxBlurRadius)
             val discoveryCellSize = maxOf(
                 minimumSpacing * HIGHLIGHT_PEAK_DISCOVERY_CELL_SCALE,
                 1.0f,
@@ -832,41 +919,18 @@ class OglBokehProcessor {
                     aperture = aperture,
                     maxBlurRadius = maxBlurRadius,
                 )
-                val minimumCocPixels = if (bokehStyle == BokehStyle.BUBBLE) {
-                    MIN_BUBBLE_ANALYTIC_COC_PIXELS
-                } else {
-                    MIN_ANALYTIC_COC_PIXELS
-                }
-                if (depthCocPixels < minimumCocPixels && !isPreExistingBokeh) return
-                if (bokehStyle != BokehStyle.BUBBLE &&
-                    !isSyntheticHighlightDefocusedDepth(centerDepth, focusDepth)
-                ) {
+                if (depthCocPixels < MIN_ANALYTIC_COC_PIXELS && !isPreExistingBokeh) return
+                if (!isSyntheticHighlightDefocusedDepth(centerDepth, focusDepth)) {
                     depthGateRejectedCount++
                     return
                 }
                 val cocPixels = if (isPreExistingBokeh) {
                     maxOf(depthCocPixels, sourceRadiusPixels * 1.05f)
                         .coerceAtMost(maxBlurRadius * 1.2f)
-                } else if (bokehStyle == BokehStyle.BUBBLE) {
-                    val brightnessScale = (peak.score / 0.32f).coerceIn(0.0f, 1.0f)
-                    val confidenceScale = sqrt(peak.alpha.coerceIn(0.0f, 1.0f))
-                    val sourceExtentScale = sqrt(
-                        (sourceRadiusPixels / maxOf(maxBlurRadius, 1.0f))
-                            .coerceIn(0.0f, 1.0f)
-                    )
-                    val opticalPhase = centerX * 0.7548777f + centerY * 0.5698403f
-                    val stableLensVariation = 0.84f +
-                        (opticalPhase - floor(opticalPhase)) * 0.32f
-                    val opticalSizeScale = (
-                        0.38f + brightnessScale * 0.28f +
-                            confidenceScale * 0.28f + sourceExtentScale * 0.18f
-                        ) * stableLensVariation
-                    (depthCocPixels * opticalSizeScale)
-                        .coerceIn(minimumCocPixels, maxBlurRadius * 1.18f)
                 } else {
                     depthCocPixels
                 }
-                if (cocPixels < minimumCocPixels) return
+                if (cocPixels < MIN_ANALYTIC_COC_PIXELS) return
                 if (!hasEligibleDefocusedSupport(
                         refinedDepthPixels = refinedDepthPixels,
                         subjectMaskPixels = subjectMaskPixels,
@@ -880,19 +944,14 @@ class OglBokehProcessor {
                         cocPixels = cocPixels,
                         aperture = aperture,
                         maxBlurRadius = maxBlurRadius,
-                        bokehStyle = bokehStyle,
                     )
                 ) {
                     depthGateRejectedCount++
                     return
                 }
 
-                // Default optical discs are premultiplied by classifier alpha.
-                // Bubble RGB instead carries the wider removal signal while alpha
-                // identifies the compact center, so it must not be divided again.
-                val sourceSignalScale = if (bokehStyle == BokehStyle.BUBBLE) {
-                    1.0f
-                } else if (isPreExistingBokeh) {
+                // Optical discs are premultiplied by classifier alpha.
+                val sourceSignalScale = if (isPreExistingBokeh) {
                     1.0f / maxOf(
                         peak.alpha,
                         0.001f,
@@ -1041,7 +1100,6 @@ class OglBokehProcessor {
             val selectedCandidates = selectDensityLimitedHighlights(
                 candidates,
                 maxBlurRadius,
-                bokehStyle,
             )
             val highlights = ArrayList<AnalyticHighlight>(candidates.size)
             var preExistingBokehCount = 0
@@ -1068,20 +1126,248 @@ class OglBokehProcessor {
         }
     }
 
+    /**
+     * 泡泡高光规划：按连通域把焦外光源场拆成能形成泡泡的点光源。
+     *
+     * 每个 8 连通域是一块连续发光区域，泡泡半径取区域的能量加权 CoC。
+     * 区域等效半径不超过泡泡半径时视为单个光源，只形成一个泡泡（位于能量重心）；
+     * 否则按区域面积与泡泡间距（六边形堆积，间距 1.25 倍半径，仅部分重叠）规划数量，
+     * 由亮到暗选出满足间距的中心，再把区域内每个像素的能量分给最近的中心。
+     * 每个泡泡的能量、颜色、位置与尺寸都来自其所属像素，区域总能量守恒。
+     */
+    private fun planBubbleHighlights(
+        width: Int,
+        height: Int,
+        depthClassification: DepthClassification,
+        originalWidth: Int,
+        originalHeight: Int,
+        focusDepth: Float,
+        aperture: Float,
+        maxBlurRadius: Float,
+    ): BubblePlan {
+        val pixelCount = width * height
+        check(depthClassification.otherDepth.size == pixelCount) {
+            "Bubble source/depth domains do not match"
+        }
+        val buffer = LargeDirectBuffer.allocate(
+            pixelCount.toLong() * 8L,
+            "OGL bubble-source readback",
+        ) ?: throw IllegalStateException("Unable to allocate bubble-source readback buffer")
+
+        return try {
+            GLES30.glReadPixels(
+                0,
+                0,
+                width,
+                height,
+                GLES30.GL_RGBA,
+                GLES30.GL_HALF_FLOAT,
+                buffer,
+            )
+            requireNoGlError("bubble source field RGBA16F readback")
+            buffer.order(ByteOrder.nativeOrder())
+            buffer.position(0)
+            val pixels = buffer.asShortBuffer()
+
+            fun channel(index: Int, component: Int): Float {
+                val value = Half.toFloat(pixels.get(index * 4 + component))
+                return if (value.isFinite()) value.coerceAtLeast(0.0f) else 0.0f
+            }
+
+            val energyLuma = FloatArray(pixelCount)
+            val active = BooleanArray(pixelCount)
+            for (index in 0 until pixelCount) {
+                if (channel(index, 3) <= 0.0f) continue
+                active[index] = true
+                energyLuma[index] = channel(index, 0) * 0.2126f +
+                    channel(index, 1) * 0.7152f + channel(index, 2) * 0.0722f
+            }
+
+            // Depth is quantized to 8 bits, so CoC and focus side are exact tables.
+            val cocByDepth = FloatArray(256) { depthByte ->
+                computeCocPixels(depthByte / 255.0f, focusDepth, aperture, maxBlurRadius)
+            }
+            val depthPixels = depthClassification.otherDepth
+            val originalPixelsPerWorkingX = originalWidth.toFloat() / width.toFloat()
+            val originalPixelsPerWorkingY = originalHeight.toFloat() / height.toFloat()
+            val workingPixelArea = originalPixelsPerWorkingX * originalPixelsPerWorkingY
+
+            val bubbles = ArrayList<AnalyticHighlight>()
+            val bubbleEnergies = ArrayList<Float>()
+            var componentPixels = IntArray(256)
+            var componentCount = 0
+            var splitComponentCount = 0
+            var plannedCount = 0
+
+            for (startIndex in 0 until pixelCount) {
+                if (!active[startIndex]) continue
+
+                var head = 0
+                var tail = 0
+                componentPixels[tail++] = startIndex
+                active[startIndex] = false
+                var componentEnergy = 0.0f
+                var componentCocMoment = 0.0f
+                while (head < tail) {
+                    val index = componentPixels[head++]
+                    val depthByte = depthPixels[index].toInt() and 0xff
+                    componentEnergy += energyLuma[index]
+                    componentCocMoment += energyLuma[index] * cocByDepth[depthByte]
+                    val x = index % width
+                    val y = index / width
+                    for (neighborY in maxOf(y - 1, 0)..minOf(y + 1, height - 1)) {
+                        for (neighborX in maxOf(x - 1, 0)..minOf(x + 1, width - 1)) {
+                            val neighbor = neighborY * width + neighborX
+                            if (!active[neighbor]) continue
+                            active[neighbor] = false
+                            if (tail == componentPixels.size) {
+                                componentPixels = componentPixels.copyOf(componentPixels.size * 2)
+                            }
+                            componentPixels[tail++] = neighbor
+                        }
+                    }
+                }
+                if (componentEnergy <= 0.0f) continue
+                componentCount++
+
+                // Highlight planning: the component area against the bubble
+                // footprint decides how many distinguishable sources it holds.
+                val bubbleRadius = (componentCocMoment / componentEnergy)
+                    .coerceIn(MIN_BUBBLE_COC_PIXELS, maxBlurRadius)
+                val componentArea = tail * workingPixelArea
+                val pointSourceRadius = bubbleRadius * BUBBLE_POINT_SOURCE_RADIUS_SCALE
+                val spacing = bubbleRadius * BUBBLE_SOURCE_SPACING_SCALE
+                val planned = if (componentArea <= Math.PI.toFloat() * pointSourceRadius * pointSourceRadius) {
+                    1
+                } else {
+                    ceil(componentArea / (HEXAGONAL_CELL_AREA_SCALE * spacing * spacing))
+                        .toInt()
+                        .coerceIn(1, MAX_BUBBLES_PER_COMPONENT)
+                }
+                plannedCount += planned
+
+                val centerX = FloatArray(planned)
+                val centerY = FloatArray(planned)
+                var centerCount = 1
+                if (planned > 1) {
+                    splitComponentCount++
+                    // Brightest-first greedy placement keeps every source peak
+                    // and fills the remaining area at the planned spacing.
+                    val order = LongArray(tail) { position ->
+                        val index = componentPixels[position]
+                        (Int.MAX_VALUE - energyLuma[index].toRawBits()).toLong() shl 32 or
+                            index.toLong()
+                    }
+                    order.sort()
+                    val spacingSquared = spacing * spacing
+                    centerCount = 0
+                    for (key in order) {
+                        val index = (key and 0xffffffffL).toInt()
+                        val x = (index % width + 0.5f) * originalPixelsPerWorkingX
+                        val y = (index / width + 0.5f) * originalPixelsPerWorkingY
+                        var separated = true
+                        for (center in 0 until centerCount) {
+                            val deltaX = centerX[center] - x
+                            val deltaY = centerY[center] - y
+                            if (deltaX * deltaX + deltaY * deltaY < spacingSquared) {
+                                separated = false
+                                break
+                            }
+                        }
+                        if (!separated) continue
+                        centerX[centerCount] = x
+                        centerY[centerCount] = y
+                        centerCount++
+                        if (centerCount == planned) break
+                    }
+                }
+
+                // Assign every pixel's energy to its nearest center. A single
+                // bubble sits at the component's energy centroid; split bubbles
+                // keep their planned centers so the spacing contract holds.
+                val red = FloatArray(centerCount)
+                val green = FloatArray(centerCount)
+                val blue = FloatArray(centerCount)
+                val luma = FloatArray(centerCount)
+                val momentX = FloatArray(centerCount)
+                val momentY = FloatArray(centerCount)
+                val cocMoment = FloatArray(centerCount)
+                for (position in 0 until tail) {
+                    val index = componentPixels[position]
+                    val x = (index % width + 0.5f) * originalPixelsPerWorkingX
+                    val y = (index / width + 0.5f) * originalPixelsPerWorkingY
+                    var owner = 0
+                    if (centerCount > 1) {
+                        var nearestDistance = Float.MAX_VALUE
+                        for (center in 0 until centerCount) {
+                            val deltaX = centerX[center] - x
+                            val deltaY = centerY[center] - y
+                            val distance = deltaX * deltaX + deltaY * deltaY
+                            if (distance < nearestDistance) {
+                                nearestDistance = distance
+                                owner = center
+                            }
+                        }
+                    }
+                    val weight = energyLuma[index]
+                    val depthByte = depthPixels[index].toInt() and 0xff
+                    red[owner] += channel(index, 0)
+                    green[owner] += channel(index, 1)
+                    blue[owner] += channel(index, 2)
+                    luma[owner] += weight
+                    momentX[owner] += x * weight
+                    momentY[owner] += y * weight
+                    cocMoment[owner] += cocByDepth[depthByte] * weight
+                }
+                for (center in 0 until centerCount) {
+                    val weight = luma[center]
+                    if (weight <= 0.0f) continue
+                    val coc = (cocMoment[center] / weight)
+                        .coerceIn(MIN_BUBBLE_COC_PIXELS, maxBlurRadius)
+                    val bubbleX = if (centerCount > 1) centerX[center] else momentX[center] / weight
+                    val bubbleY = if (centerCount > 1) centerY[center] else momentY[center] / weight
+                    bubbles += AnalyticHighlight(
+                        centerU = bubbleX / originalWidth.toFloat(),
+                        centerV = bubbleY / originalHeight.toFloat(),
+                        cocPixels = coc,
+                        signalRed = red[center] * workingPixelArea,
+                        signalGreen = green[center] * workingPixelArea,
+                        signalBlue = blue[center] * workingPixelArea,
+                    )
+                    bubbleEnergies += weight
+                }
+            }
+
+            val drawn = if (bubbles.size > MAX_BUBBLES) {
+                bubbles.indices
+                    .sortedByDescending { bubbleEnergies[it] }
+                    .take(MAX_BUBBLES)
+                    .map { bubbles[it] }
+            } else {
+                bubbles
+            }
+            BubblePlan(
+                bubbles = drawn,
+                componentCount = componentCount,
+                splitComponentCount = splitComponentCount,
+                plannedCount = plannedCount,
+                cappedCount = bubbles.size - drawn.size,
+            )
+        } finally {
+            LargeDirectBuffer.free(buffer)
+        }
+    }
+
     private fun selectDensityLimitedHighlights(
         candidates: List<AnalyticHighlightCandidate>,
         maxBlurRadius: Float,
-        bokehStyle: BokehStyle,
     ): BooleanArray {
         if (candidates.isEmpty()) return BooleanArray(0)
 
         // The spacing is fixed for the image and independent of requested CoC.
         // It controls source-center density only; selected sources still draw at
         // their full physical CoC for the requested f-number.
-        val minimumSpacing = minimumHighlightCenterSpacing(
-            maxBlurRadius,
-            bokehStyle,
-        )
+        val minimumSpacing = minimumHighlightCenterSpacing(maxBlurRadius)
         val minimumSpacingSquared = minimumSpacing * minimumSpacing
         val cellSize = minimumSpacing
         val bins = HashMap<Long, MutableList<Int>>()
@@ -1140,18 +1426,8 @@ class OglBokehProcessor {
         return selected
     }
 
-    private fun minimumHighlightCenterSpacing(
-        maxBlurRadius: Float,
-        bokehStyle: BokehStyle,
-    ): Float =
-        maxOf(
-            maxBlurRadius * if (bokehStyle == BokehStyle.BUBBLE) {
-                BUBBLE_HIGHLIGHT_MIN_CENTER_SPACING_SCALE
-            } else {
-                HIGHLIGHT_MIN_CENTER_SPACING_SCALE
-            },
-            1.0f,
-        )
+    private fun minimumHighlightCenterSpacing(maxBlurRadius: Float): Float =
+        maxOf(maxBlurRadius * HIGHLIGHT_MIN_CENTER_SPACING_SCALE, 1.0f)
 
     private fun sampleWorkingDepth(
         depthPixels: ByteArray,
@@ -1220,7 +1496,6 @@ class OglBokehProcessor {
         cocPixels: Float,
         aperture: Float,
         maxBlurRadius: Float,
-        bokehStyle: BokehStyle,
     ): Boolean {
         val originalPixelsPerWorkingX = originalWidth.toFloat() / width.toFloat()
         val originalPixelsPerWorkingY = originalHeight.toFloat() / height.toFloat()
@@ -1249,17 +1524,7 @@ class OglBokehProcessor {
                 if ((subjectMaskPixels[sampleY * width + sampleX].toInt() and 0xff) > 2) return false
                 val depthByte = refinedDepthPixels[sampleY * width + sampleX].toInt() and 0xff
                 val depth = depthByte / 255.0f
-                val eligibleDepth = if (bokehStyle == BokehStyle.BUBBLE) {
-                    computeCocPixels(
-                        depth = depth,
-                        focusDepth = focusDepth,
-                        aperture = aperture,
-                        maxBlurRadius = maxBlurRadius,
-                    ) >= MIN_BUBBLE_ANALYTIC_COC_PIXELS * 0.38f
-                } else {
-                    isSyntheticHighlightDefocusedDepth(depth, focusDepth)
-                }
-                if (!eligibleDepth) return false
+                if (!isSyntheticHighlightDefocusedDepth(depth, focusDepth)) return false
             }
         }
         return true
@@ -1550,17 +1815,20 @@ class OglBokehProcessor {
     private fun initGL(bokehStyle: BokehStyle) {
         val naturalPsfStyle = bokehStyle != BokehStyle.DEFAULT
         val soapBubbleStyle = bokehStyle == BokehStyle.BUBBLE
-        val needsCompactHighlights = bokehStyle != BokehStyle.NATURAL
-        val needsAnalyticOverlay = bokehStyle == BokehStyle.DEFAULT
+        val needsAnalyticOverlay = bokehStyle != BokehStyle.NATURAL
         val vs = GlUtils.compileShader(GLES30.GL_VERTEX_SHADER, Shaders.SIMPLE_VERTEX_SHADER)
         check(vs != 0) { "Bokeh vertex shader compilation failed" }
         try {
-            if (ANALYTIC_BOKEH_HIGHLIGHTS_ENABLED && needsCompactHighlights) {
-                compactHighlightProgramId = createProgram(
-                    vs,
-                    Shaders.compactBokehHighlightFragmentShader(soapBubbleStyle),
-                    "compact bokeh highlight"
-                )
+            if (ANALYTIC_BOKEH_HIGHLIGHTS_ENABLED && needsAnalyticOverlay) {
+                compactHighlightProgramId = if (soapBubbleStyle) {
+                    createProgram(vs, Shaders.BUBBLE_SOURCE_FRAGMENT_SHADER, "bubble source field")
+                } else {
+                    createProgram(
+                        vs,
+                        Shaders.COMPACT_BOKEH_HIGHLIGHT_FRAGMENT_SHADER,
+                        "compact bokeh highlight",
+                    )
+                }
             }
             bokehProgramId = createProgram(
                 vs,
@@ -1592,7 +1860,11 @@ class OglBokehProcessor {
         if (ANALYTIC_BOKEH_HIGHLIGHTS_ENABLED && needsAnalyticOverlay) {
             val analyticHighlightVertexShader = GlUtils.compileShader(
                 GLES30.GL_VERTEX_SHADER,
-                Shaders.analyticBokehHighlightVertexShader(soapBubbleStyle),
+                if (soapBubbleStyle) {
+                    Shaders.SOAP_BUBBLE_VERTEX_SHADER
+                } else {
+                    Shaders.ANALYTIC_BOKEH_HIGHLIGHT_VERTEX_SHADER
+                },
             )
             check(analyticHighlightVertexShader != 0) {
                 "Analytic bokeh highlight vertex shader compilation failed"
@@ -1600,8 +1872,12 @@ class OglBokehProcessor {
             try {
                 analyticHighlightProgramId = createProgram(
                     analyticHighlightVertexShader,
-                    Shaders.analyticBokehHighlightFragmentShader(soapBubbleStyle),
-                    "analytic bokeh highlight",
+                    if (soapBubbleStyle) {
+                        Shaders.SOAP_BUBBLE_FRAGMENT_SHADER
+                    } else {
+                        Shaders.ANALYTIC_BOKEH_HIGHLIGHT_FRAGMENT_SHADER
+                    },
+                    if (soapBubbleStyle) "soap bubble" else "analytic bokeh highlight",
                 )
             } finally {
                 GLES30.glDeleteShader(analyticHighlightVertexShader)
