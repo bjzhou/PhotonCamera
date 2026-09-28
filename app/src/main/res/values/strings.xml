@@ -1036,11 +1036,11 @@
     <string name="lut_creator_premium_required_desc">LUT Creator requires Premium unless you have configured your own OpenAI API key in Settings.</string>
     <string name="lut_creator_tab_ai">AI Analysis</string>
     <string name="lut_creator_tab_local">Local Analysis</string>
-    <string name="lut_creator_use_ai">AI will generate a text LUT recipe from the selected styled image.</string>
+    <string name="lut_creator_use_ai">Your image stays on this device. No upload is needed.</string>
     <string name="lut_creator_custom_ai_instructions">Custom AI Instructions (Optional)</string>
     <string name="lut_creator_custom_ai_hint">e.g., make it moodier, enhance reds</string>
     <string name="lut_creator_select_images">Select Images</string>
-    <string name="lut_creator_ai_mode_desc">Upload one styled image. AI will infer a text LUT recipe directly, without using image editing.</string>
+    <string name="lut_creator_ai_mode_desc">Choose a styled image to create a LUT on your device.</string>
     <string name="lut_creator_local_mode_desc">Upload multiple image pairs. Each pair should include an original image and a styled image of the same scene.</string>
     <string name="lut_creator_local_pairs_hint">For local analysis, add multiple original/styled pairs. The closer the framing and exposure match, the better the merged control points will be.</string>
     <string name="lut_creator_select_source_image">Select Original Image</string>
@@ -1059,7 +1059,7 @@
     <string name="lut_creator_ai_restored_preview">AI restored original preview</string>
     <string name="lut_creator_lut_name_hint">LUT Name</string>
     <string name="lut_creator_generate_save">Generate &amp; Save</string>
-    <string name="lut_creator_generating">Generating 3D Interpolated LUT...</string>
+    <string name="lut_creator_generating">Saving LUT…</string>
     <string name="lut_creator_success">LUT Created Successfully!</string>
     <string name="lut_creator_finish">Finish</string>
     <string name="lut_creator_error">Error: %s</string>
@@ -1326,4 +1326,7 @@
     <string name="settings_accent_color_reset">Restore default</string>
     <string name="settings_accent_color_hex_hint">Enter a six-digit color in #RRGGBB format.</string>
     <string name="settings_accent_color_hex_error">Enter six hexadecimal digits (0–9, A–F).</string>
+    <string name="lut_creator_default_name">My AI LUT</string>
+    <string name="lut_creator_analysis_failed">Could not analyze this image. Please try another image.</string>
+    <string name="lut_creator_save_failed">Could not save the LUT. Please try again.</string>
 </resources>

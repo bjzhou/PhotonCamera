@@ -1003,11 +1003,11 @@
     <string name="lut_creator_premium_required_desc">未在設定中配置自己的 OpenAI API Key 時，LUT 創建功能需要購買會員后才能使用。</string>
     <string name="lut_creator_tab_ai">AI 分析</string>
     <string name="lut_creator_tab_local">本地分析</string>
-    <string name="lut_creator_use_ai">AI 會根據所選效果圖生成文字版 LUT 配方。</string>
+    <string name="lut_creator_use_ai">圖片僅在本機處理，無需上傳。</string>
     <string name="lut_creator_custom_ai_instructions">自訂 AI 提示詞（選填）</string>
     <string name="lut_creator_custom_ai_hint">例如：讓畫面更有氛圍感，加深對比度</string>
     <string name="lut_creator_select_images">選擇圖片</string>
-    <string name="lut_creator_ai_mode_desc">上傳一張效果圖，AI 會直接推斷文字版 LUT 配方，不再調用圖片編輯能力。</string>
+    <string name="lut_creator_ai_mode_desc">選擇一張效果圖，在裝置上產生 LUT。</string>
     <string name="lut_creator_local_mode_desc">上傳多組圖片，每組包含一張原圖和一張效果圖，且應盡量是完全相同的場景。</string>
     <string name="lut_creator_local_pairs_hint">本地分析支援多組原圖/效果圖配對。構圖、曝光和場景越一致，合并后的控制點越穩定。</string>
     <string name="lut_creator_select_source_image">選擇原圖</string>
@@ -1026,7 +1026,7 @@
     <string name="lut_creator_ai_restored_preview">AI 還原的原圖預覽</string>
     <string name="lut_creator_lut_name_hint">LUT 預設名稱</string>
     <string name="lut_creator_generate_save">生成并儲存</string>
-    <string name="lut_creator_generating">正在生成 3D LUT 資料…</string>
+    <string name="lut_creator_generating">正在儲存 LUT…</string>
     <string name="lut_creator_success">LUT 生成成功！</string>
     <string name="lut_creator_finish">完成</string>
     <string name="lut_creator_error">錯誤：%s</string>
@@ -1277,4 +1277,7 @@
     <string name="settings_accent_color_reset">還原預設</string>
     <string name="settings_accent_color_hex_hint">輸入 #RRGGBB 格式的六位色碼。</string>
     <string name="settings_accent_color_hex_error">請輸入六位十六進制字元（0–9、A–F）。</string>
+    <string name="lut_creator_default_name">我的 AI LUT</string>
+    <string name="lut_creator_analysis_failed">無法分析這張圖片，請換一張圖片重試。</string>
+    <string name="lut_creator_save_failed">無法儲存 LUT，請重試。</string>
 </resources>

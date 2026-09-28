@@ -880,11 +880,11 @@
     <string name="lut_creator_premium_required_desc">設定で独自のOpenAI APIキーを指定していない場合、LUT CreatorにはPremiumが必要です。</string>
     <string name="lut_creator_tab_ai">AI解析</string>
     <string name="lut_creator_tab_local">ローカル解析</string>
-    <string name="lut_creator_use_ai">AIが選択したスタイル画像からテキスト形式のLUTレシピを生成します。</string>
+    <string name="lut_creator_use_ai">画像は端末内で処理されます。アップロードは不要です。</string>
     <string name="lut_creator_custom_ai_instructions">カスタムAI指示（任意）</string>
     <string name="lut_creator_custom_ai_hint">例：もっとムーディーに、赤を強調</string>
     <string name="lut_creator_select_images">画像を選択</string>
-    <string name="lut_creator_ai_mode_desc">スタイル適用済み画像を1枚アップロードします。画像編集は行わず、AIが直接テキストLUTレシピを推定します。</string>
+    <string name="lut_creator_ai_mode_desc">スタイル適用済みの画像を選択し、端末上でLUTを生成します。</string>
     <string name="lut_creator_local_mode_desc">複数の画像ペアをアップロードします。各ペアには同一シーンのオリジナル画像とスタイル適用済み画像を含めてください。</string>
     <string name="lut_creator_local_pairs_hint">ローカル解析では複数のオリジナル／スタイル済みペアを追加します。構図と露出が近いほど、統合されるコントロールポイントの精度が上がります。</string>
     <string name="lut_creator_select_source_image">オリジナル画像を選択</string>
@@ -904,7 +904,7 @@
     <string name="lut_creator_lut_name_hint">LUT名</string>
 
     <string name="lut_creator_generate_save">生成して保存</string>
-    <string name="lut_creator_generating">3D補間LUTを生成中</string>
+    <string name="lut_creator_generating">LUTを保存中…</string>
     <string name="lut_creator_success">LUTを生成しました</string>
     <string name="lut_creator_finish">完了</string>
     <string name="lut_creator_error">エラー： %s</string>
@@ -1171,4 +1171,7 @@
     <string name="settings_accent_color_reset">初期値に戻す</string>
     <string name="settings_accent_color_hex_hint">#RRGGBB 形式で6桁のカラーコードを入力してください。</string>
     <string name="settings_accent_color_hex_error">16進数の文字（0–9、A–F）を6桁入力してください。</string>
+    <string name="lut_creator_default_name">マイ AI LUT</string>
+    <string name="lut_creator_analysis_failed">この画像を解析できませんでした。別の画像でお試しください。</string>
+    <string name="lut_creator_save_failed">LUTを保存できませんでした。もう一度お試しください。</string>
 </resources>

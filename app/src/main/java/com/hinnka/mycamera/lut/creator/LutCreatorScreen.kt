@@ -22,7 +22,6 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.platform.LocalContext
 import com.hinnka.mycamera.R
 import com.hinnka.mycamera.ui.components.PaymentDialog
@@ -50,8 +49,8 @@ fun LutCreatorScreen(
     val isPurchased by viewModel.isPurchased.collectAsState()
     val openAIKey by viewModel.openAIApiKey.collectAsState()
     val canUseLutCreator = isPurchased || !openAIKey.isNullOrBlank()
-    var lutName by remember { mutableStateOf("My AI LUT") }
-    var customPrompt by remember { mutableStateOf("") }
+    val defaultLutName = stringResource(R.string.lut_creator_default_name)
+    var lutName by remember { mutableStateOf(defaultLutName) }
     var selectedMode by remember { mutableStateOf(LutCreatorMode.AI) }
     var pendingSourceUri by remember { mutableStateOf<Uri?>(null) }
     var localPairs by remember { mutableStateOf(listOf<LocalImagePairDraft>()) }
@@ -65,7 +64,7 @@ fun LutCreatorScreen(
             viewModel.showPaymentDialog = true
             return@rememberLauncherForActivityResult
         }
-        viewModel.analyzeAiImage(uri, customPrompt)
+        viewModel.analyzeAiImage(uri)
     }
 
     val localSourceLauncher = rememberLauncherForActivityResult(
@@ -161,19 +160,6 @@ fun LutCreatorScreen(
                                             color = MaterialTheme.colorScheme.onSurfaceVariant
                                         )
                                         Spacer(modifier = Modifier.height(16.dp))
-                                        OutlinedTextField(
-                                            value = customPrompt,
-                                            onValueChange = { customPrompt = it },
-                                            label = { Text(stringResource(R.string.lut_creator_custom_ai_instructions)) },
-                                            placeholder = { Text(stringResource(R.string.lut_creator_custom_ai_hint)) },
-                                            modifier = Modifier.fillMaxWidth(),
-                                            shape = RoundedCornerShape(12.dp),
-                                            colors = OutlinedTextFieldDefaults.colors(
-                                                unfocusedBorderColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.2f),
-                                                focusedBorderColor = Color(0xFFE5A324)
-                                            )
-                                        )
-                                        Spacer(modifier = Modifier.height(12.dp))
                                         Text(
                                             text = stringResource(R.string.lut_creator_use_ai),
                                             style = MaterialTheme.typography.bodySmall,
@@ -384,29 +370,6 @@ fun LutCreatorScreen(
                             style = MaterialTheme.typography.headlineSmall,
                             fontWeight = androidx.compose.ui.text.font.FontWeight.Bold
                         )
-                        
-                        state.generatedSourceBitmap?.let { bitmap ->
-                            Spacer(modifier = Modifier.height(24.dp))
-                            Text(
-                                text = stringResource(R.string.lut_creator_ai_restored_preview),
-                                style = MaterialTheme.typography.titleSmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                            Spacer(modifier = Modifier.height(12.dp))
-                            Surface(
-                                shape = RoundedCornerShape(16.dp),
-                                shadowElevation = 4.dp,
-                                modifier = Modifier.sizeIn(maxHeight = 300.dp)
-                            ) {
-                                androidx.compose.foundation.Image(
-                                    bitmap = bitmap.asImageBitmap(),
-                                    contentDescription = "AI Generated Original",
-                                    modifier = Modifier.fillMaxWidth(),
-                                    contentScale = androidx.compose.ui.layout.ContentScale.Fit
-                                )
-                            }
-                        }
-
                         Spacer(modifier = Modifier.height(32.dp))
                         OutlinedTextField(
                             value = lutName,
@@ -422,7 +385,8 @@ fun LutCreatorScreen(
                         Spacer(modifier = Modifier.height(24.dp))
                     }
                     Button(
-                        onClick = { viewModel.generateAndImportLut(lutName, state.recipe) },
+                        onClick = { viewModel.generateAndImportLut(lutName) },
+                        enabled = lutName.isNotBlank(),
                         modifier = Modifier
                             .fillMaxWidth()
                             .padding(bottom = 24.dp)
@@ -491,7 +455,7 @@ fun LutCreatorScreen(
                         verticalArrangement = Arrangement.Center
                     ) {
                         Text(
-                            stringResource(R.string.lut_creator_error, state.message),
+                            stringResource(R.string.lut_creator_error, stringResource(state.messageResId)),
                             color = MaterialTheme.colorScheme.error
                         )
                     }

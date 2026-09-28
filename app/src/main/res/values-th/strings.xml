@@ -748,11 +748,11 @@
     <string name="lut_creator_premium_required_desc">เมื่อไม่ได้กำหนดค่าคีย์ OpenAI API ของคุณเองในการตั้งค่า ฟังก์ชันการสร้าง LUT จำเป็นต้องซื้อการเป็นสมาชิกก่อนจึงจะสามารถใช้งานได้</string>
     <string name="lut_creator_tab_ai">การวิเคราะห์เอไอ</string>
     <string name="lut_creator_tab_local">การวิเคราะห์ในท้องถิ่น</string>
-    <string name="lut_creator_use_ai">AI จะสร้างเวอร์ชันข้อความของสูตร LUT ตามการเรนเดอร์ที่เลือก</string>
+    <string name="lut_creator_use_ai">ภาพจะถูกประมวลผลบนอุปกรณ์นี้เท่านั้น โดยไม่ต้องอัปโหลด</string>
     <string name="lut_creator_custom_ai_instructions">คำพร้อมท์ AI ที่กำหนดเอง (ไม่บังคับ)</string>
     <string name="lut_creator_custom_ai_hint">ตัวอย่างเช่น: ทำให้ภาพมีบรรยากาศมากขึ้นและเพิ่มคอนทราสต์ให้ลึกซึ้งยิ่งขึ้น</string>
     <string name="lut_creator_select_images">เลือกรูปภาพ</string>
-    <string name="lut_creator_ai_mode_desc">อัปโหลดการเรนเดอร์ แล้ว AI จะอนุมานเวอร์ชันข้อความของสูตร LUT โดยตรง โดยไม่ต้องเรียกใช้ความสามารถในการแก้ไขรูปภาพ</string>
+    <string name="lut_creator_ai_mode_desc">เลือกภาพที่ปรับแต่งแล้วเพื่อสร้าง LUT บนอุปกรณ์ของคุณ</string>
     <string name="lut_creator_local_mode_desc">อัปโหลดรูปภาพหลายชุด โดยแต่ละชุดประกอบด้วยรูปภาพต้นฉบับและรูปภาพเอฟเฟกต์ และรูปภาพเหล่านั้นควรอยู่ในฉากเดียวกันที่สุดเท่าที่จะเป็นไปได้</string>
     <string name="lut_creator_local_pairs_hint">การวิเคราะห์เฉพาะที่รองรับการจับคู่รูปภาพ/เอฟเฟกต์ต้นฉบับหลายชุด ยิ่งองค์ประกอบภาพ ค่าแสง และฉากมีความสอดคล้องกันมากเท่าใด จุดควบคุมที่รวมกันก็จะยิ่งมีความเสถียรมากขึ้นเท่านั้น</string>
     <string name="lut_creator_select_source_image">เลือกภาพต้นฉบับ</string>
@@ -771,7 +771,7 @@
     <string name="lut_creator_ai_restored_preview">ดูตัวอย่างภาพต้นฉบับที่กู้คืนโดย AI</string>
     <string name="lut_creator_lut_name_hint">ชื่อเริ่มต้นของ LUT</string>
     <string name="lut_creator_generate_save">สร้างและบันทึก</string>
-    <string name="lut_creator_generating">กำลังสร้างข้อมูล 3D LUT...</string>
+    <string name="lut_creator_generating">กำลังบันทึก LUT…</string>
     <string name="lut_creator_success">สร้าง LUT สำเร็จแล้ว!</string>
     <string name="lut_creator_finish">เสร็จ</string>
     <string name="lut_creator_error">ข้อผิดพลาด: %s</string>
@@ -969,4 +969,7 @@
     <string name="settings_accent_color_reset">คืนค่าเริ่มต้น</string>
     <string name="settings_accent_color_hex_hint">ป้อนรหัสสีหกหลักในรูปแบบ #RRGGBB</string>
     <string name="settings_accent_color_hex_error">ป้อนอักขระฐานสิบหกหกตัว (0–9, A–F)</string>
+    <string name="lut_creator_default_name">AI LUT ของฉัน</string>
+    <string name="lut_creator_analysis_failed">ไม่สามารถวิเคราะห์ภาพนี้ได้ โปรดลองใช้ภาพอื่น</string>
+    <string name="lut_creator_save_failed">ไม่สามารถบันทึก LUT ได้ โปรดลองอีกครั้ง</string>
 </resources>

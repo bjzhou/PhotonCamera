@@ -1,38 +1,49 @@
 package com.hinnka.mycamera.lut.creator
 
 import android.app.Application
-import android.graphics.BitmapFactory
+import android.graphics.Bitmap
+import android.graphics.ImageDecoder
 import android.net.Uri
+import androidx.annotation.StringRes
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
-import com.hinnka.mycamera.data.CustomImportManager
+import com.hinnka.mycamera.R
 import com.hinnka.mycamera.data.ContentRepository
+import com.hinnka.mycamera.data.CustomImportManager
+import com.hinnka.mycamera.lut.LutConfig
+import com.hinnka.mycamera.lut.LutConverter
 import com.hinnka.mycamera.lut.LutManager
 import com.hinnka.mycamera.utils.PLog
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import java.io.File
+import java.nio.ByteBuffer
+import java.nio.ByteOrder
+import kotlin.math.roundToInt
 
 class LutCreatorViewModel(application: Application) : AndroidViewModel(application) {
-
     private val contentRepository = ContentRepository.getInstance(application)
     private val userPreferencesRepository = contentRepository.userPreferencesRepository
     private val billingManager = com.hinnka.mycamera.billing.BillingManagerImpl(application)
     private val importManager = CustomImportManager(application)
     private val lutManager = LutManager(application)
+    private val estimator = StyleLutEstimator(application)
+    private var operation: Job? = null
 
     private val _uiState = MutableStateFlow<LutCreatorUiState>(LutCreatorUiState.Idle)
     val uiState: StateFlow<LutCreatorUiState> = _uiState
-
-    val aiAnalysisEnabled: MutableStateFlow<Boolean> = MutableStateFlow(false)
     val isPurchased = billingManager.isPurchased
     val openAIApiKey = userPreferencesRepository.userPreferences.map { it.openAIApiKey }
         .stateIn(viewModelScope, SharingStarted.Eagerly, "")
@@ -42,167 +53,105 @@ class LutCreatorViewModel(application: Application) : AndroidViewModel(applicati
         billingManager.purchase(activity)
     }
 
-    fun analyzeAiImage(uri: Uri, customPrompt: String = "") {
-        viewModelScope.launch(Dispatchers.IO) {
-            _uiState.value = LutCreatorUiState.Analyzing
-
-            try {
-                val bitmap = loadBitmapFromUri(uri)
-                if (bitmap == null) {
-                    _uiState.value = LutCreatorUiState.Error("Failed to decode image(s)")
-                    return@launch
-                }
-
-                val context = getApplication<Application>()
-                val client = OpenAIApiClient()
-                client.initialize(context)
-                val preparedBitmap = AiImagePreprocessor.prepareForVisionAnalysis(bitmap)
-
-                PLog.d(
-                    "LutCreatorViewModel",
-                    "Calling AI text recipe generation for single-image LUT creation..."
-                )
-
-                val recipe = client.generateLutRecipeFromImage(
-                    bitmap = preparedBitmap,
-                    customPrompt = customPrompt
-                ).getOrThrow()
-
-                PLog.d("LutCreatorViewModel", "AI text recipe: $recipe")
-
-                _uiState.value = LutCreatorUiState.AnalysisComplete(recipe)
-            } catch (e: Exception) {
-                _uiState.value = LutCreatorUiState.Error("Analysis failed: ${e.message}")
-            }
-        }
-    }
-
-    fun analyzeAiImageWithImageEdit(uri: Uri, customPrompt: String = "") {
-        viewModelScope.launch(Dispatchers.IO) {
-            _uiState.value = LutCreatorUiState.Analyzing
-
-            try {
-                val bitmap = loadBitmapFromUri(uri)
-                if (bitmap == null) {
-                    _uiState.value = LutCreatorUiState.Error("Failed to decode image(s)")
-                    return@launch
-                }
-
-                val context = getApplication<Application>()
-                val client = OpenAIApiClient()
-                client.initialize(context)
-
-                PLog.d(
-                    "LutCreatorViewModel",
-                    "Calling Gemini 3.1 for direct image-to-image restoration..."
-                )
-
-                val preparedBitmap = AiImagePreprocessor.prepareForImageToImage(bitmap)
-                val sourceBitmap = client.generateOriginalImage(
-                    bitmap = preparedBitmap,
-                    model = OpenAIApiClient.BUILT_IN_IMAGE_MODEL,
-                    customPrompt = customPrompt
-                ).getOrThrow()
-
-                PLog.d("LutCreatorViewModel", "AI generated original image, analyzing pair locally...")
-                val recipe = LocalImageAnalyzer.analyzeSourceTargetImages(sourceBitmap, preparedBitmap)
-
-                PLog.d("LutCreatorViewModel", "Recipe: $recipe")
-
-                _uiState.value = LutCreatorUiState.AnalysisComplete(recipe, sourceBitmap)
-            } catch (e: Exception) {
-                _uiState.value = LutCreatorUiState.Error("Analysis failed: ${e.message}")
-            }
-        }
+    fun analyzeAiImage(uri: Uri) {
+        analyze { estimator.estimate(uri) }
     }
 
     fun analyzeLocalImagePairs(pairs: List<LocalImagePairInput>) {
-        viewModelScope.launch(Dispatchers.IO) {
-            _uiState.value = LutCreatorUiState.Analyzing
-
+        val selectedPairs = pairs.toList()
+        analyze {
+            require(selectedPairs.isNotEmpty()) { "No image pairs selected" }
+            val decoded = mutableListOf<Bitmap>()
             try {
-                if (pairs.isEmpty()) {
-                    _uiState.value = LutCreatorUiState.Error("No image pairs selected")
-                    return@launch
+                val bitmaps = selectedPairs.map { pair ->
+                    val source = loadBitmapFromUri(pair.sourceUri).also(decoded::add)
+                    val target = loadBitmapFromUri(pair.targetUri).also(decoded::add)
+                    source to target
                 }
-
-                val bitmaps = pairs.mapIndexed { index, pair ->
-                    val sourceBitmap = loadBitmapFromUri(pair.sourceUri)
-                    val targetBitmap = loadBitmapFromUri(pair.targetUri)
-
-                    if (sourceBitmap == null || targetBitmap == null) {
-                        _uiState.value = LutCreatorUiState.Error("Failed to decode image pair ${index + 1}")
-                        return@launch
-                    }
-                    sourceBitmap to targetBitmap
-                }
-
                 val recipe = LocalImageAnalyzer.analyzeSourceTargetImagePairs(bitmaps)
-                PLog.d("LutCreatorViewModel", "Local multi-pair recipe: $recipe")
-                _uiState.value = LutCreatorUiState.AnalysisComplete(recipe)
-            } catch (e: Exception) {
-                _uiState.value = LutCreatorUiState.Error("Analysis failed: ${e.message}")
+                LutGenerator.generateLut(recipe, StyleLutEstimator.LUT_SIZE)
+            } finally {
+                decoded.forEach(Bitmap::recycle)
             }
         }
     }
 
-    private fun loadBitmapFromUri(uri: Uri): android.graphics.Bitmap? {
-        val context = getApplication<Application>()
-        return try {
-            val source = android.graphics.ImageDecoder.createSource(context.contentResolver, uri)
-            val bitmap = android.graphics.ImageDecoder.decodeBitmap(source) { decoder, _, _ ->
-                decoder.setAllocator(android.graphics.ImageDecoder.ALLOCATOR_SOFTWARE) // Needs mutable maybe later, software allows fast reading
-            }
-            val totalPixels = bitmap.width * bitmap.height
-            if (totalPixels == 0) {
-                PLog.w("LutCreatorViewModel", "Loaded bitmap has 0 total pixels for URI: $uri")
-                return null
-            }
-            bitmap
-        } catch (e: Exception) {
-            PLog.e("LutCreatorViewModel", "decode failed, fallback to BitmapFactory: $uri", e)
+    private fun analyze(block: suspend () -> FloatArray) {
+        if (operation?.isActive == true) return
+        _uiState.value = LutCreatorUiState.Analyzing
+        operation = viewModelScope.launch {
             try {
-                context.contentResolver.openInputStream(uri).use {
-                    BitmapFactory.decodeStream(it)
-                }
+                val lutData = withContext(Dispatchers.IO) { block() }
+                ensureActive()
+                _uiState.value = LutCreatorUiState.AnalysisComplete(lutData)
+            } catch (e: CancellationException) {
+                throw e
             } catch (e: Exception) {
-                PLog.e("LutCreatorViewModel", "decode failed again: $uri", e)
-                null
+                ensureActive()
+                PLog.e("LutCreatorViewModel", "LUT analysis failed", e)
+                _uiState.value = LutCreatorUiState.Error(R.string.lut_creator_analysis_failed)
             }
         }
     }
 
-    fun generateAndImportLut(name: String, recipe: LutRecipe) {
-        viewModelScope.launch(Dispatchers.IO) {
-            _uiState.value = LutCreatorUiState.Generating
+    private fun loadBitmapFromUri(uri: Uri): Bitmap {
+        val source = ImageDecoder.createSource(getApplication<Application>().contentResolver, uri)
+        return ImageDecoder.decodeBitmap(source) { decoder, _, _ ->
+            decoder.allocator = ImageDecoder.ALLOCATOR_SOFTWARE
+        }
+    }
 
+    fun generateAndImportLut(name: String) {
+        val result = _uiState.value as? LutCreatorUiState.AnalysisComplete ?: return
+        if (operation?.isActive == true || name.isBlank()) return
+        _uiState.value = LutCreatorUiState.Generating
+        operation = viewModelScope.launch {
             try {
-                // 1. Generate FloatArray 33x33x33x3
-                val lutData = LutGenerator.generateLut(recipe)
-                // 2. Export to .cube format
-                val cubeContent = LutGenerator.exportToCubeString(lutData, 33, name)
-
-                // 3. Write to temp file and use CustomImportManager
-                val tempFile = File(getApplication<Application>().cacheDir, "temp_gen.cube")
-                tempFile.writeText(cubeContent)
-
-                val uri = Uri.fromFile(tempFile)
-                val lutId = importManager.importLut(uri, name, "AI LUT")
-
-                if (lutId != null) {
-                    // Initialize to ensure memory cache and disk are synced
-                    lutManager.initialize()
-                    _uiState.value = LutCreatorUiState.Success(lutId)
-                } else {
-                    _uiState.value = LutCreatorUiState.Error("Import failed")
+                val lutId = withContext(Dispatchers.IO) {
+                    val lutData = result.lutData
+                    val size = StyleLutEstimator.LUT_SIZE
+                    require(lutData.size == size * size * size * 3)
+                    val buffer = ByteBuffer.allocateDirect(lutData.size * 2)
+                        .order(ByteOrder.LITTLE_ENDIAN)
+                    lutData.forEach { value ->
+                        require(value.isFinite() && value in 0f..1f) { "Invalid LUT output: $value" }
+                        buffer.putShort((value * 65535f).roundToInt().toShort())
+                    }
+                    buffer.rewind()
+                    val config = LutConfig(
+                        size = size,
+                        byteBuffer = buffer,
+                        title = name.trim(),
+                        configDataType = LutConfig.CONFIG_DATA_TYPE_UINT16
+                    )
+                    val tempFile = File.createTempFile("generated_lut_", ".plut", getApplication<Application>().cacheDir)
+                    try {
+                        tempFile.outputStream().use { LutConverter.exportToPlut(config, it) }
+                        ensureActive()
+                        val id = checkNotNull(importManager.importLut(Uri.fromFile(tempFile), name.trim(), "AI LUT")) {
+                            "Failed to import generated LUT"
+                        }
+                        lutManager.initialize()
+                        id
+                    } finally {
+                        tempFile.delete()
+                    }
                 }
+                ensureActive()
+                _uiState.value = LutCreatorUiState.Success(lutId)
+            } catch (e: CancellationException) {
+                throw e
             } catch (e: Exception) {
-                _uiState.value = LutCreatorUiState.Error(e.message ?: "Unknown error")
+                ensureActive()
+                PLog.e("LutCreatorViewModel", "LUT save failed", e)
+                _uiState.value = LutCreatorUiState.Error(R.string.lut_creator_save_failed)
             }
         }
     }
 
     fun resetToIdle() {
+        operation?.cancel()
+        operation = null
         _uiState.value = LutCreatorUiState.Idle
     }
 }
@@ -215,11 +164,8 @@ data class LocalImagePairInput(
 sealed class LutCreatorUiState {
     object Idle : LutCreatorUiState()
     object Analyzing : LutCreatorUiState()
-    data class AnalysisComplete(
-        val recipe: LutRecipe,
-        val generatedSourceBitmap: android.graphics.Bitmap? = null
-    ) : LutCreatorUiState()
+    data class AnalysisComplete(val lutData: FloatArray) : LutCreatorUiState()
     object Generating : LutCreatorUiState()
     data class Success(val lutId: String) : LutCreatorUiState()
-    data class Error(val message: String) : LutCreatorUiState()
+    data class Error(@param:StringRes val messageResId: Int) : LutCreatorUiState()
 }
