@@ -413,7 +413,11 @@ internal class AdobeCurveToneAlgorithm(
         val hueSatMap = input.dcpRenderPlan?.hueSatMap?.takeIf {
             input.applyDcpHueSatMap && it.isValid
         }
-        val lookTable = input.dcpRenderPlan?.lookTable?.takeIf { it.isValid }
+        // 与 HueSatMap 使用同一门控：仅当 DCP 色彩表被延后到色调阶段时才由本引擎施加；
+        // 否则它们已由线性阶段施加，重复施加会得到错误的色彩。
+        val lookTable = input.dcpRenderPlan?.lookTable?.takeIf {
+            input.applyDcpHueSatMap && it.isValid
+        }
         GLES30.glActiveTexture(GLES30.GL_TEXTURE2)
         val hueSatTextureId = hueSatMap?.let(dcpTextures::ensureHueSatTexture)
         bindDcpTable(

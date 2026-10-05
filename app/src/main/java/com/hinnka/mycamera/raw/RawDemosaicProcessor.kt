@@ -35,6 +35,7 @@ import com.hinnka.mycamera.processor.GpuLinearRgbStorage
 import com.hinnka.mycamera.processor.GpuStackCompletionTimeline
 import com.hinnka.mycamera.processor.RawNoiseModel
 import com.hinnka.mycamera.processor.RawStackResult
+import com.hinnka.mycamera.utils.DeviceUtil
 import com.hinnka.mycamera.utils.DngCaptureDiagnostics
 import com.hinnka.mycamera.utils.DirectBufferPixelPacker
 import com.hinnka.mycamera.utils.LargeDirectBuffer
@@ -271,6 +272,15 @@ class RawDemosaicProcessor {
         // Engine tone programs already reserve 0..6 for input/profile/HNCS/SpectralFilm LUTs.
         private const val PROFILE_GAIN_TABLE_TEXTURE_UNIT = 7
         private const val LINEAR_DCP_HUE_SAT_TEXTURE_UNIT = 3
+
+        /**
+         * ProfileLookTable 的纹理单元。
+         *
+         * 必须避开各引擎在 tone pass 内占用的单元：Hncs 2/3、Lumix 2/3/6、Canon 11、Leica 10、
+         * Fuji 10/11、HDR 2/4、PGTM 1/3/7。8/9 在 raw 包内未被占用 —— v5/v6 的黑屏事故正是
+         * 沿用了 Adobe 的 2/3 与 Hncs 冲突（glError 1282）导致的。
+         */
+        private const val LINEAR_DCP_LOOK_TABLE_TEXTURE_UNIT = 8
         private const val RCD_RAW_TEXTURE_UNIT = 0
         private const val RCD_LENS_SHADING_TEXTURE_UNIT = 1
         private const val RCD_OUTPUT_IMAGE_UNIT = 0
@@ -1563,6 +1573,7 @@ class RawDemosaicProcessor {
         val linearColorCorrectionMatrix: FloatArray,
         val linearCameraWhite: FloatArray,
         val hueSatMap: DcpHueSatMap?,
+        val lookTable: DcpHueSatMap? = null,
         val deferDcpHueSatUntilAfterPgtm: Boolean,
         val applyLinearDngBaselineExposure: Boolean,
         val hasProfileGainTableMap: Boolean,
@@ -2653,6 +2664,17 @@ class RawDemosaicProcessor {
             colorEngine = colorEngine,
             hasDcpSelection = hasDcpSelection,
         )
+        // Oplus（欧加）家族的厂商标定不可用：其 SENSOR_COLOR_TRANSFORM / ForwardMatrix 与
+        // CameraNeutral 口径不一致，直接使用会偏色。因此对具备「色彩矫正」开关的引擎
+        // （Lumix / Hncs），在该家族上让开关直接驱动 DCP：
+        //   打开 → 未显式选择 DCP 时自动加载内置参考 DCP（其 ColorMatrix 与 HueSatMap
+        //          才是真正可用的色彩矫正）
+        //   关闭 → 不应用任何 DCP，源侧退化为「纯白点对角阵」
+        // 其它厂牌的厂商标定正常，开关语义保持原样；无该开关的引擎（AgX / Darktable /
+        // Spektrafilm / AdobeCurve）不受影响 —— 注意 colorMatchingEnabled 对它们恒为
+        // false，故必须用具名开关的引擎来判定，不能只看该布尔值。
+        val oplusColorMatchingSwitchApplies =
+            DeviceUtil.isOplusFamily && (colorEngine.isLumix || colorEngine.isHncs)
         val resolvedDcpRenderPlan = if (useAdobeProfilePipeline) {
             resolveRawDcpRenderPlan(
                 context = context,
@@ -2662,6 +2684,32 @@ class RawDemosaicProcessor {
                 embeddedDngRenderPlan = embeddedDngRenderPlan
                     ?.takeIf { embeddedProfileDecision.applyEmbeddedProfile }
             )
+        } else if (oplusColorMatchingSwitchApplies && !cameraColorMatchingEnabled) {
+            PLog.d(TAG, "Oplus color matching off: dropping RAW DCP plan")
+            null
+        } else if (hasDcpSelection) {
+            // 非 Adobe 引擎：用户显式选择 DCP 时同样应用其色彩变换（ColorMatrix /
+            // HueSatMap / 基准曝光偏移，以及 equivalent-camera 引擎的源侧标定）。
+            // 这里不传内嵌 profile，因此「未选 DCP」时的默认行为与本改动前完全一致；
+            // Adobe 专属的色调行为仍由 useAdobeProfilePipeline 单独控制，不受影响。
+            resolveRawDcpRenderPlan(
+                context = context,
+                providedDcpRenderPlan = dcpRenderPlan,
+                rawDcpId = rawDcpId,
+                metadata = actualMetadata,
+                embeddedDngRenderPlan = null
+            )
+        } else if (oplusColorMatchingSwitchApplies) {
+            // Oplus + 色彩矫正开启 + 未显式选择：自动加载内置参考 DCP。
+            resolveRawDcpRenderPlan(
+                context = context,
+                providedDcpRenderPlan = null,
+                rawDcpId = DcpManager.OPLUS_REFERENCE_RAW_DCP_ID,
+                metadata = actualMetadata,
+                embeddedDngRenderPlan = null
+            ).also { plan ->
+                PLog.d(TAG, "Oplus color matching on: auto-loaded RAW DCP ${plan?.profileName}")
+            }
         } else {
             null
         }
@@ -2985,10 +3033,12 @@ class RawDemosaicProcessor {
             !hasDcpSelection && embeddedProfileDecision.applyEmbeddedProfile -> "embedded-dng"
             else -> null
         }
-        if (!useAdobeProfilePipeline && requestedProfilePlanSource != null) {
+        // 非 Adobe 引擎下显式选择的 DCP 现在会被解析应用；只有内嵌 DNG profile 仍不适用于
+        // 这些引擎（见 EmbeddedDngProfilePolicy），因此这里只对这一种情况记录。
+        if (!useAdobeProfilePipeline && !hasDcpSelection && requestedProfilePlanSource != null) {
             PLog.d(
                 TAG,
-                "RAW DCP not resolved for non-Adobe colorEngine=$colorEngine: " +
+                "Embedded DNG profile not applied for non-Adobe colorEngine=$colorEngine: " +
                     "source=$requestedProfilePlanSource"
             )
         }
@@ -3005,17 +3055,27 @@ class RawDemosaicProcessor {
         val supportProfileOverrange =
             useAdobeProfilePipeline &&
                 activeDcpRenderPlan?.supportsOverrange == true
-        val hueSatMapSupportsOverrange = useAdobeProfilePipeline &&
-            activeDcpRenderPlan?.supportsOverrange == true
+        // supportsOverrange 描述的是 DCP 自身 HueSatMap 的编码方式（value 维 > 1 时使用 DNG
+        // overrange 编码），是 profile 的属性而非引擎的属性。消费它的 uHueSatSupportOverrange
+        // 位于 RawLinearRcdPass —— 非 Adobe 引擎同样走该 pass。此处若恒为 false，超范围
+        // （高饱和）输入会按非 overrange 方式索引，表现为饱和度下降。故只依据 DCP 取值。
+        val hueSatMapSupportsOverrange = activeDcpRenderPlan?.supportsOverrange == true
         val clampProfileRgb = useAdobeProfilePipeline
         val engineWorkingColorSpace = colorEngine.workingColorSpace
         val profileToLinearSrgbTransform = computeWorkingToOutputTransform(
             profileWorkingColorSpace,
             ColorSpace.SRGB,
         )
-        val directCameraInput = targetCamera != null &&
+        // DCP 的 colorCorrectionMatrix 与 EquivalentCameraCalibration.sourceToProPhoto 占据同一个
+        // 槽位（相机 → ProPhoto）。equivalent-camera 引擎（Lumix/Hncs/Canon/Leica）原本依赖厂商
+        // 标定，而该标定在 Oplus 机型上不可靠（偏色）—— 色彩矫正关闭时更会退化成「假装本机就是
+        // 目标相机」。因此一旦用户选了 DCP，就用它作为源侧标定；未选 DCP 时行为完全不变。
+        val dcpSourceCalibration = activeDcpRenderPlan?.colorCorrectionMatrix
+        val directCameraInput = dcpSourceCalibration == null && targetCamera != null &&
             (!cameraColorMatchingEnabled || actualMetadata.cameraCalibration == null)
-        val sourceColorCorrectionMatrix = if (directCameraInput) {
+        val sourceColorCorrectionMatrix = if (dcpSourceCalibration != null) {
+            dcpSourceCalibration
+        } else if (directCameraInput) {
             EquivalentCameraCalibration.whiteBalanceTransform(actualMetadata)
         } else if ((colorEngine.usesCameraInputDomain) &&
             actualMetadata.cameraCalibration != null
@@ -3051,6 +3111,11 @@ class RawDemosaicProcessor {
                 "sensorToProfile=${linearColorCorrectionMatrix.contentToString()} " +
                 "profileToCamera=${cameraInputTransform.contentToString()} " +
                 "equivalent=disabled librawMatrixFallback=disabled")
+        } else if (dcpSourceCalibration != null) {
+            PLog.i(TAG, "RAW_CAMERA_WORKING_SPACE engine=$colorEngine input=dcp-source-calibration " +
+                "targetCamera=${targetCamera?.name ?: "none"} engineSpace=$engineWorkingColorSpace " +
+                "sensorToProfile=${linearColorCorrectionMatrix.contentToString()} " +
+                "profileToEngine=${cameraInputTransform.contentToString()}")
         }
         val lumixRenderPlan = if (colorEngine.isLumix) {
             check(profileWorkingColorSpace == ColorSpace.ProPhoto)
@@ -3734,8 +3799,15 @@ class RawDemosaicProcessor {
             // Newly generated HDRNet maps contain the downstream Dehaze + DHA curve. The DCP
             // color map must therefore execute after PGTM; Local Laplacian and ordinary DNG
             // profile maps retain their existing ordering.
+            //
+            // 该延后只有 AdobeCurve 能兑现：色调阶段的 HueSatMap 仅由
+            // AdobeCurveToneAlgorithm 消费（其余引擎的着色器不含该阶段），故对非 Adobe 引擎
+            // 延后等于把 HueSatMap 静默丢弃——实测其为 DCP 中提升饱和度的主要一环
+            // （离线量化：施加后平均饱和度 0.470 → 0.651，约 +38%）。因此仅在 Adobe 路径
+            // 延后，其它引擎保留在线性阶段施加，不再丢失。
             val deferDcpHueSatUntilAfterPgtm =
-                photonHdrRequested && hasProfileGainTableMap &&
+                colorEngine == RawRenderingEngine.AdobeCurve &&
+                    photonHdrRequested && hasProfileGainTableMap &&
                     (regeneratePhotonPgtm ||
                         photonHdrRatio?.let { it.isFinite() && it >= 1f } == true)
 
@@ -3813,6 +3885,7 @@ class RawDemosaicProcessor {
                         linearColorCorrectionMatrix = linearColorCorrectionMatrix,
                         linearCameraWhite = linearCameraWhite,
                         hueSatMap = activeDcpRenderPlan?.hueSatMap,
+                        lookTable = activeDcpRenderPlan?.lookTable,
                         deferDcpHueSatUntilAfterPgtm = deferDcpHueSatUntilAfterPgtm,
                         applyLinearDngBaselineExposure = applyLinearDngBaselineExposure,
                         hasProfileGainTableMap = hasProfileGainTableMap,
@@ -3899,6 +3972,8 @@ class RawDemosaicProcessor {
                     // to the profile pass. Other paths retain their established linear-pass order.
                     hueSatMap = activeDcpRenderPlan?.hueSatMap
                         ?.takeUnless { deferDcpHueSatUntilAfterPgtm },
+                    lookTable = activeDcpRenderPlan?.lookTable
+                        ?.takeUnless { deferDcpHueSatUntilAfterPgtm },
                     applyDngBaselineExposure = applyLinearDngBaselineExposure,
                     clampProfileRgb = clampProfileRgb,
                     hueSatMapSupportsOverrange = hueSatMapSupportsOverrange,
@@ -3919,6 +3994,8 @@ class RawDemosaicProcessor {
                 // HDRNet's PGTM contains HDRNet -> Dehaze/DHA, so its DCP color map is deferred
                 // to the profile pass. Other paths retain their established linear-pass order.
                 hueSatMap = activeDcpRenderPlan?.hueSatMap
+                    ?.takeUnless { deferDcpHueSatUntilAfterPgtm },
+                lookTable = activeDcpRenderPlan?.lookTable
                     ?.takeUnless { deferDcpHueSatUntilAfterPgtm },
                 applyDngBaselineExposure = applyLinearDngBaselineExposure,
                 clampProfileRgb = clampProfileRgb,
@@ -4578,6 +4655,8 @@ class RawDemosaicProcessor {
                         cameraWhite = config.linearCameraWhite,
                         hueSatMap = config.hueSatMap
                             ?.takeUnless { config.deferDcpHueSatUntilAfterPgtm },
+                        lookTable = config.lookTable
+                            ?.takeUnless { config.deferDcpHueSatUntilAfterPgtm },
                         applyDngBaselineExposure = config.applyLinearDngBaselineExposure,
                         clampProfileRgb = config.clampProfileRgb,
                         hueSatMapSupportsOverrange = config.hueSatMapSupportsOverrange,
@@ -4595,6 +4674,8 @@ class RawDemosaicProcessor {
                     colorCorrectionMatrix = config.linearColorCorrectionMatrix,
                     cameraWhite = config.linearCameraWhite,
                     hueSatMap = config.hueSatMap
+                        ?.takeUnless { config.deferDcpHueSatUntilAfterPgtm },
+                    lookTable = config.lookTable
                         ?.takeUnless { config.deferDcpHueSatUntilAfterPgtm },
                     applyDngBaselineExposure = config.applyLinearDngBaselineExposure,
                     clampProfileRgb = config.clampProfileRgb,
@@ -8211,6 +8292,7 @@ class RawDemosaicProcessor {
         colorCorrectionMatrix: FloatArray,
         cameraWhite: FloatArray = metadata.cameraWhite,
         hueSatMap: DcpHueSatMap? = null,
+        lookTable: DcpHueSatMap? = null,
         applyDngBaselineExposure: Boolean,
         clampProfileRgb: Boolean,
         hueSatMapSupportsOverrange: Boolean,
@@ -8265,40 +8347,73 @@ class RawDemosaicProcessor {
                     areaSampleFootprint = areaSampleFootprint,
                     useAreaSampleMaximum = useAreaSampleMaximum,
                     textureRotation = textureRotation,
-                    bindHueSatMap = { program -> bindLinearDcpHueSatMap(program, hueSatMap) },
+                    bindHueSatMap = { program -> bindLinearDcpTables(program, hueSatMap, lookTable) },
                     label = label,
                 ),
             ),
         ) { "$label failed" }
     }
 
-    private fun bindLinearDcpHueSatMap(
+    private fun bindLinearDcpTables(
         program: Int,
         hueSatMap: DcpHueSatMap?,
+        lookTable: DcpHueSatMap?,
     ) {
-        val activeMap = hueSatMap?.takeIf { it.isValid }
+        bindLinearDcpTable(
+            program = program,
+            table = hueSatMap,
+            enabledUniform = "uLinearDcpHueSatEnabled",
+            divisionsUniform = "uLinearDcpHueSatDivisions",
+            encodingUniform = "uLinearDcpHueSatEncoding",
+            samplerUniform = "uLinearDcpHueSatMap",
+            textureUnit = LINEAR_DCP_HUE_SAT_TEXTURE_UNIT,
+            ensureTexture = { dcpTextureResources.ensureHueSatTexture(it) },
+        )
+        bindLinearDcpTable(
+            program = program,
+            table = lookTable,
+            enabledUniform = "uLinearDcpLookTableEnabled",
+            divisionsUniform = "uLinearDcpLookTableDivisions",
+            encodingUniform = "uLinearDcpLookTableEncoding",
+            samplerUniform = "uLinearDcpLookTable",
+            textureUnit = LINEAR_DCP_LOOK_TABLE_TEXTURE_UNIT,
+            ensureTexture = { dcpTextureResources.ensureLookTableTexture(it) },
+        )
+    }
+
+    /** 线性阶段共用的 DCP 表格绑定（HueSatMap 与 LookTable 结构相同，仅 uniform 名不同）。 */
+    private fun bindLinearDcpTable(
+        program: Int,
+        table: DcpHueSatMap?,
+        enabledUniform: String,
+        divisionsUniform: String,
+        encodingUniform: String,
+        samplerUniform: String,
+        textureUnit: Int,
+        ensureTexture: (DcpHueSatMap) -> Int,
+    ) {
+        val activeTable = table?.takeIf { it.isValid }
         GLES30.glUniform1i(
-            GLES30.glGetUniformLocation(program, "uLinearDcpHueSatEnabled"),
-            if (activeMap != null) 1 else 0,
+            GLES30.glGetUniformLocation(program, enabledUniform),
+            if (activeTable != null) 1 else 0,
         )
         GLES30.glUniform3i(
-            GLES30.glGetUniformLocation(program, "uLinearDcpHueSatDivisions"),
-            activeMap?.hueDivisions ?: 1,
-            activeMap?.satDivisions ?: 1,
-            activeMap?.valueDivisions ?: 1,
+            GLES30.glGetUniformLocation(program, divisionsUniform),
+            activeTable?.hueDivisions ?: 1,
+            activeTable?.satDivisions ?: 1,
+            activeTable?.valueDivisions ?: 1,
         )
         GLES30.glUniform1i(
-            GLES30.glGetUniformLocation(program, "uLinearDcpHueSatEncoding"),
-            activeMap?.encoding ?: DcpHueSatMap.ENCODING_LINEAR,
+            GLES30.glGetUniformLocation(program, encodingUniform),
+            activeTable?.encoding ?: DcpHueSatMap.ENCODING_LINEAR,
         )
-        GLES30.glActiveTexture(GLES30.GL_TEXTURE0 + LINEAR_DCP_HUE_SAT_TEXTURE_UNIT)
-        val textureId = activeMap?.let { map ->
-            dcpTextureResources.ensureHueSatTexture(map)
-        } ?: dcpTextureResources.ensureDummyTexture()
+        GLES30.glActiveTexture(GLES30.GL_TEXTURE0 + textureUnit)
+        val textureId = activeTable?.let(ensureTexture)
+            ?: dcpTextureResources.ensureDummyTexture()
         GLES30.glBindTexture(GLES30.GL_TEXTURE_3D, textureId)
         GLES30.glUniform1i(
-            GLES30.glGetUniformLocation(program, "uLinearDcpHueSatMap"),
-            LINEAR_DCP_HUE_SAT_TEXTURE_UNIT,
+            GLES30.glGetUniformLocation(program, samplerUniform),
+            textureUnit,
         )
     }
 
@@ -8811,6 +8926,7 @@ class RawDemosaicProcessor {
                 colorCorrectionMatrix = colorCorrectionMatrix,
                 cameraWhite = cameraWhite,
                 hueSatMap = dcpRenderPlan?.hueSatMap,
+                lookTable = dcpRenderPlan?.lookTable,
                 applyDngBaselineExposure = false,
                 clampProfileRgb = true,
                 hueSatMapSupportsOverrange = dcpRenderPlan?.supportsOverrange == true,

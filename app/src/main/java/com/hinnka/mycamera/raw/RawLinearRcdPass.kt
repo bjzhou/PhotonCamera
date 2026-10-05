@@ -25,6 +25,7 @@ internal class RawLinearRcdPass(
         val areaSampleFootprint: FloatArray = NO_AREA_SAMPLE,
         val useAreaSampleMaximum: Boolean = false,
         val textureRotation: Int = 0,
+        /** 绑定线性阶段的 DCP 表格：ProfileHueSatMap 与 ProfileLookTable。 */
         val bindHueSatMap: (program: Int) -> Unit,
         val label: String,
     )
@@ -173,6 +174,10 @@ internal class RawLinearRcdPass(
             uniform int uLinearDcpHueSatEnabled;
             uniform ivec3 uLinearDcpHueSatDivisions;
             uniform int uLinearDcpHueSatEncoding;
+            uniform sampler3D uLinearDcpLookTable;
+            uniform int uLinearDcpLookTableEnabled;
+            uniform ivec3 uLinearDcpLookTableDivisions;
+            uniform int uLinearDcpLookTableEncoding;
             uniform vec4 uTextureBounds;
             uniform vec2 uAreaSampleFootprint;
             uniform int uUseAreaSampleMaximum;
@@ -280,6 +285,18 @@ internal class RawLinearRcdPass(
                         uLinearDcpHueSatMap,
                         uLinearDcpHueSatDivisions,
                         uLinearDcpHueSatEncoding,
+                        uHueSatSupportOverrange != 0
+                    );
+                }
+                // ProfileLookTable 紧随 ProfileHueSatMap 之后，同处 profile 线性空间，
+                // 与 DNG 规范的施加顺序一致。仅非 Adobe 引擎在此施加；Adobe 引擎在自己的
+                // 色调阶段施加同一张表，Kotlin 侧保证两者互斥，不会双重施加。
+                if (uLinearDcpLookTableEnabled != 0) {
+                    rgb = dngApplyHueSatMap(
+                        rgb,
+                        uLinearDcpLookTable,
+                        uLinearDcpLookTableDivisions,
+                        uLinearDcpLookTableEncoding,
                         uHueSatSupportOverrange != 0
                     );
                 }
