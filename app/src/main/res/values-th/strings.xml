@@ -213,6 +213,8 @@
     <string name="settings_section_software_processing">การปรับจูน</string>
     <string name="settings_baseline_raw_title">การแก้ไขสีพื้นฐาน</string>
     <string name="raw_dcp_title">DCP</string>
+    <string name="raw_dcp_inactive_by_color_matching">ไม่นำมาใช้ — ควบคุมด้วยสวิตช์การปรับสี</string>
+    <string name="raw_dcp_auto_applied_by_color_matching">ใช้โดยอัตโนมัติจากการปรับสี: %1$s</string>
     <string name="raw_dcp_import">นำเข้า DCP</string>
     <string name="raw_dcp_import_success">DCP ที่นำเข้า: %1$s</string>
     <string name="raw_dcp_import_success_count">นำเข้าการกำหนดค่า %1$d DCP แล้ว</string>

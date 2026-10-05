@@ -17,6 +17,7 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.graphics.Color
@@ -37,6 +38,7 @@ import com.hinnka.mycamera.R
 import com.hinnka.mycamera.camera.CameraInfo
 import com.hinnka.mycamera.lut.LutInfo
 import com.hinnka.mycamera.raw.DcpInfo
+import com.hinnka.mycamera.raw.DcpManager
 import com.hinnka.mycamera.raw.HncsFilmCurveMode
 import com.hinnka.mycamera.raw.MeteringSystem
 import com.hinnka.mycamera.raw.RawCfaCorrection
@@ -53,6 +55,7 @@ import com.hinnka.mycamera.raw.RawNoiseProfileInfo
 import com.hinnka.mycamera.raw.SpectralFilmSelection
 import com.hinnka.mycamera.raw.SpectralFilmUiInfo
 import com.hinnka.mycamera.raw.SpectralFilmTuning
+import com.hinnka.mycamera.utils.DeviceUtil
 import kotlin.math.roundToInt
 import com.hinnka.mycamera.ui.settings.DropdownSettingItem
 import com.hinnka.mycamera.ui.icons.AppIcons
@@ -416,18 +419,50 @@ fun RawRenderingEngineSettingsPanel(
             Spacer(modifier = Modifier.height(16.dp))
         }
 
+        // DCP 的色彩变换对所有引擎都生效：equivalent-camera 引擎改由 DCP 提供
+        // 「相机 → ProPhoto」的源侧标定，因此选择器不再限定引擎。
+        //
+        // 例外：Oplus 家族的厂商标定不可用，HNCS / Lumix 的「色彩矫正」开关在管线中直接驱动
+        // DCP（关闭即不施加任何 DCP）。此处让选择器反映该状态，避免「显示已选却不施加」。
+        val colorMatchingDrivesDcp = DeviceUtil.isOplusFamily &&
+            (rawRenderingEngine.isHncs || rawRenderingEngine.isLumix)
+        val colorMatchingEnabled =
+            rawToneMappingParameters.colorMatchingEnabled(rawRenderingEngine)
+        // 开关开启且未显式选择 DCP 时，管线会自动加载内置参考 DCP；此处把被应用的 profile
+        // 揭示出来，否则选择器显示「未选」而渲染实际套用了 DCP，仍会被当成 bug。
+        // 仅在确定会自动加载时提示：无统一选择、且无按镜头覆盖。
+        val autoAppliedDcpName = if (
+            colorMatchingDrivesDcp && colorMatchingEnabled &&
+            selectedDcpId == null && rawDcpIdsByLens.isEmpty()
+        ) {
+            dcpDisplayName(DcpManager.OPLUS_REFERENCE_RAW_DCP_ID, availableDcps)
+        } else {
+            null
+        }
+        RawDcpSelector(
+            selectedDcpId = selectedDcpId,
+            rawDcpIdsByLens = rawDcpIdsByLens,
+            lensOptions = dcpLensOptions,
+            availableDcps = availableDcps,
+            onSelectDcp = onSelectDcp,
+            onRawDcpIdsByLensChange = onRawDcpIdsByLensChange,
+            onImportDcp = onImportDcp,
+            onDeleteDcp = onDeleteDcp,
+            enabled = !colorMatchingDrivesDcp || colorMatchingEnabled,
+            inactiveNote = if (colorMatchingDrivesDcp && !colorMatchingEnabled) {
+                stringResource(R.string.raw_dcp_inactive_by_color_matching)
+            } else {
+                null
+            },
+            autoAppliedNote = autoAppliedDcpName?.let { name ->
+                stringResource(R.string.raw_dcp_auto_applied_by_color_matching, name)
+            },
+        )
+        Spacer(modifier = Modifier.height(16.dp))
+
+        // Adobe 专属：DCP 色调曲线 / profile 色调映射模式与内嵌 DNG profile 选择。
+        // DCP 的**色彩**变换对其它引擎同样生效，但色调曲线仍只在此引擎下应用。
         if (rawRenderingEngine == RawRenderingEngine.AdobeCurve) {
-            RawDcpSelector(
-                selectedDcpId = selectedDcpId,
-                rawDcpIdsByLens = rawDcpIdsByLens,
-                lensOptions = dcpLensOptions,
-                availableDcps = availableDcps,
-                onSelectDcp = onSelectDcp,
-                onRawDcpIdsByLensChange = onRawDcpIdsByLensChange,
-                onImportDcp = onImportDcp,
-                onDeleteDcp = onDeleteDcp,
-            )
-            Spacer(modifier = Modifier.height(16.dp))
             RawProfileToneMapSwitches(
                 params = rawToneMappingParameters.normalized(),
                 selectedDcpName = availableDcps.firstOrNull { it.id == selectedDcpId }?.getName(),
@@ -1456,7 +1491,22 @@ fun RawDcpSelector(
     onSelectDcp: (String?) -> Unit,
     onRawDcpIdsByLensChange: ((Map<String, String?>) -> Unit)? = null,
     onImportDcp: (() -> Unit)? = null,
-    onDeleteDcp: ((DcpInfo) -> Unit)? = null
+    onDeleteDcp: ((DcpInfo) -> Unit)? = null,
+    /**
+     * 为 false 时选择器不可交互并降低透明度，同时以 [inactiveNote] 取代当前选择摘要。
+     *
+     * 用于 Oplus 家族：HNCS / Lumix 的「色彩矫正」开关在管线中直接驱动 DCP（关闭即不施加
+     * 任何 DCP、源侧退化为纯白点对角阵），故必须让选择器反映实际状态，否则会出现
+     * 「选择器显示已选、渲染却不施加」的错觉。
+     */
+    enabled: Boolean = true,
+    inactiveNote: String? = null,
+    /**
+     * 选择器仍可交互、但当前没有显式选择时显示的状态说明，用于揭示管线自动应用的 profile
+     * （Oplus 家族在「色彩矫正」开启且未选择 DCP 时会自动加载内置参考 DCP）。
+     * 与 [inactiveNote] 互斥，选择器被禁用时优先显示后者。
+     */
+    autoAppliedNote: String? = null,
 ) {
     var showSheet by remember { mutableStateOf(false) }
     var pendingDeleteDcp by remember { mutableStateOf<DcpInfo?>(null) }
@@ -1497,7 +1547,8 @@ fun RawDcpSelector(
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .clickable { showSheet = true }
+            .alpha(if (enabled) 1f else 0.5f)
+            .clickable(enabled = enabled) { showSheet = true }
             .padding(vertical = 8.dp),
         horizontalArrangement = Arrangement.SpaceBetween,
         verticalAlignment = Alignment.CenterVertically
@@ -1511,7 +1562,11 @@ fun RawDcpSelector(
             )
             Spacer(modifier = Modifier.height(4.dp))
             Text(
-                    text = selectedName,
+                    text = when {
+                        !enabled && inactiveNote != null -> inactiveNote
+                        selectedDcpId == null && autoAppliedNote != null -> autoAppliedNote
+                        else -> selectedName
+                    },
                 color = Color.White.copy(alpha = 0.6f),
                 fontSize = 13.sp,
                 lineHeight = 18.sp,

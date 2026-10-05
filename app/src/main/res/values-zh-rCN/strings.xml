@@ -303,6 +303,8 @@
     <string name="settings_section_software_processing">细节微调</string>
     <string name="settings_baseline_raw_title">基准色彩校正</string>
     <string name="raw_dcp_title">DCP</string>
+    <string name="raw_dcp_inactive_by_color_matching">未应用 —— 由「色彩矫正」开关控制</string>
+    <string name="raw_dcp_auto_applied_by_color_matching">由「色彩矫正」自动应用：%1$s</string>
     <string name="raw_dcp_import">导入 DCP</string>
     <string name="raw_dcp_import_success">已导入 DCP：%1$s</string>
     <string name="raw_dcp_import_success_count">已导入 %1$d 个 DCP 配置</string>

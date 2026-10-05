@@ -313,6 +313,8 @@
     <string name="settings_section_software_processing">Fine Tuning</string>
     <string name="settings_baseline_raw_title">Baseline Color Correction</string>
     <string name="raw_dcp_title">DCP</string>
+    <string name="raw_dcp_inactive_by_color_matching">Not applied — controlled by the Color Matching switch</string>
+    <string name="raw_dcp_auto_applied_by_color_matching">Auto-applied by Color Matching: %1$s</string>
     <string name="raw_dcp_import">Import DCP</string>
     <string name="raw_dcp_import_success">Imported DCP: %1$s</string>
     <string name="raw_dcp_import_success_count">Imported %1$d DCP profiles</string>
