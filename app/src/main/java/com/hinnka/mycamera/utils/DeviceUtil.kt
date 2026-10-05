@@ -122,6 +122,35 @@ object DeviceUtil {
                     || Build.BRAND.lowercase() == "huawei"
         }
 
+    /**
+     * Oplus（欧加）家族厂牌：oppo / realme / oneplus / oplus。
+     *
+     * RAW 色彩流程按品牌级统一处理：本家族共用 Oplus 相机 HAL 与同一套 sensor 标定数据，
+     * 其 ForwardMatrix 与 ColorMatrix / CameraNeutral 标定口径不一致；厂商自家相机只写
+     * ColorMatrix、不写 ForwardMatrix。故本家族沿用与 OPPO 完全相同的取舍。
+     *
+     * 判据须与 native 侧 `isOplusRawColorCameraMake` 保持同步。
+     */
+    internal val OPLUS_FAMILY_MANUFACTURERS = setOf("oppo", "realme", "oneplus", "oplus")
+
+    /** 按给定厂牌字符串判定，语义同 [isOplusFamily]；供按设备配置推断厂牌的调用方使用。 */
+    fun isOplusFamilyManufacturer(manufacturer: String?): Boolean {
+        val normalized = manufacturer?.trim()?.lowercase()
+        if (normalized.isNullOrEmpty()) {
+            return false
+        }
+        return OPLUS_FAMILY_MANUFACTURERS.any { family ->
+            normalized == family || normalized.startsWith("$family ")
+        }
+    }
+
+    /** 是否属于 Oplus 家族，见 [OPLUS_FAMILY_MANUFACTURERS]。 */
+    val isOplusFamily: Boolean
+        get() {
+            return isOplusFamilyManufacturer(Build.MANUFACTURER)
+                    || isOplusFamilyManufacturer(Build.BRAND)
+        }
+
     val isOppo: Boolean
         get() {
             return Build.MANUFACTURER.equals("oppo", ignoreCase = true)

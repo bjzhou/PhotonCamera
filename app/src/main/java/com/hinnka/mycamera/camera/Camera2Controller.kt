@@ -4647,12 +4647,12 @@ class Camera2Controller(private val context: Context) {
         val characteristics = resolveActiveWhiteBalanceCharacteristics() ?: return null
         val colorMatrix1 = characteristics.get(CameraCharacteristics.SENSOR_COLOR_TRANSFORM1)?.let(::extractMatrix3x3)
         val colorMatrix2 = characteristics.get(CameraCharacteristics.SENSOR_COLOR_TRANSFORM2)?.let(::extractMatrix3x3)
-        val forwardMatrix1 = if (DeviceUtil.isOppo) {
+        val forwardMatrix1 = if (DeviceUtil.isOplusFamily) {
             null
         } else {
             characteristics.get(CameraCharacteristics.SENSOR_FORWARD_MATRIX1)?.let(::extractMatrix3x3)
         }
-        val forwardMatrix2 = if (DeviceUtil.isOppo) {
+        val forwardMatrix2 = if (DeviceUtil.isOplusFamily) {
             null
         } else {
             characteristics.get(CameraCharacteristics.SENSOR_FORWARD_MATRIX2)?.let(::extractMatrix3x3)

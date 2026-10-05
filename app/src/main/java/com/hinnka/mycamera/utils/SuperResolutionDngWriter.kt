@@ -116,7 +116,7 @@ object SuperResolutionDngWriter {
             ?.let(::colorTransformToDngMatrix)
             ?.map(::serializedSignedRational)
             ?.toFloatArray()
-        val forwardMatrix1 = if (DeviceUtil.isOppo) {
+        val forwardMatrix1 = if (DeviceUtil.isOplusFamily) {
             null
         } else {
             characteristics.get(CameraCharacteristics.SENSOR_FORWARD_MATRIX1)
@@ -125,7 +125,7 @@ object SuperResolutionDngWriter {
                 ?.map(::serializedSignedRational)
                 ?.toFloatArray()
         }
-        val forwardMatrix2 = if (DeviceUtil.isOppo) {
+        val forwardMatrix2 = if (DeviceUtil.isOplusFamily) {
             null
         } else {
             characteristics.get(CameraCharacteristics.SENSOR_FORWARD_MATRIX2)
@@ -529,13 +529,13 @@ object SuperResolutionDngWriter {
         val illuminant2 = characteristics.get(CameraCharacteristics.SENSOR_REFERENCE_ILLUMINANT2)?.toInt()
         val colorMatrix1 = characteristics.get(CameraCharacteristics.SENSOR_COLOR_TRANSFORM1)
         val colorMatrix2 = characteristics.get(CameraCharacteristics.SENSOR_COLOR_TRANSFORM2)
-        val forwardMatrix1 = if (DeviceUtil.isOppo) {
+        val forwardMatrix1 = if (DeviceUtil.isOplusFamily) {
             null
         } else {
             characteristics.get(CameraCharacteristics.SENSOR_FORWARD_MATRIX1)
                 ?.takeIf(::isUsableColorTransform)
         }
-        val forwardMatrix2 = if (DeviceUtil.isOppo) {
+        val forwardMatrix2 = if (DeviceUtil.isOplusFamily) {
             null
         } else {
             characteristics.get(CameraCharacteristics.SENSOR_FORWARD_MATRIX2)

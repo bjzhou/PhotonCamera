@@ -1101,7 +1101,12 @@ static jobject createRawCameraCalibration(
   return result;
 }
 
-static bool isOppoCameraMake(const char *make) {
+// OPPO / realme / OnePlus 共用 Oplus（欧加）相机 HAL 与同一套 sensor 标定数据。这些机型的
+// RAW ForwardMatrix 与 ColorMatrix / CameraNeutral 标定口径不一致：离线实测在完全相同的
+// 输入下只更换矩阵，厂商 ForwardMatrix 会把平均色度从 0.588 压到 0.086（近乎灰阶），而
+// ColorMatrix 保留色彩。故 Oplus 全系统一按 ColorMatrix 优先处理。判据为品牌级，不针对
+// 具体型号。
+static bool isOplusRawColorCameraMake(const char *make) {
   if (!make) {
     return false;
   }
@@ -1120,7 +1125,18 @@ static bool isOppoCameraMake(const char *make) {
                  [](unsigned char value) {
                    return static_cast<char>(std::tolower(value));
                  });
-  return normalized == "oppo" || normalized.rfind("oppo ", 0) == 0;
+  static const std::array<const char *, 4> kOplusMakes = {
+      "oppo", "realme", "oneplus", "oplus"};
+  for (const char *entry : kOplusMakes) {
+    const std::string token(entry);
+    if (normalized == token ||
+        (normalized.size() > token.size() &&
+         normalized.compare(0, token.size(), token) == 0 &&
+         normalized[token.size()] == ' ')) {
+      return true;
+    }
+  }
+  return false;
 }
 
 static std::array<float, 3> multiplyMatrixVector(const Matrix3x3 &matrix,
@@ -3482,7 +3498,11 @@ Java_com_hinnka_mycamera_raw_RawDemosaicProcessor_processDngNative(
     value = std::clamp(value * cameraWhiteScale, 0.001f, 1.0f);
   }
   const bool preferColorMatrix =
-      isOppoCameraMake(RawProcessor.imgdata.idata.make);
+      isOplusRawColorCameraMake(RawProcessor.imgdata.idata.make);
+  LOGI("DNG color policy: make=%s preferColorMatrix=%d",
+       RawProcessor.imgdata.idata.make ? RawProcessor.imgdata.idata.make
+                                       : "(null)",
+       preferColorMatrix ? 1 : 0);
   bool hasSdkMatrix = computeDngSdkCameraToPcsD50(
       colorMatrix1, hasColor1, colorMatrix2, hasColor2, forwardMatrix1,
       hasForward1, forwardMatrix2, hasForward2,

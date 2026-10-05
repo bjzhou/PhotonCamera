@@ -688,12 +688,12 @@ data class RawMetadata(
             } else {
                 floatArrayOf(1f, 1f, 1f, 1f)
             }
-            val forwardMatrix1 = if (DeviceUtil.isOppo) {
+            val forwardMatrix1 = if (DeviceUtil.isOplusFamily) {
                 null
             } else {
                 characteristics.get(CameraCharacteristics.SENSOR_FORWARD_MATRIX1)?.let(::extractCCM)
             }
-            val forwardMatrix2 = if (DeviceUtil.isOppo) {
+            val forwardMatrix2 = if (DeviceUtil.isOplusFamily) {
                 null
             } else {
                 characteristics.get(CameraCharacteristics.SENSOR_FORWARD_MATRIX2)?.let(::extractCCM)
