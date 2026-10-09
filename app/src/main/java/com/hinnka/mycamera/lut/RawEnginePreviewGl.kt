@@ -1,6 +1,7 @@
 package com.hinnka.mycamera.lut
 
 import android.opengl.GLES30
+import android.os.SystemClock
 import com.hinnka.mycamera.raw.DcpTextureResources
 import com.hinnka.mycamera.raw.RawCurveTextureResources
 import com.hinnka.mycamera.raw.RawEnginePreviewPlan
@@ -11,40 +12,38 @@ import com.hinnka.mycamera.raw.RawToneMappingGl
 import com.hinnka.mycamera.utils.PLog
 
 /**
- * One engine pass in the source texture's UV space, before crop/rotation and recipe layers.
- * The output is display sRGB in RGBA16F. Original snapshots keep sampling the ISP texture.
- * Engine resources/bindings and GLSL are shared with RAW, on this preview's EGL context.
+ * Bakes the pointwise ISP sRGB -> engine -> linear sRGB mapping when its plan changes.
+ * A 65-cube RGBA16F atlas keeps the expensive RAW shader independent of camera resolution.
+ * The color pass interpolates, then clips/encodes sRGB before recipe layers. Retaining signed
+ * linear output avoids interpolating across the final display clipping/gamma discontinuity.
+ * Original snapshots bypass it entirely.
+ * Grid coordinates are encoded sRGB (not linear RGB), retaining dense shadow sampling.
+ * Interpolation approximates the engine between grid nodes; capture still renders directly.
  */
 internal class RawEnginePreviewGl {
     private val quad = RawFullscreenQuad()
     private var engines = newEnginePass()
     private val inverseAcr = LogInputGl()
-    private val programs = mutableMapOf<Pair<RawRenderingEngine, PreviewColorTextureSource>, Int>()
+    private val programs = mutableMapOf<RawRenderingEngine, Int>()
     private var texture = 0
     private var framebuffer = 0
-    private var width = 0
-    private var height = 0
     private var lastPlan: RawEnginePreviewPlan? = null
-    private var lastTimestamp = Long.MIN_VALUE
-    private var lastInput = 0
-    private var lastSource: PreviewColorTextureSource? = null
+    private var logStartNs = 0L
+    private var preparationCount = 0
+    private var bakeCount = 0
+    private var bakeSubmitNs = 0L
 
-    fun render(
-        plan: RawEnginePreviewPlan,
-        source: PreviewColorTextureSource,
-        inputTarget: Int,
-        inputTexture: Int,
-        timestamp: Long,
-        width: Int,
-        height: Int,
-    ): Int {
-        if (texture != 0 && this.width == width && this.height == height &&
-            lastPlan === plan && lastTimestamp == timestamp && lastInput == inputTexture && lastSource == source
-        ) return texture
-        val program = programs.getOrPut(plan.engine to source) {
-            quad.createProgram(shader(plan.engine, source), "previewEngine${plan.engine}-$source")
+    fun prepare(plan: RawEnginePreviewPlan): Boolean {
+        preparationCount++
+        if (texture != 0 && lastPlan === plan) {
+            logWork(plan)
+            return true
         }
-        if (program == 0 || !ensureTarget(width, height)) return 0
+        val startNs = SystemClock.elapsedRealtimeNanos()
+        val program = programs.getOrPut(plan.engine) {
+            quad.createProgram(shader(plan.engine), "previewEngineLut${plan.engine}")
+        }
+        if (program == 0 || !ensureTarget()) return false
         GLES30.glUseProgram(program)
         // Unit 4 is the RAW HDR reference curve's slot, unused by SDR engine resources.
         inverseAcr.bind(GLES30.glGetUniformLocation(program, "uInverseAcr3Texture"), 4)
@@ -63,29 +62,49 @@ internal class RawEnginePreviewGl {
         )
         // Resource uploads may alter active bindings. Establish all draw inputs explicitly.
         GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, framebuffer)
-        GLES30.glViewport(0, 0, width, height)
+        GLES30.glViewport(0, 0, ATLAS_WIDTH, ATLAS_HEIGHT)
         GLES30.glDisable(GLES30.GL_BLEND)
-        GLES30.glActiveTexture(GLES30.GL_TEXTURE0)
-        GLES30.glBindTexture(inputTarget, inputTexture)
-        GLES30.glUniform1i(GLES30.glGetUniformLocation(program, "uPreviewSource"), 0)
         GLES30.glBindBuffer(GLES30.GL_ARRAY_BUFFER, 0)
         GLES30.glBindBuffer(GLES30.GL_ELEMENT_ARRAY_BUFFER, 0)
         quad.bindIdentityTextureMatrix(program)
         quad.draw(program)
         val error = GLES30.glGetError()
         if (error != GLES30.GL_NO_ERROR) {
-            PLog.e(TAG, "Draw failed engine=${plan.engine} restore=${plan.restoration} source=$source error=$error")
-            return 0
+            PLog.e(TAG, "LUT bake failed engine=${plan.engine} restore=${plan.restoration} error=$error")
+            lastPlan = null
+            return false
         }
         lastPlan = plan
-        lastTimestamp = timestamp
-        lastInput = inputTexture
-        lastSource = source
-        return texture
+        bakeCount++
+        bakeSubmitNs += SystemClock.elapsedRealtimeNanos() - startNs
+        logWork(plan)
+        return true
     }
 
-    private fun ensureTarget(w: Int, h: Int): Boolean {
-        if (texture != 0 && framebuffer != 0 && width == w && height == h) return true
+    fun bind(location: Int) {
+        if (location < 0) return
+        GLES30.glActiveTexture(GLES30.GL_TEXTURE5)
+        GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, texture)
+        GLES30.glUniform1i(location, 5)
+    }
+
+    // CPU submission only: GL calls are asynchronous, so this is not GPU duration.
+    private fun logWork(plan: RawEnginePreviewPlan) {
+        val now = SystemClock.elapsedRealtimeNanos()
+        if (logStartNs == 0L) logStartNs = now
+        if (now - logStartNs < 5_000_000_000L) return
+        PLog.d(TAG, "LUT engine=${plan.engine} draws=$preparationCount bakes=$bakeCount " +
+            "bakeCpuSubmitMs=${bakeSubmitNs / 1_000_000.0} grid=$GRID_SIZE atlas=${ATLAS_WIDTH}x$ATLAS_HEIGHT")
+        logStartNs = now
+        preparationCount = 0
+        bakeCount = 0
+        bakeSubmitNs = 0L
+    }
+
+    private fun ensureTarget(): Boolean {
+        if (texture != 0 && framebuffer != 0) return true
+        val w = ATLAS_WIDTH
+        val h = ATLAS_HEIGHT
         releaseTarget()
         val limit = IntArray(1)
         GLES30.glGetIntegerv(GLES30.GL_MAX_TEXTURE_SIZE, limit, 0)
@@ -111,8 +130,6 @@ internal class RawEnginePreviewGl {
             releaseTarget()
             return false
         }
-        width = w
-        height = h
         return true
     }
 
@@ -131,12 +148,11 @@ internal class RawEnginePreviewGl {
         programs.clear()
         texture = 0
         framebuffer = 0
-        width = 0
-        height = 0
         lastPlan = null
-        lastTimestamp = Long.MIN_VALUE
-        lastInput = 0
-        lastSource = null
+        logStartNs = 0L
+        preparationCount = 0
+        bakeCount = 0
+        bakeSubmitNs = 0L
     }
 
     private fun releaseTarget() {
@@ -153,7 +169,29 @@ internal class RawEnginePreviewGl {
         private const val TAG = "RawEnginePreview"
         private val WHITE = floatArrayOf(1f, 1f, 1f)
 
-        fun shader(engine: RawRenderingEngine, source: PreviewColorTextureSource): String {
+        const val GRID_SIZE = 65
+        private const val TILES_PER_ROW = 9
+        private const val ATLAS_WIDTH = GRID_SIZE * TILES_PER_ROW
+        private const val ATLAS_HEIGHT = GRID_SIZE * ((GRID_SIZE + TILES_PER_ROW - 1) / TILES_PER_ROW)
+
+        val SAMPLING_GLSL = """
+            uniform highp sampler2D uEnginePreviewLut;
+            vec2 engineLutCoordinate(vec2 rg, float blue) {
+                vec2 tile = vec2(mod(blue, $TILES_PER_ROW.0), floor(blue / $TILES_PER_ROW.0));
+                return (tile * $GRID_SIZE.0 + rg + 0.5) / vec2($ATLAS_WIDTH.0, $ATLAS_HEIGHT.0);
+            }
+            vec3 sampleEnginePreview(vec3 srgb) {
+                vec3 position = clamp(srgb, 0.0, 1.0) * ${GRID_SIZE - 1}.0;
+                float lower = floor(position.b);
+                float upper = min(lower + 1.0, ${GRID_SIZE - 1}.0);
+                vec3 lo = texture(uEnginePreviewLut, engineLutCoordinate(position.rg, lower)).rgb;
+                vec3 hi = texture(uEnginePreviewLut, engineLutCoordinate(position.rg, upper)).rgb;
+                return linearToSrgb(clamp(mix(lo, hi, position.b - lower), 0.0, 1.0));
+            }
+        """.trimIndent()
+
+        // A source variant is retained for direct-render numerical/driver diagnostics.
+        fun shader(engine: RawRenderingEngine, source: PreviewColorTextureSource? = null): String {
             val definition = RawEngineTonePass.shaderDefinitionFor(engine)
             val external = source == PreviewColorTextureSource.EXTERNAL_OES
             val prepare = if (definition.includeAdobeProfilePipeline) {
@@ -172,7 +210,7 @@ internal class RawEnginePreviewGl {
                 precision highp sampler3D;
                 in vec2 vTexCoord;
                 out vec4 fragColor;
-                uniform highp ${if (external) "samplerExternalOES" else "sampler2D"} uPreviewSource;
+                ${if (source != null) "uniform highp ${if (external) "samplerExternalOES" else "sampler2D"} uPreviewSource;" else ""}
                 uniform mat3 uPreviewRestore;
                 uniform mat3 uPreviewInput;
                 uniform mat3 uPreviewOutput;
@@ -185,7 +223,12 @@ internal class RawEnginePreviewGl {
                 ${definition.profileFunctions}
                 ${definition.engineFunctions}
                 void main() {
-                    vec4 sampled = texture(uPreviewSource, vTexCoord);
+                    ${if (source != null) "vec4 sampled = texture(uPreviewSource, vTexCoord);" else """
+                    ivec2 pixel = ivec2(gl_FragCoord.xy);
+                    ivec2 tile = pixel / $GRID_SIZE;
+                    int blue = min(tile.y * $TILES_PER_ROW + tile.x, ${GRID_SIZE - 1});
+                    vec4 sampled = vec4(vec3(pixel % $GRID_SIZE, blue) / ${GRID_SIZE - 1}.0, 1.0);
+                    """}
                     vec3 linear = srgbToLinear(clamp(sampled.rgb, 0.0, 1.0));
                     vec3 scene = vec3(inverseAcr3(linear.r), inverseAcr3(linear.g), inverseAcr3(linear.b));
                     vec3 restored = uPreviewRestore * scene;
@@ -194,7 +237,7 @@ internal class RawEnginePreviewGl {
                     $prepare
                     color = applyEngineTone(color);
                     $output
-                    fragColor = vec4(linearToSrgb(clamp(color, 0.0, 1.0)), sampled.a);
+                    fragColor = vec4(${if (source != null) "linearToSrgb(clamp(color, 0.0, 1.0))" else "color"}, sampled.a);
                 }
             """.trimIndent().trimStart()
         }

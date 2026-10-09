@@ -70,7 +70,13 @@ data class DcpProfile(
     val analogBalance: FloatArray? = null,
     val cameraCalibration1: FloatArray? = null,
     val cameraCalibration2: FloatArray? = null
-)
+) {
+    // Parsed profile assets are immutable. Share this curve across AWB-dependent
+    // render plans; a reloaded or copied profile owns a fresh lazy cache.
+    internal val toneCurveLut: FloatArray? by lazy {
+        toneCurve?.takeIf { it.isValid }?.toLut()
+    }
+}
 
 data class DcpRenderPlan(
     val profileName: String,
@@ -186,7 +192,7 @@ object DcpProfileParser {
             cameraWhite = selectedCameraWhite,
             hueSatMap = selectedHueSat,
             lookTable = profile.lookTable?.takeIf { it.isValid },
-            toneCurveLut = profile.toneCurve?.takeIf { it.isValid }?.toLut()
+            toneCurveLut = profile.toneCurveLut
         )
     }
 

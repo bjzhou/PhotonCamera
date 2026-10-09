@@ -779,6 +779,7 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
         lutEnabled: Boolean,
         params: com.hinnka.mycamera.model.ColorRecipeParams,
         enableVideoLog: Boolean,
+        includeEnginePreview: Boolean = false,
     ): ColorPassLocations? {
         val variant = PreviewColorShaderVariant.forPass(
             textureSource = textureSource,
@@ -787,7 +788,7 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
             lutEnabled = lutEnabled && lutConfig != null,
             videoLogEnabled = enableVideoLog && videoLogProfile.isEnabled,
         )
-        return colorProgramCache.get(variant)
+        return colorProgramCache.get(variant.copy(includeEnginePreview = includeEnginePreview))
     }
 
     private fun drawColorPass(
@@ -814,6 +815,7 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
         GLES30.glClear(GLES30.GL_COLOR_BUFFER_BIT)
         GLES30.glUseProgram(locations.programId)
         colorProgramCache.bindLogInput(locations)
+        enginePreview.bind(locations.uEnginePreviewLutLocation)
 
         GLES30.glActiveTexture(GLES30.GL_TEXTURE0)
         GLES30.glBindTexture(sourceTextureTarget, sourceTextureId)
@@ -1006,7 +1008,13 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
                 stabilizationSessionStarted = session?.start() == true
             }
             if (stabilizationSessionStarted) {
-                val completedFrame = session?.dequeueFrame()
+                val completedFrame = if (previewStabilizationUseCase == StabilizationUseCase.PHOTO_PREVIEW &&
+                    livePhotoRecorder == null
+                ) {
+                    session?.dequeueLatestFrame()
+                } else {
+                    session?.dequeueFrame()
+                }
                 if (completedFrame != null) {
                     val holdPreviousPhotoPreviewFrame =
                         previewStabilizationUseCase == StabilizationUseCase.PHOTO_PREVIEW &&
@@ -1362,15 +1370,7 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
         suppressCameraEngine: Boolean = false,
     ) {
         val plan = if (suppressCameraEngine) null else enginePreviewPlan
-        val sourceTexture = if (plan != null) {
-            val stabilized = currentCameraTextureSource == PreviewColorTextureSource.TEXTURE_2D
-            enginePreview.render(
-                plan, currentCameraTextureSource, currentCameraTextureTarget, currentCameraTextureId,
-                currentFrameTimestampNs,
-                if (stabilized) stabilizationInputWidth else previewWidth,
-                if (stabilized) stabilizationInputHeight else previewHeight,
-            ).takeIf { it != 0 } ?: return
-        } else currentCameraTextureId
+        if (plan != null && !enginePreview.prepare(plan)) return
         val baselineLayerAvailable = hasBaselineLayer() && !suppressBaselineLayer
         val creativeLayerAvailable = hasCreativeLayer() && !suppressCreativeLayer
         val useCreativeLayer = creativeLayerAvailable && (!preferBaselineLayer || !baselineLayerAvailable)
@@ -1408,19 +1408,20 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
         }
         val enableVideoLog = true
         val locations = getColorPassLocations(
-            textureSource = if (plan != null) PreviewColorTextureSource.TEXTURE_2D else currentCameraTextureSource,
+            textureSource = currentCameraTextureSource,
             lutConfig = layerLutConfig,
             lutEnabled = layerLutEnabled,
             params = layerParams,
             enableVideoLog = enableVideoLog,
+            includeEnginePreview = plan != null,
         ) ?: return
         drawColorPass(
             locations = locations,
             targetFboId = fboId,
             width = width,
             height = height,
-            sourceTextureTarget = if (plan != null) GLES30.GL_TEXTURE_2D else currentCameraTextureTarget,
-            sourceTextureId = sourceTexture,
+            sourceTextureTarget = currentCameraTextureTarget,
+            sourceTextureId = currentCameraTextureId,
             sourceStMatrix = currentCameraTextureMatrix,
             sourceCropRect = cropRect,
             targetMvpMatrix = targetMvpMatrix,
@@ -2249,8 +2250,11 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
         setLutInternal(lutConfig)
     }
 
-    fun setEnginePreview(plan: RawEnginePreviewPlan?) {
+    /** Returns whether the immutable CPU plan changed and needs another draw. */
+    fun setEnginePreview(plan: RawEnginePreviewPlan?): Boolean {
+        if (enginePreviewPlan === plan) return false
         enginePreviewPlan = plan
+        return true
     }
 
     fun setBaselineLut(lutConfig: LutConfig?) {

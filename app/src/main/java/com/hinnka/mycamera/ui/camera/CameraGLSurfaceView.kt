@@ -228,8 +228,7 @@ class CameraGLSurfaceView @JvmOverloads constructor(
     }
 
     fun setEnginePreview(plan: RawEnginePreviewPlan?) {
-        renderer.setEnginePreview(plan)
-        requestRender()
+        if (renderer.setEnginePreview(plan)) requestRender()
     }
 
     fun setBaselineLut(lutConfig: LutConfig?) {
@@ -464,6 +463,8 @@ class CameraGLSurfaceView @JvmOverloads constructor(
     override fun onResume() {
         renderer.setRenderingPaused(false)
         super.onResume()
+        // Resume redraws independently of whether the CPU engine plan changed.
+        requestRender()
         PLog.d(TAG, "onResume")
     }
 

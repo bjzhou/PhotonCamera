@@ -143,6 +143,13 @@ internal object PreviewColorShader {
             ${PreviewColorShaderModules.PRIMARY_CALIBRATION}
             ${PreviewColorShaderModules.LUT_COLOR_SPACE}
 
+            ${if (variant.includeEnginePreview) RawEnginePreviewGl.SAMPLING_GLSL else ""}
+            vec4 samplePreviewSource(vec2 uv) {
+                vec4 sampled = texture(uCameraTexture, uv);
+                ${if (variant.includeEnginePreview) "sampled.rgb = sampleEnginePreview(sampled.rgb);" else ""}
+                return sampled;
+            }
+
             void main() {
                 vec2 rcCoord = vRawCoord;
                 // The vertex stage already applies crop and the SurfaceTexture transform.
@@ -157,29 +164,30 @@ internal object PreviewColorShader {
                     rcCoord = mix(rcCoord, gridRC, 0.95);
                 }
 
+                ${if (variant.includeChromaticAberration) """
                 vec4 color;
-                if (uChromaticAberration > 0.001) {
+                {
                     vec2 center = vec2(0.5);
                     vec2 dir = rcCoord - center;
                     float dist = length(dir);
                     float offset = pow(dist, 1.5) * uChromaticAberration * 0.08;
                     vec2 rCoord = (uSTMatrix * vec4(rcCoord + dir * offset, 0.0, 1.0)).xy;
                     vec2 bCoord = (uSTMatrix * vec4(rcCoord - dir * offset, 0.0, 1.0)).xy;
-                    float r = texture(uCameraTexture, rCoord).r;
-                    float g = texture(uCameraTexture, uvCoord).g;
-                    float b = texture(uCameraTexture, bCoord).b;
-                    float a = texture(uCameraTexture, uvCoord).a;
+                    float r = samplePreviewSource(rCoord).r;
+                    vec4 centerSample = samplePreviewSource(uvCoord);
+                    float g = centerSample.g;
+                    float b = samplePreviewSource(bCoord).b;
+                    float a = centerSample.a;
                     color = vec4(r, g, b, a);
-                } else {
-                    color = texture(uCameraTexture, uvCoord);
                 }
+                """ else "vec4 color = samplePreviewSource(uvCoord);"}
 
                 ${if (variant.includeJpegInputToneCurve) """
                 color.rgb = applyJpegInputToneCurve(color.rgb);
                 color.rgb = sanitizeColor(color.rgb);
                 """ else ""}
 
-                if (uColorRecipeEnabled) {
+                if (${if (variant.includeColorRecipe) "uColorRecipeEnabled" else "false"}) {
                     if (abs(uExposure) > 0.001) {
                         color.rgb = applyExposureInLinearSpace(color.rgb, uExposure);
                         color.rgb = sanitizeColor(color.rgb);
@@ -352,22 +360,18 @@ internal object PreviewColorShader {
                 if (uColorRecipeEnabled && abs(uSharpening) > 0.0001) {
                     vec2 rawDx = vec2(uTexelSize.x, 0.0);
                     vec2 rawDy = vec2(0.0, uTexelSize.y);
-                    float centerLuma = getLuma(texture(uCameraTexture, uvCoord).rgb);
+                    float centerLuma = getLuma(samplePreviewSource(uvCoord).rgb);
                     float neighborLuma = 0.0;
-                    neighborLuma += getLuma(texture(
-                        uCameraTexture,
+                    neighborLuma += getLuma(samplePreviewSource(
                         (uSTMatrix * vec4(rcCoord - rawDx, 0.0, 1.0)).xy
                     ).rgb);
-                    neighborLuma += getLuma(texture(
-                        uCameraTexture,
+                    neighborLuma += getLuma(samplePreviewSource(
                         (uSTMatrix * vec4(rcCoord + rawDx, 0.0, 1.0)).xy
                     ).rgb);
-                    neighborLuma += getLuma(texture(
-                        uCameraTexture,
+                    neighborLuma += getLuma(samplePreviewSource(
                         (uSTMatrix * vec4(rcCoord - rawDy, 0.0, 1.0)).xy
                     ).rgb);
-                    neighborLuma += getLuma(texture(
-                        uCameraTexture,
+                    neighborLuma += getLuma(samplePreviewSource(
                         (uSTMatrix * vec4(rcCoord + rawDy, 0.0, 1.0)).xy
                     ).rgb);
                     float delta = centerLuma - neighborLuma * 0.25;

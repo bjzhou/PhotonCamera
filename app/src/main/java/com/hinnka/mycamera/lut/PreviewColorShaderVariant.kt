@@ -20,6 +20,9 @@ internal data class PreviewColorShaderVariant(
     val includeSpatialRecipeEffects: Boolean = false,
     val includeVideoLog: Boolean = false,
     val includeSharpening: Boolean = false,
+    val includeEnginePreview: Boolean = false,
+    val includeChromaticAberration: Boolean = false,
+    val includeColorRecipe: Boolean = true,
 ) {
     companion object {
         fun forPass(
@@ -43,6 +46,8 @@ internal data class PreviewColorShaderVariant(
                 includeVideoLog = videoLogEnabled,
                 // Match the shader's activation threshold, including negative (softening) values.
                 includeSharpening = abs(params.sharpness) > 0.0001f,
+                includeChromaticAberration = params.chromaticAberration > 0.001f,
+                includeColorRecipe = !params.isDefault(),
             )
         }
 

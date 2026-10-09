@@ -993,8 +993,10 @@ class RealtimeStabilizationCoordinator(context: Context) {
         }
     }
 
-    private fun nextNativeResult(afterSequence: Long): SequencedNativeResult? =
-        synchronized(lock) { nativeResults.firstOrNull { it.sequence > afterSequence } }
+    private fun nextNativeResult(afterSequence: Long, throughSequence: Long): SequencedNativeResult? =
+        synchronized(lock) {
+            nativeResults.firstOrNull { it.sequence > afterSequence && it.sequence <= throughSequence }
+        }
 
     private fun pendingNativeResultCount(afterSequence: Long): Int = synchronized(lock) {
         nativeResults.count { it.sequence > afterSequence }
@@ -1107,10 +1109,30 @@ class RealtimeStabilizationCoordinator(context: Context) {
         }
 
         @Synchronized
-        fun dequeueFrame(): StabilizationFrame? {
+        fun dequeueFrame(): StabilizationFrame? = dequeueFrameThrough(Long.MAX_VALUE)
+
+        /** Photo preview presents the freshest pose; recording keeps the sequential API. */
+        @Synchronized
+        fun dequeueLatestFrame(): StabilizationFrame? {
+            if (!active) return null
+            // Bound the drain to a snapshot so a producing camera cannot keep this GL call busy.
+            val throughSequence = coordinator.currentResultSequence()
+            var latest: StabilizationFrame? = null
+            while (true) {
+                val next = dequeueFrameThrough(throughSequence) ?: return latest
+                if (next.transform == null && latest?.transform != null) {
+                    next.image.close()
+                } else {
+                    latest?.image?.close()
+                    latest = next
+                }
+            }
+        }
+
+        private fun dequeueFrameThrough(throughSequence: Long): StabilizationFrame? {
             if (!active) return null
             while (true) {
-                val next = coordinator.nextNativeResult(lastConsumedSequence) ?: return null
+                val next = coordinator.nextNativeResult(lastConsumedSequence, throughSequence) ?: return null
                 lastConsumedSequence = next.sequence
                 val timestampNs = when (val result = next.result) {
                     is MgcEisNativeEngine.FrameResult.Stabilized -> result.sensorTimestampNs
@@ -1158,8 +1180,8 @@ class RealtimeStabilizationCoordinator(context: Context) {
          * Number of native results not yet consumed by this session.
          *
          * GLSurfaceView collapses repeated requestRender() calls into one draw. The preview
-         * renderer uses this authoritative cursor distance after each draw to request the next
-         * draw until every timestamped result has been presented exactly once.
+         * renderer uses this cursor distance to request another draw for unconsumed results.
+         * Recording consumes sequentially; photo preview drains to the latest available pose.
          */
         @Synchronized
         fun pendingResultCount(): Int = if (active) {
