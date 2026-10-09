@@ -1,8 +1,6 @@
 package com.hinnka.mycamera.lut
 
 import android.opengl.GLES30
-import com.hinnka.mycamera.raw.SpectralFilmLut
-import com.hinnka.mycamera.raw.DcpPreviewPlan
 import com.hinnka.mycamera.utils.PLog
 
 internal data class ColorPassLocations(
@@ -58,9 +56,6 @@ internal data class ColorPassLocations(
     val uTexelSizeLocation: Int,
     val uCurveTextureLocation: Int,
     val uCurveEnabledLocation: Int,
-    /** Null when the variant does not include the Spektrafilm preview stage. */
-    val spectralFilmLocations: SpectralFilmPreviewLocations?,
-    val includesDcp: Boolean,
     val aPositionLocation: Int,
     val aTexCoordLocation: Int,
 )
@@ -68,19 +63,9 @@ internal data class ColorPassLocations(
 internal class PreviewColorProgramCache {
     private val programs = mutableMapOf<PreviewColorShaderVariant, ColorPassLocations>()
     private val logInput = LogInputGl()
-    private val spectralFilm = SpectralFilmPreviewGl()
-    private val dcp = DcpPreviewGl()
-
-    fun bindDcp(locations: ColorPassLocations, plan: DcpPreviewPlan?) {
-        if (locations.includesDcp) dcp.bind(locations.programId, requireNotNull(plan))
-    }
 
     fun bindLogInput(locations: ColorPassLocations) {
         logInput.bind(locations.uInverseAcr3TextureLocation, textureUnit = 4)
-    }
-
-    fun bindSpectralFilm(locations: ColorPassLocations, lut: SpectralFilmLut?) {
-        spectralFilm.bind(locations.spectralFilmLocations, lut)
     }
 
     fun get(variant: PreviewColorShaderVariant): ColorPassLocations? {
@@ -114,16 +99,12 @@ internal class PreviewColorProgramCache {
 
     fun release() {
         logInput.release()
-        spectralFilm.release()
-        dcp.release()
         programs.values.forEach { GlUtils.deleteProgram(it.programId) }
         programs.clear()
     }
 
     fun reset() {
         logInput.reset()
-        spectralFilm.reset()
-        dcp.reset()
         programs.clear()
     }
 
@@ -184,13 +165,7 @@ internal class PreviewColorProgramCache {
             uTexelSizeLocation = GLES30.glGetUniformLocation(program, "uTexelSize"),
             uCurveTextureLocation = GLES30.glGetUniformLocation(program, "uCurveTexture"),
             uCurveEnabledLocation = GLES30.glGetUniformLocation(program, "uCurveEnabled"),
-            spectralFilmLocations = if (variant.includeSpectralFilm) {
-                SpectralFilmPreviewLocations.query(program)
-            } else {
-                null
-            },
             aPositionLocation = GLES30.glGetAttribLocation(program, "aPosition"),
-            includesDcp = variant.includeDcp,
             aTexCoordLocation = GLES30.glGetAttribLocation(program, "aTexCoord"),
         )
     }

@@ -25,8 +25,7 @@ import java.nio.ByteOrder
 import java.util.ArrayDeque
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
-import com.hinnka.mycamera.raw.SpectralFilmLut
-import com.hinnka.mycamera.raw.DcpPreviewPlan
+import com.hinnka.mycamera.raw.RawEnginePreviewPlan
 import java.util.concurrent.atomic.AtomicBoolean
 import javax.microedition.khronos.egl.EGLConfig
 import javax.microedition.khronos.opengles.GL10
@@ -70,6 +69,7 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
     }
 
     private val colorProgramCache = PreviewColorProgramCache()
+    private val enginePreview = RawEnginePreviewGl()
     private val mgcEisHardwareBufferRenderer = MgcEisHardwareBufferRenderer(TAG)
     private val mgcEisYuvRenderer = MgcEisYuvRenderer(TAG)
 
@@ -349,12 +349,8 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
     @Volatile
     var baselineLutEnabled: Boolean = false
 
-    /** RAW 渲染引擎为 Spektrafilm 时的取景器胶片模拟；null 表示不模拟。 */
     @Volatile
-    private var spectralFilmPreviewLut: SpectralFilmLut? = null
-
-    @Volatile
-    private var dcpPreviewPlan: DcpPreviewPlan? = null
+    private var enginePreviewPlan: RawEnginePreviewPlan? = null
 
     // 色彩配方参数
     @Volatile
@@ -578,6 +574,7 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
      */
     private fun resetGlResourceState() {
         colorProgramCache.reset()
+        enginePreview.reset()
         mgcEisHardwareBufferRenderer.resetAfterContextLoss()
         mgcEisYuvRenderer.resetAfterContextLoss()
         cameraTextureId = 0
@@ -782,8 +779,6 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
         lutEnabled: Boolean,
         params: com.hinnka.mycamera.model.ColorRecipeParams,
         enableVideoLog: Boolean,
-        spectralFilmEnabled: Boolean,
-        dcpEnabled: Boolean = false,
     ): ColorPassLocations? {
         val variant = PreviewColorShaderVariant.forPass(
             textureSource = textureSource,
@@ -791,8 +786,6 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
             lutConfig = lutConfig,
             lutEnabled = lutEnabled && lutConfig != null,
             videoLogEnabled = enableVideoLog && videoLogProfile.isEnabled,
-            spectralFilmEnabled = spectralFilmEnabled,
-            dcpEnabled = dcpEnabled,
         )
         return colorProgramCache.get(variant)
     }
@@ -815,16 +808,12 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
         curveTextureId: Int,
         curveEnabled: Boolean,
         enableVideoLog: Boolean,
-        spectralFilmLut: SpectralFilmLut?,
-        dcpPlan: DcpPreviewPlan? = null,
     ) {
         GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, targetFboId)
         GLES30.glViewport(0, 0, width, height)
         GLES30.glClear(GLES30.GL_COLOR_BUFFER_BIT)
         GLES30.glUseProgram(locations.programId)
         colorProgramCache.bindLogInput(locations)
-        colorProgramCache.bindSpectralFilm(locations, spectralFilmLut)
-        colorProgramCache.bindDcp(locations, dcpPlan)
 
         GLES30.glActiveTexture(GLES30.GL_TEXTURE0)
         GLES30.glBindTexture(sourceTextureTarget, sourceTextureId)
@@ -1106,8 +1095,6 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
                     lutEnabled = lutEnabled && currentLutConfig != null,
                     params = creativeParams,
                     enableVideoLog = false,
-                    // 第二层输入已是首个 pass 的渲染结果，引擎模拟只能在采样相机帧时执行一次。
-                    spectralFilmEnabled = false,
                 ) ?: run {
                     return
                 }
@@ -1129,7 +1116,6 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
                     curveTextureId = curveTextureId,
                     curveEnabled = curveEnabled && curveTextureId != 0,
                     enableVideoLog = false,
-                    spectralFilmLut = null,
                 )
                 currentTexId = stackTextureId
             }
@@ -1375,8 +1361,16 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
         suppressCreativeLayer: Boolean = false,
         suppressCameraEngine: Boolean = false,
     ) {
-        val dcpPlan = if (suppressCameraEngine) null else dcpPreviewPlan
-        val spectralFilmLut = if (suppressCameraEngine || dcpPlan != null) null else spectralFilmPreviewLut
+        val plan = if (suppressCameraEngine) null else enginePreviewPlan
+        val sourceTexture = if (plan != null) {
+            val stabilized = currentCameraTextureSource == PreviewColorTextureSource.TEXTURE_2D
+            enginePreview.render(
+                plan, currentCameraTextureSource, currentCameraTextureTarget, currentCameraTextureId,
+                currentFrameTimestampNs,
+                if (stabilized) stabilizationInputWidth else previewWidth,
+                if (stabilized) stabilizationInputHeight else previewHeight,
+            ).takeIf { it != 0 } ?: return
+        } else currentCameraTextureId
         val baselineLayerAvailable = hasBaselineLayer() && !suppressBaselineLayer
         val creativeLayerAvailable = hasCreativeLayer() && !suppressCreativeLayer
         val useCreativeLayer = creativeLayerAvailable && (!preferBaselineLayer || !baselineLayerAvailable)
@@ -1414,21 +1408,19 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
         }
         val enableVideoLog = true
         val locations = getColorPassLocations(
-            textureSource = currentCameraTextureSource,
+            textureSource = if (plan != null) PreviewColorTextureSource.TEXTURE_2D else currentCameraTextureSource,
             lutConfig = layerLutConfig,
             lutEnabled = layerLutEnabled,
             params = layerParams,
             enableVideoLog = enableVideoLog,
-            spectralFilmEnabled = spectralFilmLut != null,
-            dcpEnabled = dcpPlan != null,
         ) ?: return
         drawColorPass(
             locations = locations,
             targetFboId = fboId,
             width = width,
             height = height,
-            sourceTextureTarget = currentCameraTextureTarget,
-            sourceTextureId = currentCameraTextureId,
+            sourceTextureTarget = if (plan != null) GLES30.GL_TEXTURE_2D else currentCameraTextureTarget,
+            sourceTextureId = sourceTexture,
             sourceStMatrix = currentCameraTextureMatrix,
             sourceCropRect = cropRect,
             targetMvpMatrix = targetMvpMatrix,
@@ -1440,8 +1432,6 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
             curveTextureId = layerCurveTextureId,
             curveEnabled = layerCurveEnabled,
             enableVideoLog = enableVideoLog,
-            spectralFilmLut = spectralFilmLut,
-            dcpPlan = dcpPlan,
         )
 
         // 测光和直方图（按需）
@@ -2259,13 +2249,8 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
         setLutInternal(lutConfig)
     }
 
-    fun setSpectralFilmPreview(lut: SpectralFilmLut?) {
-        // 纹理由 GL 线程在下一次绘制时按 sourceKey 惰性上传，此处只替换不可变选择。
-        spectralFilmPreviewLut = lut
-    }
-
-    fun setDcpPreview(plan: DcpPreviewPlan?) {
-        dcpPreviewPlan = plan
+    fun setEnginePreview(plan: RawEnginePreviewPlan?) {
+        enginePreviewPlan = plan
     }
 
     fun setBaselineLut(lutConfig: LutConfig?) {
@@ -3261,6 +3246,7 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
         mgcEisYuvRenderer.release()
         // 删除程序
         colorProgramCache.release()
+        enginePreview.release()
         GlUtils.deleteProgram(passthroughProgramId)
         passthroughProgramId = 0
         GlUtils.deleteProgram(copyProgramId)

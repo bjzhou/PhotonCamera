@@ -34,7 +34,21 @@ internal class RawEngineTonePass(
         val canonRenderPlan: CanonRenderPlan? = null,
         val leicaRenderPlan: LeicaRenderPlan? = null,
         val bindProfileGainTable: (program: Int) -> Unit,
-    )
+    ) {
+        fun toColorResources() = RawEngineColorResources(
+            colorEngine = colorEngine,
+            toneMappingParameters = toneMappingParameters,
+            profileExposure = profileExposure,
+            outputTransform = outputTransform,
+            dcpRenderPlan = dcpRenderPlan,
+            applyDcpHueSatMap = applyDcpHueSatMap,
+            spectralFilmLut = spectralFilmLut,
+            hncsRenderPlan = hncsRenderPlan,
+            lumixRenderPlan = lumixRenderPlan,
+            canonRenderPlan = canonRenderPlan,
+            leicaRenderPlan = leicaRenderPlan,
+        )
+    }
 
     data class Output(val textureId: Int, val width: Int, val height: Int)
 
@@ -56,6 +70,9 @@ internal class RawEngineTonePass(
     private val leicaAlgorithm = LeicaToneAlgorithm(quad)
 
     fun render(input: Input): Output? = algorithmFor(input.colorEngine).render(input)
+
+    internal fun bindColorResources(program: Int, resources: RawEngineColorResources) =
+        algorithmFor(resources.colorEngine).bindColorResources(program, resources)
 
     fun prewarm(colorEngine: RawRenderingEngine): Boolean = algorithmFor(colorEngine).prewarm()
 
@@ -306,7 +323,7 @@ internal class RawEngineTonePass(
             )
         }
 
-        private fun shaderDefinitionFor(
+        internal fun shaderDefinitionFor(
             colorEngine: RawRenderingEngine,
         ): RawEngineToneShaderDefinition {
             return when (colorEngine) {

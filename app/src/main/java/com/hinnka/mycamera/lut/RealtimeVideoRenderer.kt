@@ -385,7 +385,6 @@ class RealtimeVideoRenderer(
             lutConfig = layer.lutConfig,
             lutEnabled = lutEnabled,
             videoLogEnabled = enableVideoLog,
-            spectralFilmEnabled = false,
         )
         val locations = colorProgramCache.get(variant)
             ?: throw IllegalStateException("Cannot create realtime video color shader: $variant")

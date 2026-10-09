@@ -383,8 +383,7 @@ internal abstract class RawRenderingEngineToneAlgorithm(
         program: Int,
         input: RawEngineTonePass.Input,
     ) {
-        RawToneMappingGl.bindRawToneMappingUniforms(program, input.toneMappingParameters)
-        bindEngineResources(program, input)
+        bindColorResources(program, input.toColorResources())
         input.bindProfileGainTable(program)
         GLES30.glUniform2f(
             GLES30.glGetUniformLocation(program, "uGlobalUvOrigin"),
@@ -396,15 +395,6 @@ internal abstract class RawRenderingEngineToneAlgorithm(
             input.globalWidth.toFloat() / input.fullImageWidth.coerceAtLeast(1),
             input.globalHeight.toFloat() / input.fullImageHeight.coerceAtLeast(1),
         )
-        if (!input.colorEngine.isHncs) {
-            GLES30.glUniformMatrix3fv(
-                GLES30.glGetUniformLocation(program, "uOutputTransform"),
-                1,
-                false,
-                transpose3x3(input.outputTransform),
-                0,
-            )
-        }
         GLES30.glUniformMatrix3fv(
             GLES30.glGetUniformLocation(program, "uProfileToEngineTransform"),
             1,
@@ -413,6 +403,20 @@ internal abstract class RawRenderingEngineToneAlgorithm(
             0,
         )
         quad.bindIdentityTextureMatrix(program)
+    }
+
+    internal fun bindColorResources(program: Int, resources: RawEngineColorResources) {
+        RawToneMappingGl.bindRawToneMappingUniforms(program, resources.toneMappingParameters)
+        bindEngineResources(program, resources)
+        if (!resources.colorEngine.isHncs) {
+            GLES30.glUniformMatrix3fv(
+                GLES30.glGetUniformLocation(program, "uOutputTransform"),
+                1,
+                false,
+                transpose3x3(resources.outputTransform),
+                0,
+            )
+        }
     }
 
     fun release() {
@@ -434,7 +438,7 @@ internal abstract class RawRenderingEngineToneAlgorithm(
 
     protected open fun bindEngineResources(
         program: Int,
-        input: RawEngineTonePass.Input,
+        input: RawEngineColorResources,
     ) {
         GLES30.glUniform1f(
             GLES30.glGetUniformLocation(program, "uProfileExposureLinearGain"),

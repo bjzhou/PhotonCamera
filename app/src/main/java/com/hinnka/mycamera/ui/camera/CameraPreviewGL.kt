@@ -22,7 +22,8 @@ import com.hinnka.mycamera.livephoto.LivePhotoRecorder
 import com.hinnka.mycamera.camera.FocusPointSource
 import com.hinnka.mycamera.camera.MeteringMode
 import com.hinnka.mycamera.lut.LutConfig
-import com.hinnka.mycamera.raw.SpectralFilmLut
+import com.hinnka.mycamera.raw.RawEnginePreviewPlan
+import kotlinx.coroutines.flow.StateFlow
 import com.hinnka.mycamera.model.ColorRecipeParams
 import com.hinnka.mycamera.preview.EyeFocusPreviewFrame
 import com.hinnka.mycamera.stabilization.DEFAULT_VIDEO_STABILIZATION_LOOKAHEAD
@@ -49,8 +50,7 @@ fun CameraPreviewGL(
     calibrationOffset: Int,
     baselineLut: LutConfig?,
     currentLut: LutConfig?,
-    spectralFilmPreviewLut: SpectralFilmLut?,
-    dcpPreviewPlan: kotlinx.coroutines.flow.StateFlow<com.hinnka.mycamera.raw.DcpPreviewPlan?>,
+    enginePreviewPlan: StateFlow<RawEnginePreviewPlan?>,
     baselineColorRecipeParams: ColorRecipeParams,
     colorRecipeParams: ColorRecipeParams,
     focusPoint: Pair<Float, Float>?,
@@ -89,10 +89,10 @@ fun CameraPreviewGL(
     val currentOnTap by rememberUpdatedState(onTap)
     val currentOnLongPress by rememberUpdatedState(onLongPress)
 
-    // AWB/CCM changes update only engine uniforms, not the entire Compose/LUT layer.
-    LaunchedEffect(glSurfaceViewRef, dcpPreviewPlan, resumeGeneration) {
+    // AWB/CCM changes update only the engine pass, not the entire Compose/LUT layer.
+    LaunchedEffect(glSurfaceViewRef, enginePreviewPlan, resumeGeneration) {
         val view = glSurfaceViewRef ?: return@LaunchedEffect
-        dcpPreviewPlan.collect { view.setDcpPreview(it) }
+        enginePreviewPlan.collect { view.setEnginePreview(it) }
     }
 
     DisposableEffect(lifecycleOwner) {
@@ -301,8 +301,7 @@ fun CameraPreviewGL(
                         val colorRecipeEnabled = !colorRecipeParams.isDefault()
                         val baselineColorRecipeEnabled = !baselineColorRecipeParams.isDefault()
                         // 更新 LUT 设置
-                        glSurfaceView.setSpectralFilmPreview(spectralFilmPreviewLut)
-                        glSurfaceView.setDcpPreview(dcpPreviewPlan.value)
+                        glSurfaceView.setEnginePreview(enginePreviewPlan.value)
                         glSurfaceView.setBaselineLut(baselineLut)
                         glSurfaceView.setBaselineLutEnabled(baselineLut != null)
                         glSurfaceView.setLut(currentLut)

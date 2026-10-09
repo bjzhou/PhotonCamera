@@ -61,7 +61,7 @@ internal class LumixToneAlgorithm(quad: RawFullscreenQuad) :
     private val textures = IntArray(3)
     private var uploadedTables: LumixPhotoStyleTables? = null
 
-    override fun bindEngineResources(program: Int, input: RawEngineTonePass.Input) {
+    override fun bindEngineResources(program: Int, input: RawEngineColorResources) {
         super.bindEngineResources(program, input)
         val plan = requireNotNull(input.lumixRenderPlan) { "Lumix requires an S9 render plan" }
         ensureTextures(plan.tables)

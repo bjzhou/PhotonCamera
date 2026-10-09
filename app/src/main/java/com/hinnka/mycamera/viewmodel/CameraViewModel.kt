@@ -69,7 +69,9 @@ import com.hinnka.mycamera.processor.RawStackFrame
 import com.hinnka.mycamera.raw.ColorSpace
 import com.hinnka.mycamera.raw.DcpProfileParser
 import com.hinnka.mycamera.raw.DcpInfo
-import com.hinnka.mycamera.raw.DcpPreviewPlan
+import com.hinnka.mycamera.raw.RawEnginePreviewPlan
+import com.hinnka.mycamera.raw.RawEnginePreviewResolver
+import com.hinnka.mycamera.raw.RawEnginePreviewSettings
 import com.hinnka.mycamera.raw.HncsFilmCurveMode
 import com.hinnka.mycamera.raw.HncsRenderIntent
 import com.hinnka.mycamera.raw.RawOutputUpscaleMode
@@ -93,7 +95,6 @@ import com.hinnka.mycamera.raw.RawToneMappingParameters
 import com.hinnka.mycamera.raw.RawNoiseProfileInfo
 import com.hinnka.mycamera.raw.RawNoiseProfileManager
 import com.hinnka.mycamera.raw.RawWhiteLevelCorrection
-import com.hinnka.mycamera.raw.SpectralFilmLut
 import com.hinnka.mycamera.raw.SpectralFilmProfile
 import com.hinnka.mycamera.raw.SpectralFilmSelection
 import com.hinnka.mycamera.raw.SpectralFilmTuning
@@ -635,12 +636,8 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     var currentBaselineLutConfig: LutConfig? by mutableStateOf(null)
         private set
 
-    /** RAW 引擎为 Spektrafilm 时用于取景器实时预览的胶片/相纸阶段。 */
-    var currentSpectralFilmPreviewLut: SpectralFilmLut? by mutableStateOf(null)
-        private set
-
-    private val _currentDcpPreviewPlan = MutableStateFlow<DcpPreviewPlan?>(null)
-    val currentDcpPreviewPlan = _currentDcpPreviewPlan.asStateFlow()
+    private val _currentEnginePreviewPlan = MutableStateFlow<RawEnginePreviewPlan?>(null)
+    val currentEnginePreviewPlan = _currentEnginePreviewPlan.asStateFlow()
 
     var currentLutId = MutableStateFlow("standard")
         private set
@@ -2404,44 +2401,63 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         }
 
         viewModelScope.launch {
-            userPreferencesRepository.userPreferences
-                .map { resolvePreviewSpectralFilmSettings(it) }
-                .distinctUntilChanged()
-                .collectLatest { settings ->
-                    val stock = settings?.stock
-                    val print = settings?.print
-                    currentSpectralFilmPreviewLut = if (stock != null && print != null) {
-                        // 与 RAW 处理共享 SpectralFilmProfile 的选择缓存与磁盘 LUT 缓存。
-                        withContext(Dispatchers.IO) {
-                            SpectralFilmProfile.loadCombinedLut(getApplication(), stock, print, settings.tuning)
-                        }
-                    } else {
-                        null
-                    }
-                }
-        }
-
-        viewModelScope.launch {
             userPreferencesRepository.userPreferences.combine(contentRepository.availableDcps) { prefs, dcps ->
-                val info = dcps.firstOrNull { it.id == prefs.rawDcpId }
-                    ?.takeIf {
-                        resolvePreviewBaselineTarget(prefs) != null &&
-                            prefs.rawRenderingEngine == RawRenderingEngine.AdobeCurve
-                    }
-                info?.let { Triple(it, prefs.rawExposureCompensation, prefs.rawToneMappingParameters.profileToneMapMode) }
+                if (resolvePreviewBaselineTarget(prefs) == null) null else {
+                    val film = resolveRawSpectralFilmSettings(prefs)
+                    RawEnginePreviewSettings(
+                        engine = prefs.rawRenderingEngine,
+                        dcp = dcps.firstOrNull { it.id == prefs.rawDcpId }
+                            ?.takeIf { prefs.rawRenderingEngine == RawRenderingEngine.AdobeCurve },
+                        exposureEv = prefs.rawExposureCompensation,
+                        tone = prefs.rawToneMappingParameters,
+                        hncsFilmCurve = prefs.rawHncsFilmCurveMode,
+                        filmStock = requireNotNull(film.stock), filmPrint = requireNotNull(film.print), filmTuning = film.tuning,
+                    )
+                }
             }.distinctUntilChanged().collectLatest { selection ->
-                _currentDcpPreviewPlan.value = null
-                cameraController.setDcpPreviewEnabled(false)
+                _currentEnginePreviewPlan.value = null
+                cameraController.setEnginePreviewMetadataEnabled(false)
                 if (selection == null) return@collectLatest
-                val profile = withContext(Dispatchers.IO) {
-                    DcpProfileParser.resolveProfile(getApplication(), selection.first)
-                } ?: return@collectLatest
-                cameraController.setDcpPreviewEnabled(true)
-                PLog.d(TAG, "DCP preview profile=${profile.profileName}, working=ProPhoto, output=sRGB")
-                cameraController.dcpPreviewSource.collectLatest { source ->
-                    _currentDcpPreviewPlan.value = if (source == null) null else withContext(Dispatchers.Default) {
-                        DcpPreviewPlan.resolve(source, profile, selection.second, selection.third)
+                try {
+                    val resolver = withContext(Dispatchers.IO) {
+                        RawEnginePreviewResolver(getApplication(), selection)
                     }
+                    if (!resolver.needsCameraMetadata) {
+                        _currentEnginePreviewPlan.value = withContext(Dispatchers.Default) { resolver.resolve(null) }
+                        PLog.d(TAG, "Engine preview ${selection.engine}: scene-linear sRGB -> ${selection.engine.workingColorSpace} -> sRGB")
+                    } else {
+                        cameraController.setEnginePreviewMetadataEnabled(true)
+                        var lastFailure: String? = null
+                        var loggedDomain = false
+                        // StateFlow conflates frames while resolving; collectLatest could starve
+                        // CCT table generation if new AWB values arrive faster than it finishes.
+                        cameraController.enginePreviewSource
+                            .map { if (selection.engine.isLumix) it else it?.copy(iso = 100) }
+                            .distinctUntilChanged().collect { source ->
+                                val result = withContext(Dispatchers.Default) { runCatching { resolver.resolve(source) } }
+                                val plan = result.getOrNull()
+                                if (source?.cameraId == cameraController.enginePreviewSource.value?.cameraId) {
+                                    _currentEnginePreviewPlan.value = plan
+                                } else {
+                                    _currentEnginePreviewPlan.value = null
+                                }
+                                result.exceptionOrNull()?.let { error ->
+                                    if (lastFailure != error.message) PLog.e(TAG, "Engine preview ${selection.engine} rejected", error)
+                                    lastFailure = error.message
+                                }
+                                if (plan != null) {
+                                    lastFailure = null
+                                    if (!loggedDomain) PLog.d(TAG, "Engine preview ${plan.engine}: restore=${plan.restoration}, output=sRGB")
+                                    loggedDomain = true
+                                }
+                            }
+                    }
+                } catch (cancelled: kotlinx.coroutines.CancellationException) {
+                    throw cancelled
+                } catch (error: Exception) {
+                    PLog.e(TAG, "Unable to prepare ${selection.engine} preview", error)
+                } finally {
+                    cameraController.setEnginePreviewMetadataEnabled(false)
                 }
             }
         }
@@ -3064,8 +3080,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             cameraController.setLogLutActive(loadedLut?.curve?.isLog == true)
             glSurfaceView?.let { view ->
                 val currentState = state.value
-                view.setSpectralFilmPreview(currentSpectralFilmPreviewLut)
-                view.setDcpPreview(currentDcpPreviewPlan.value)
+                view.setEnginePreview(currentEnginePreviewPlan.value)
                 view.setBaselineLut(currentBaselineLutConfig)
                 view.setBaselineLutEnabled(currentBaselineLutConfig != null)
                 view.setBaselineParams(currentBaselineRecipeParams.value)
@@ -3205,13 +3220,6 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             print = userPrefs?.rawSpectralFilmPrint ?: "kodak_portra_endura",
             tuning = (userPrefs?.rawSpectralFilmTuningsByStock?.get(stock) ?: SpectralFilmTuning.DEFAULT).normalized()
         )
-    }
-
-    private fun resolvePreviewSpectralFilmSettings(userPrefs: UserPreferences): RawSpectralFilmSettings? {
-        // 取景器只在 RAW 拍照预览中模拟引擎，条件与 RAW 基准色彩层一致。
-        if (resolvePreviewBaselineTarget(userPrefs) == null) return null
-        if (userPrefs.rawRenderingEngine != RawRenderingEngine.Spektrafilm) return null
-        return resolveRawSpectralFilmSettings(userPrefs)
     }
 
     private fun resolvePreviewBaselineLut(userPrefs: UserPreferences): LutConfig? {

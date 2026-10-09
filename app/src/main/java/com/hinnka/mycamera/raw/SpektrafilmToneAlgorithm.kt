@@ -91,7 +91,7 @@ internal class SpektrafilmToneAlgorithm(quad: RawFullscreenQuad) :
     // and 4 (HDR base curve). Keep both 3D samplers explicit on every draw.
     private val stages = SpectralFilmStageTextures(filmUnit = 6, printUnit = 5)
 
-    override fun bindEngineResources(program: Int, input: RawEngineTonePass.Input) {
+    override fun bindEngineResources(program: Int, input: RawEngineColorResources) {
         super.bindEngineResources(program, input)
         stages.bind(SpectralFilmUniformLocations.query(program), input.spectralFilmLut)
         RawGlesProgram.logErrors("SpektrafilmToneAlgorithm.bindEngineResources")

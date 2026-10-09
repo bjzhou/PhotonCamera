@@ -409,7 +409,7 @@ internal class AdobeCurveToneAlgorithm(
     private val curveTextures: RawCurveTextureResources,
 ) : RawRenderingEngineToneAlgorithm(quad, AdobeCurveToneShader.DEFINITION) {
 
-    override fun bindEngineResources(program: Int, input: RawEngineTonePass.Input) {
+    override fun bindEngineResources(program: Int, input: RawEngineColorResources) {
         val hueSatMap = input.dcpRenderPlan?.hueSatMap?.takeIf {
             input.applyDcpHueSatMap && it.isValid
         }

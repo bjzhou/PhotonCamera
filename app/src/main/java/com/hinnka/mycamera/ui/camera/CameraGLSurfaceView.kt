@@ -11,7 +11,7 @@ import com.hinnka.mycamera.livephoto.LivePhotoRecorder
 import com.hinnka.mycamera.camera.MeteringMode
 import com.hinnka.mycamera.lut.LutConfig
 import com.hinnka.mycamera.lut.LutRenderer
-import com.hinnka.mycamera.raw.SpectralFilmLut
+import com.hinnka.mycamera.raw.RawEnginePreviewPlan
 import com.hinnka.mycamera.preview.EyeFocusPreviewFrame
 import com.hinnka.mycamera.preview.EyeFocusProcessingTiming
 import com.hinnka.mycamera.lut.PreviewCaptureSource
@@ -227,13 +227,8 @@ class CameraGLSurfaceView @JvmOverloads constructor(
         }
     }
 
-    fun setSpectralFilmPreview(lut: SpectralFilmLut?) {
-        renderer.setSpectralFilmPreview(lut)
-        requestRender()
-    }
-
-    fun setDcpPreview(plan: com.hinnka.mycamera.raw.DcpPreviewPlan?) {
-        renderer.setDcpPreview(plan)
+    fun setEnginePreview(plan: RawEnginePreviewPlan?) {
+        renderer.setEnginePreview(plan)
         requestRender()
     }
 

@@ -20,8 +20,6 @@ internal data class PreviewColorShaderVariant(
     val includeSpatialRecipeEffects: Boolean = false,
     val includeVideoLog: Boolean = false,
     val includeSharpening: Boolean = false,
-    val includeSpectralFilm: Boolean = false,
-    val includeDcp: Boolean = false,
 ) {
     companion object {
         fun forPass(
@@ -30,8 +28,6 @@ internal data class PreviewColorShaderVariant(
             lutConfig: LutConfig?,
             lutEnabled: Boolean,
             videoLogEnabled: Boolean,
-            spectralFilmEnabled: Boolean,
-            dcpEnabled: Boolean = false,
         ): PreviewColorShaderVariant {
             val lutCurve = lutConfig?.curve ?: TransferCurve.SRGB
             return PreviewColorShaderVariant(
@@ -47,8 +43,6 @@ internal data class PreviewColorShaderVariant(
                 includeVideoLog = videoLogEnabled,
                 // Match the shader's activation threshold, including negative (softening) values.
                 includeSharpening = abs(params.sharpness) > 0.0001f,
-                includeSpectralFilm = spectralFilmEnabled,
-                includeDcp = dcpEnabled,
             )
         }
 

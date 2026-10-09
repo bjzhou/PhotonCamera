@@ -186,7 +186,7 @@ internal class CanonToneAlgorithm(quad: RawFullscreenQuad) :
     private var uploadedPlan: CanonRenderPlan? = null
     private var iccResources: CanonIccGlResources? = null
 
-    override fun bindEngineResources(program: Int, input: RawEngineTonePass.Input) {
+    override fun bindEngineResources(program: Int, input: RawEngineColorResources) {
         super.bindEngineResources(program, input)
         val plan = requireNotNull(input.canonRenderPlan) { "Canon requires an EOS R5 render plan" }
         if (uploadedPlan !== plan) upload(plan)

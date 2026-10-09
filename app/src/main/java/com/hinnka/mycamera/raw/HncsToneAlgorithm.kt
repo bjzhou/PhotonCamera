@@ -181,7 +181,7 @@ internal class HncsToneAlgorithm(quad: RawFullscreenQuad) :
     private var colorMapTextureKey: String? = null
     private var curveTextureKey: String? = null
 
-    override fun bindEngineResources(program: Int, input: RawEngineTonePass.Input) {
+    override fun bindEngineResources(program: Int, input: RawEngineColorResources) {
         super.bindEngineResources(program, input)
         val renderPlan = requireNotNull(input.hncsRenderPlan) {
             "HNCS engine requires a validated render plan"

@@ -57,7 +57,7 @@ internal class LeicaToneAlgorithm(quad: RawFullscreenQuad) :
     private var texture = 0
     private var uploadedTables: FloatArray? = null
 
-    override fun bindEngineResources(program: Int, input: RawEngineTonePass.Input) {
+    override fun bindEngineResources(program: Int, input: RawEngineColorResources) {
         super.bindEngineResources(program, input)
         val plan = requireNotNull(input.leicaRenderPlan) { "Leica requires an M9 render plan" }
         ensureTexture(plan.tables)
