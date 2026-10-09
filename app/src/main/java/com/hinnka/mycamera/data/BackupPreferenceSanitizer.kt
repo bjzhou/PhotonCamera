@@ -11,8 +11,13 @@ import java.io.OutputStream
 import java.util.UUID
 
 internal object BackupPreferenceSanitizer {
-    private const val USER_PREFERENCES_ENTRY = "datastore/user_preferences.preferences_pb"
+    const val USER_PREFERENCES_ENTRY = "datastore/user_preferences.preferences_pb"
     private const val CUSTOM_PRESETS_KEY = "custom_presets_json"
+    private val presetPreferenceKeys = setOf(
+        CUSTOM_PRESETS_KEY,
+        "active_preset_id",
+        "deleted_built_in_ids",
+    )
 
     data class RestoreResult(
         val removedNonPortablePreferenceCount: Int = 0,
@@ -80,10 +85,19 @@ internal object BackupPreferenceSanitizer {
 
     fun writeUserPreferencesWithoutNonPortableKeys(
         preferencesFile: File,
-        output: OutputStream
+        output: OutputStream,
+        includeSettings: Boolean = true,
+        includePresets: Boolean = true,
     ): Int {
         val (preferenceMap, removedCount) = readPreferenceMapWithoutNonPortableKeys(preferencesFile)
-        preferenceMap.writeTo(output)
+        val builder = preferenceMap.toBuilder()
+        removeKeys(
+            builder,
+            preferenceMap.preferencesMap.keys.filterTo(mutableSetOf()) { key ->
+                if (key in presetPreferenceKeys) !includePresets else !includeSettings
+            },
+        )
+        builder.build().writeTo(output)
         return removedCount
     }
 
@@ -99,10 +113,15 @@ internal object BackupPreferenceSanitizer {
         restoreDir: File,
         currentFilesDir: File?,
         preserveCurrentDeviceSpecificPreferences: Boolean,
+        restoreSettings: Boolean = true,
+        restorePresets: Boolean = true,
     ): RestoreResult {
         val preferencesFile = File(restoreDir, USER_PREFERENCES_ENTRY)
         if (!preferencesFile.isFile) {
             return RestoreResult()
+        }
+        require(restoreSettings || restorePresets) {
+            "Backup contains user preferences outside its selected categories"
         }
 
         val restoredBuilder = FileInputStream(preferencesFile).use { input ->
@@ -114,29 +133,39 @@ internal object BackupPreferenceSanitizer {
             ?.let { currentFile ->
                 FileInputStream(currentFile).use(PreferenceMap::parseFrom)
             }
-        val removedCount = preserveCurrentValues(
+        // Replace only the selected group, including deletions, and retain the other group exactly.
+        val preservedKeys = (restoredBuilder.preferencesMap.keys +
+            currentPreferenceMap?.preferencesMap.orEmpty().keys).filterTo(mutableSetOf()) { key ->
+            if (key in presetPreferenceKeys) !restorePresets else !restoreSettings
+        }
+        preserveCurrentValues(restoredBuilder, currentPreferenceMap, preservedKeys)
+        val removedCount = if (restoreSettings) preserveCurrentValues(
             restoredBuilder = restoredBuilder,
             currentPreferenceMap = currentPreferenceMap,
             keys = nonPortablePreferenceKeys,
-        )
+        ) else 0
         var skippedDeviceSpecificCount = 0
 
         if (preserveCurrentDeviceSpecificPreferences) {
-            skippedDeviceSpecificCount += preserveCurrentValues(
-                restoredBuilder = restoredBuilder,
-                currentPreferenceMap = currentPreferenceMap,
-                keys = deviceSpecificPreferenceKeys,
-            )
-            skippedDeviceSpecificCount += preserveCurrentPresetDeviceFields(
-                restoredBuilder = restoredBuilder,
-                currentPreferenceMap = currentPreferenceMap,
-            )
+            if (restoreSettings) {
+                skippedDeviceSpecificCount += preserveCurrentValues(
+                    restoredBuilder = restoredBuilder,
+                    currentPreferenceMap = currentPreferenceMap,
+                    keys = deviceSpecificPreferenceKeys,
+                )
+            }
+            if (restorePresets) {
+                skippedDeviceSpecificCount += preserveCurrentPresetDeviceFields(
+                    restoredBuilder = restoredBuilder,
+                    currentPreferenceMap = currentPreferenceMap,
+                )
+            }
         }
 
         if (
             removedCount == 0 &&
             currentFilesDir == null &&
-            !preserveCurrentDeviceSpecificPreferences
+            !preserveCurrentDeviceSpecificPreferences && restoreSettings && restorePresets
         ) {
             return RestoreResult()
         }

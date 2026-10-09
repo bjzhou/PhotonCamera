@@ -113,6 +113,8 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import com.hinnka.mycamera.BuildConfig
 import com.hinnka.mycamera.R
+import com.hinnka.mycamera.data.BackupCategory
+import com.hinnka.mycamera.data.BackupManager
 import com.hinnka.mycamera.camera.AspectRatio
 import com.hinnka.mycamera.camera.GridStyle
 import com.hinnka.mycamera.camera.CameraInfo
@@ -458,6 +460,10 @@ fun SettingsScreen(
     var showExternalLensStabilizationDialog by remember { mutableStateOf(false) }
     var showCustomVendorKeysDialog by remember { mutableStateOf(false) }
     var backupOperation by remember { mutableStateOf<BackupOperation?>(null) }
+    var showBackupSelectionDialog by rememberSaveable { mutableStateOf(false) }
+    var availableBackupCategories by rememberSaveable { mutableStateOf(emptyList<String>()) }
+    var selectedBackupCategories by rememberSaveable { mutableStateOf(emptyList<String>()) }
+    var pendingBackupCategories by rememberSaveable { mutableStateOf<List<String>?>(null) }
 
     LaunchedEffect(
         rawExposureCompensation,
@@ -603,11 +609,13 @@ fun SettingsScreen(
     val backupLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.CreateDocument("application/zip")
     ) { uri ->
-        uri?.let {
+        val categories = pendingBackupCategories?.map(BackupCategory::valueOf)?.toSet()
+        pendingBackupCategories = null
+        if (uri != null && !categories.isNullOrEmpty()) {
+            backupOperation = BackupOperation.BACKUP
             coroutineScope.launch {
-                backupOperation = BackupOperation.BACKUP
                 try {
-                    val success = com.hinnka.mycamera.data.BackupManager.performBackup(context, it)
+                    val success = BackupManager.performBackup(context, uri, categories)
                     if (success) {
                         android.widget.Toast.makeText(context, R.string.backup_success, android.widget.Toast.LENGTH_SHORT).show()
                     } else {
@@ -2830,9 +2838,16 @@ fun SettingsScreen(
                             } else {
                                 stringResource(R.string.settings_backup_settings_description)
                             },
-                            enabled = backupOperation == null,
+                            enabled = backupOperation == null && pendingBackupCategories == null,
                             showProgress = backupOperation == BackupOperation.BACKUP,
-                            onClick = { backupLauncher.launch("photon_camera_backup_${System.currentTimeMillis()}.zip") }
+                            onClick = {
+                                coroutineScope.launch {
+                                    val categories = BackupManager.availableCategories(context).map { it.name }
+                                    availableBackupCategories = categories
+                                    selectedBackupCategories = categories
+                                    showBackupSelectionDialog = true
+                                }
+                            }
                         )
 
                         HorizontalDivider(
@@ -2847,7 +2862,7 @@ fun SettingsScreen(
                             } else {
                                 stringResource(R.string.settings_restore_settings_description)
                             },
-                            enabled = backupOperation == null,
+                            enabled = backupOperation == null && pendingBackupCategories == null,
                             showProgress = backupOperation == BackupOperation.RESTORE,
                             onClick = { restoreLauncher.launch("*/*") }
                         )
@@ -3019,6 +3034,20 @@ fun SettingsScreen(
                 Spacer(modifier = Modifier.height(32.dp))
             }
         }
+    }
+
+    if (showBackupSelectionDialog) {
+        BackupSelectionDialog(
+            availableCategories = availableBackupCategories.map(BackupCategory::valueOf).toSet(),
+            selectedCategories = selectedBackupCategories.map(BackupCategory::valueOf).toSet(),
+            onSelectionChange = { selectedBackupCategories = it.map { category -> category.name } },
+            onDismiss = { showBackupSelectionDialog = false },
+            onConfirm = {
+                pendingBackupCategories = selectedBackupCategories.toList()
+                showBackupSelectionDialog = false
+                backupLauncher.launch("photon_camera_backup_${System.currentTimeMillis()}.zip")
+            },
+        )
     }
 
     // 显示日志查看器弹窗

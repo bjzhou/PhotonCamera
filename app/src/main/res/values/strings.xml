@@ -639,6 +639,17 @@
     <string name="settings_restore_settings">Restore Settings</string>
     <string name="settings_restore_settings_description">Restore from a previous backup ZIP file. App may require a restart to apply.</string>
     <string name="backup_success">Backup completed successfully</string>
+    <string name="backup_select_content">Choose backup contents</string>
+    <string name="backup_select_content_description">Choose at least one category. Preferences and presets can be backed up separately; select any custom resources they need as well.</string>
+    <string name="backup_category_settings">Preferences</string>
+    <string name="backup_category_presets">Presets</string>
+    <string name="backup_category_luts">Custom LUTs and categories</string>
+    <string name="backup_category_frames">Custom frames, fonts and logos</string>
+    <string name="backup_category_dcps">Custom DCP profiles</string>
+    <string name="backup_category_raw_noise">Custom RAW noise profiles</string>
+    <string name="backup_category_sounds">Custom shutter sounds</string>
+    <string name="backup_no_content">No content to back up</string>
+    <string name="backup_continue">Choose save location</string>
     <string name="backup_failed">Backup failed</string>
     <string name="backup_in_progress">Backing up settings and custom content...</string>
     <string name="restore_success">Restore completed successfully. Please restart the app.</string>

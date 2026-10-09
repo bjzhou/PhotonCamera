@@ -25,21 +25,20 @@ object BackupManager {
     private const val BUFFER_SIZE = 64 * 1024
 
     // 需备份的目录/文件相对路径列表 (相对于 context.filesDir)
-    private val BACKUP_ENTRIES = listOf(
-        "datastore", // DataStore 默认存放目录
-        "custom_luts.json",
-        "custom_frames.json",
-        "custom_dcps.json",
-        "custom_raw_noise_profiles.json",
-        "category_overrides.json",
-        "custom_luts",
-        "custom_frames",
-        "custom_dcps",
-        "custom_raw_noise_profiles",
-        "custom_fonts",
-        "custom_logos",
-        "capture_sounds"
-    )
+    private val BACKUP_ENTRIES = BackupCategory.entries.flatMap { it.paths }
+        .map { it.substringBefore('/') }.distinct()
+
+    suspend fun availableCategories(context: Context): Set<BackupCategory> =
+        withContext(Dispatchers.IO) {
+            BackupCategory.entries.filterTo(linkedSetOf()) { category ->
+                category.paths.any { path ->
+                    val entry = File(context.filesDir, path)
+                    entry.walkTopDown()
+                        .onEnter { !it.isHidden }
+                        .any { it.isFile && !it.isHidden }
+                }
+            }
+        }
 
     // These imported profiles describe a particular camera sensor and must stay with its device.
     private val DEVICE_SPECIFIC_BACKUP_ENTRIES = setOf(
@@ -53,23 +52,34 @@ object BackupManager {
      * 执行备份
      * @param context Context
      * @param outputUri 目标 zip 文件的 URI (通过 SAF 选择)
+     * @param categories 需要备份的内容分类
      * @return 备份是否成功
      */
-    suspend fun performBackup(context: Context, outputUri: Uri): Boolean = withContext(Dispatchers.IO) {
+    suspend fun performBackup(
+        context: Context,
+        outputUri: Uri,
+        categories: Set<BackupCategory> = BackupCategory.entries.toSet(),
+    ): Boolean = withContext(Dispatchers.IO) {
         val tempZip = File(context.cacheDir, "backup-${UUID.randomUUID()}.zip")
         try {
+            require(categories.isNotEmpty()) { "No backup categories selected" }
+            // SETTINGS already walks datastore, so do not write the shared preset file twice.
+            val selectedEntries = categories.flatMap { it.paths }.toSet().filterNot {
+                BackupCategory.SETTINGS in categories &&
+                    it == BackupPreferenceSanitizer.USER_PREFERENCES_ENTRY
+            }
             FileOutputStream(tempZip).use { fileOutput ->
                 ZipOutputStream(fileOutput).use { zos ->
                     val filesDir = context.filesDir
 
                     zos.putNextEntry(ZipEntry(BackupDeviceMetadata.ENTRY_NAME))
-                    BackupDeviceMetadata.write(currentDeviceIdentity(), zos)
+                    BackupDeviceMetadata.write(currentDeviceIdentity(), zos, categories)
                     zos.closeEntry()
 
-                    for (entryName in BACKUP_ENTRIES) {
+                    for (entryName in selectedEntries) {
                         val fileOrDir = File(filesDir, entryName)
                         if (fileOrDir.exists()) {
-                            zipFile(fileOrDir, fileOrDir.name, zos)
+                            zipFile(fileOrDir, entryName, zos, categories)
                         } else {
                             PLog.d(TAG, "Skip missing backup entry: $entryName")
                         }
@@ -94,7 +104,7 @@ object BackupManager {
                 validateBackupZip(input)
             } ?: throw IllegalStateException("Cannot read written backup from URI: $outputUri")
 
-            PLog.d(TAG, "Backup successfully completed to $outputUri, size=${tempZip.length()}")
+            PLog.d(TAG, "Backup successfully completed to $outputUri, categories=$categories, size=${tempZip.length()}")
             true
         } catch (e: Exception) {
             PLog.e(TAG, "Backup failed", e)
@@ -106,7 +116,12 @@ object BackupManager {
         }
     }
 
-    private fun zipFile(fileToZip: File, fileName: String, zos: ZipOutputStream) {
+    private fun zipFile(
+        fileToZip: File,
+        fileName: String,
+        zos: ZipOutputStream,
+        categories: Set<BackupCategory>,
+    ) {
         if (fileToZip.isHidden) {
             return
         }
@@ -121,7 +136,7 @@ object BackupManager {
             val children = fileToZip.listFiles()
             if (children != null) {
                 for (childFile in children) {
-                    zipFile(childFile, fileName + "/" + childFile.name, zos)
+                    zipFile(childFile, fileName + "/" + childFile.name, zos, categories)
                 }
             }
             return
@@ -131,7 +146,12 @@ object BackupManager {
         zos.putNextEntry(zipEntry)
         if (BackupPreferenceSanitizer.isUserPreferencesEntry(fileName)) {
             val removedPreferenceCount =
-                BackupPreferenceSanitizer.writeUserPreferencesWithoutNonPortableKeys(fileToZip, zos)
+                BackupPreferenceSanitizer.writeUserPreferencesWithoutNonPortableKeys(
+                    fileToZip,
+                    zos,
+                    includeSettings = BackupCategory.SETTINGS in categories,
+                    includePresets = BackupCategory.PRESETS in categories,
+                )
             if (removedPreferenceCount > 0) {
                 PLog.d(
                     TAG,
@@ -172,6 +192,7 @@ object BackupManager {
             }
 
             unzipBackupToDirectory(tempZip, restoreDir)
+            val categories = BackupDeviceMetadata.readCategories(restoreDir)
             val backupDeviceIdentity = BackupDeviceMetadata.read(restoreDir)
             val currentDeviceIdentity = currentDeviceIdentity()
             val isSameDevice = backupDeviceIdentity?.matches(currentDeviceIdentity) == true
@@ -187,6 +208,8 @@ object BackupManager {
                 restoreDir = restoreDir,
                 currentFilesDir = context.filesDir,
                 preserveCurrentDeviceSpecificPreferences = !isSameDevice,
+                restoreSettings = categories == null || BackupCategory.SETTINGS in categories,
+                restorePresets = categories == null || BackupCategory.PRESETS in categories,
             )
             if (preferenceSanitization.removedNonPortablePreferenceCount > 0) {
                 PLog.d(

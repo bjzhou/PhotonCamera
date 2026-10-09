@@ -1,6 +1,7 @@
 package com.hinnka.mycamera.data
 
 import com.google.gson.GsonBuilder
+import com.google.gson.JsonArray
 import com.google.gson.JsonObject
 import com.google.gson.JsonParser
 import java.io.File
@@ -29,9 +30,16 @@ internal object BackupDeviceMetadata {
     private const val SCHEMA_VERSION = 1
     private val gson = GsonBuilder().setPrettyPrinting().create()
 
-    fun write(identity: BackupDeviceIdentity, output: OutputStream) {
+    fun write(
+        identity: BackupDeviceIdentity,
+        output: OutputStream,
+        categories: Set<BackupCategory>? = null,
+    ) {
         val root = JsonObject().apply {
             addProperty("schema_version", SCHEMA_VERSION)
+            categories?.let { selected ->
+                add("categories", JsonArray().apply { selected.forEach { add(it.name) } })
+            }
             add(
                 "device",
                 JsonObject().apply {
@@ -58,6 +66,21 @@ internal object BackupDeviceMetadata {
                 device = device.requiredString("device"),
             )
         }.getOrNull()
+    }
+
+    /** Missing selection metadata identifies a legacy backup with unsplit preferences. */
+    fun readCategories(restoreDir: File): Set<BackupCategory>? {
+        val metadataFile = File(restoreDir, ENTRY_NAME)
+        if (!metadataFile.isFile) return null
+        val root = metadataFile.reader(Charsets.UTF_8).use(JsonParser::parseReader).asJsonObject
+        val selection = root.get("categories") ?: return null
+        require(root.get("schema_version")?.asInt == SCHEMA_VERSION) {
+            "Unsupported backup selection schema"
+        }
+        require(selection.isJsonArray) { "Invalid backup categories" }
+        return selection.asJsonArray.map { BackupCategory.valueOf(it.asString) }.toSet().also {
+            require(it.isNotEmpty()) { "No backup categories in manifest" }
+        }
     }
 
     private fun JsonObject.requiredString(name: String): String {

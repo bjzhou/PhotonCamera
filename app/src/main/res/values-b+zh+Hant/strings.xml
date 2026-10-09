@@ -596,6 +596,17 @@
     <string name="settings_restore_settings">還原設定</string>
     <string name="settings_restore_settings_description">從之前的備份 ZIP 檔案中還原。應用可能需要重啟才能生效。</string>
     <string name="backup_success">備份成功</string>
+    <string name="backup_select_content">選擇備份內容</string>
+    <string name="backup_select_content_description">請至少選擇一項。首選項和預設可分別備份，所需的自訂資源請一併勾選。</string>
+    <string name="backup_category_settings">首選項</string>
+    <string name="backup_category_presets">預設</string>
+    <string name="backup_category_luts">自訂 LUT 與分類</string>
+    <string name="backup_category_frames">自訂邊框、字型與 Logo</string>
+    <string name="backup_category_dcps">自訂 DCP 配置</string>
+    <string name="backup_category_raw_noise">自訂 RAW 噪聲配置</string>
+    <string name="backup_category_sounds">自訂快門聲音</string>
+    <string name="backup_no_content">暫無可備份內容</string>
+    <string name="backup_continue">選擇儲存位置</string>
     <string name="backup_failed">備份失敗</string>
     <string name="backup_in_progress">正在備份設定和自訂內容...</string>
     <string name="restore_success">還原成功，請重新啟動應用。</string>

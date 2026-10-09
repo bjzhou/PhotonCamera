@@ -617,6 +617,17 @@
     <string name="settings_restore_settings">恢复设置</string>
     <string name="settings_restore_settings_description">从之前的备份 ZIP 文件中恢复。应用可能需要重启才能生效。</string>
     <string name="backup_success">备份成功</string>
+    <string name="backup_select_content">选择备份内容</string>
+    <string name="backup_select_content_description">请至少选择一项。首选项和预设可分别备份，所需的自定义资源请一并勾选。</string>
+    <string name="backup_category_settings">首选项</string>
+    <string name="backup_category_presets">预设</string>
+    <string name="backup_category_luts">自定义 LUT 与分类</string>
+    <string name="backup_category_frames">自定义边框、字体与 Logo</string>
+    <string name="backup_category_dcps">自定义 DCP 配置</string>
+    <string name="backup_category_raw_noise">自定义 RAW 噪声配置</string>
+    <string name="backup_category_sounds">自定义快门声音</string>
+    <string name="backup_no_content">暂无可备份内容</string>
+    <string name="backup_continue">选择保存位置</string>
     <string name="backup_failed">备份失败</string>
     <string name="backup_in_progress">正在备份设置和自定义内容...</string>
     <string name="restore_success">恢复成功，请重新启动应用。</string>
