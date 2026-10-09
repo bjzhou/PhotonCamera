@@ -50,6 +50,7 @@ fun CameraPreviewGL(
     baselineLut: LutConfig?,
     currentLut: LutConfig?,
     spectralFilmPreviewLut: SpectralFilmLut?,
+    dcpPreviewPlan: kotlinx.coroutines.flow.StateFlow<com.hinnka.mycamera.raw.DcpPreviewPlan?>,
     baselineColorRecipeParams: ColorRecipeParams,
     colorRecipeParams: ColorRecipeParams,
     focusPoint: Pair<Float, Float>?,
@@ -87,6 +88,12 @@ fun CameraPreviewGL(
     var resumeGeneration by remember { mutableIntStateOf(0) }
     val currentOnTap by rememberUpdatedState(onTap)
     val currentOnLongPress by rememberUpdatedState(onLongPress)
+
+    // AWB/CCM changes update only engine uniforms, not the entire Compose/LUT layer.
+    LaunchedEffect(glSurfaceViewRef, dcpPreviewPlan, resumeGeneration) {
+        val view = glSurfaceViewRef ?: return@LaunchedEffect
+        dcpPreviewPlan.collect { view.setDcpPreview(it) }
+    }
 
     DisposableEffect(lifecycleOwner) {
         val observer = LifecycleEventObserver { _, event ->
@@ -295,6 +302,7 @@ fun CameraPreviewGL(
                         val baselineColorRecipeEnabled = !baselineColorRecipeParams.isDefault()
                         // 更新 LUT 设置
                         glSurfaceView.setSpectralFilmPreview(spectralFilmPreviewLut)
+                        glSurfaceView.setDcpPreview(dcpPreviewPlan.value)
                         glSurfaceView.setBaselineLut(baselineLut)
                         glSurfaceView.setBaselineLutEnabled(baselineLut != null)
                         glSurfaceView.setLut(currentLut)

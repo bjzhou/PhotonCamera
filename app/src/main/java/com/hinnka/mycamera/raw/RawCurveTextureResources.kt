@@ -7,17 +7,18 @@ import java.nio.ByteOrder
 /** Shared one-dimensional curve texture used by Adobe tone and HDR reference passes. */
 internal class RawCurveTextureResources {
     private var textureId = 0
+    private var uploadedCurve: FloatArray? = null
 
-    fun bind(program: Int, curve: FloatArray, textureUnit: Int = 1) {
+    fun bind(program: Int, curve: FloatArray, textureUnit: Int = 1, uniformPrefix: String = "uCurve") {
         GLES30.glActiveTexture(GLES30.GL_TEXTURE0 + textureUnit)
         ensureTexture(curve)
         GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, textureId)
-        GLES30.glUniform1i(GLES30.glGetUniformLocation(program, "uCurveTexture"), textureUnit)
+        GLES30.glUniform1i(GLES30.glGetUniformLocation(program, "${uniformPrefix}Texture"), textureUnit)
         GLES30.glUniform1f(
-            GLES30.glGetUniformLocation(program, "uCurveSize"),
+            GLES30.glGetUniformLocation(program, "${uniformPrefix}Size"),
             curve.size.toFloat(),
         )
-        GLES30.glUniform1i(GLES30.glGetUniformLocation(program, "uCurveEnabled"), 1)
+        GLES30.glUniform1i(GLES30.glGetUniformLocation(program, "${uniformPrefix}Enabled"), 1)
         RawGlesProgram.logErrors("RawCurveTextureResources.bind")
     }
 
@@ -26,9 +27,16 @@ internal class RawCurveTextureResources {
             GLES30.glDeleteTextures(1, intArrayOf(textureId), 0)
             textureId = 0
         }
+        uploadedCurve = null
+    }
+
+    fun reset() {
+        textureId = 0
+        uploadedCurve = null
     }
 
     private fun ensureTexture(curve: FloatArray) {
+        if (textureId != 0 && uploadedCurve.contentEquals(curve)) return
         if (textureId == 0) {
             textureId = IntArray(1).also { GLES30.glGenTextures(1, it, 0) }[0]
         }
@@ -55,5 +63,6 @@ internal class RawCurveTextureResources {
             GLES30.GL_FLOAT,
             buffer,
         )
+        uploadedCurve = curve.copyOf()
     }
 }

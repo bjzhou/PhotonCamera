@@ -58,6 +58,10 @@ internal class DcpTextureResources {
         intArrayOf(hueSatTextureId, lookTableTextureId, dummyTextureId)
             .filter { it != 0 }
             .forEach { GLES30.glDeleteTextures(1, intArrayOf(it), 0) }
+        reset()
+    }
+
+    fun reset() {
         hueSatTextureId = 0
         hueSatSource = null
         lookTableTextureId = 0

@@ -232,6 +232,11 @@ class CameraGLSurfaceView @JvmOverloads constructor(
         requestRender()
     }
 
+    fun setDcpPreview(plan: com.hinnka.mycamera.raw.DcpPreviewPlan?) {
+        renderer.setDcpPreview(plan)
+        requestRender()
+    }
+
     fun setBaselineLut(lutConfig: LutConfig?) {
         queueEvent {
             renderer.setBaselineLut(lutConfig)

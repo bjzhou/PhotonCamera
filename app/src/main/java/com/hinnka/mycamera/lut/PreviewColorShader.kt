@@ -2,6 +2,7 @@ package com.hinnka.mycamera.lut
 
 internal object PreviewColorShader {
     fun source(variant: PreviewColorShaderVariant): String {
+        require(!variant.includeDcp || !variant.includeSpectralFilm)
         val extension = if (variant.textureSource == PreviewColorTextureSource.EXTERNAL_OES) {
             "#extension GL_OES_EGL_image_external_essl3 : require\n"
         } else {
@@ -16,11 +17,14 @@ internal object PreviewColorShader {
         val needsClassifiers = variant.includeLchMixer || variant.includeLutMask
         val needsLogInput = variant.includeVideoLog ||
             variant.includeExtendedLutCurves ||
-            variant.includeSpectralFilm
+            variant.includeSpectralFilm || variant.includeDcp
         return """
             #version 300 es
             ${extension}
             precision highp float;
+            precision highp int;
+            precision highp sampler2D;
+            precision highp sampler3D;
 
             in vec2 vTexCoord;
             in vec2 vRawCoord;
@@ -89,6 +93,7 @@ internal object PreviewColorShader {
             ${PreviewColorShaderModules.COLOR_TRANSFER_CORE}
             ${if (needsLogInput) LogInputGl.GLSL else ""}
             ${if (variant.includeSpectralFilm) SpectralFilmPreviewGl.GLSL else ""}
+            ${if (variant.includeDcp) DcpPreviewGl.GLSL else ""}
             ${PreviewColorShaderModules.EXPOSURE}
             ${ContrastShader.GLSL}
             ${DirectFlashShader.GLSL}
@@ -182,6 +187,8 @@ internal object PreviewColorShader {
                 // RAW 渲染引擎模拟：先于基准层与创意层，与 RAW 管线中引擎所处位置一致。
                 color.rgb = sanitizeColor(applySpectralFilmPreview(color.rgb));
                 """ else ""}
+
+                ${if (variant.includeDcp) "color.rgb = sanitizeColor(applyDcpPreview(color.rgb));" else ""}
 
                 if (uColorRecipeEnabled) {
                     if (abs(uExposure) > 0.001) {
@@ -385,7 +392,7 @@ internal object PreviewColorShader {
 
                 fragColor = vec4(clamp(sanitizeColor(color.rgb), 0.0, 1.0), color.a);
             }
-        """.trimIndent()
+        """.trimIndent().trimStart()
     }
 
 }

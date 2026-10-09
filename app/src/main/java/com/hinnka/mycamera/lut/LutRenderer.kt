@@ -26,6 +26,7 @@ import java.util.ArrayDeque
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 import com.hinnka.mycamera.raw.SpectralFilmLut
+import com.hinnka.mycamera.raw.DcpPreviewPlan
 import java.util.concurrent.atomic.AtomicBoolean
 import javax.microedition.khronos.egl.EGLConfig
 import javax.microedition.khronos.opengles.GL10
@@ -351,6 +352,9 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
     /** RAW 渲染引擎为 Spektrafilm 时的取景器胶片模拟；null 表示不模拟。 */
     @Volatile
     private var spectralFilmPreviewLut: SpectralFilmLut? = null
+
+    @Volatile
+    private var dcpPreviewPlan: DcpPreviewPlan? = null
 
     // 色彩配方参数
     @Volatile
@@ -779,6 +783,7 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
         params: com.hinnka.mycamera.model.ColorRecipeParams,
         enableVideoLog: Boolean,
         spectralFilmEnabled: Boolean,
+        dcpEnabled: Boolean = false,
     ): ColorPassLocations? {
         val variant = PreviewColorShaderVariant.forPass(
             textureSource = textureSource,
@@ -787,6 +792,7 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
             lutEnabled = lutEnabled && lutConfig != null,
             videoLogEnabled = enableVideoLog && videoLogProfile.isEnabled,
             spectralFilmEnabled = spectralFilmEnabled,
+            dcpEnabled = dcpEnabled,
         )
         return colorProgramCache.get(variant)
     }
@@ -810,6 +816,7 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
         curveEnabled: Boolean,
         enableVideoLog: Boolean,
         spectralFilmLut: SpectralFilmLut?,
+        dcpPlan: DcpPreviewPlan? = null,
     ) {
         GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, targetFboId)
         GLES30.glViewport(0, 0, width, height)
@@ -817,6 +824,7 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
         GLES30.glUseProgram(locations.programId)
         colorProgramCache.bindLogInput(locations)
         colorProgramCache.bindSpectralFilm(locations, spectralFilmLut)
+        colorProgramCache.bindDcp(locations, dcpPlan)
 
         GLES30.glActiveTexture(GLES30.GL_TEXTURE0)
         GLES30.glBindTexture(sourceTextureTarget, sourceTextureId)
@@ -1365,9 +1373,10 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
         preferBaselineLayer: Boolean = false,
         suppressBaselineLayer: Boolean = false,
         suppressCreativeLayer: Boolean = false,
-        suppressSpectralFilm: Boolean = false,
+        suppressCameraEngine: Boolean = false,
     ) {
-        val spectralFilmLut = if (suppressSpectralFilm) null else spectralFilmPreviewLut
+        val dcpPlan = if (suppressCameraEngine) null else dcpPreviewPlan
+        val spectralFilmLut = if (suppressCameraEngine || dcpPlan != null) null else spectralFilmPreviewLut
         val baselineLayerAvailable = hasBaselineLayer() && !suppressBaselineLayer
         val creativeLayerAvailable = hasCreativeLayer() && !suppressCreativeLayer
         val useCreativeLayer = creativeLayerAvailable && (!preferBaselineLayer || !baselineLayerAvailable)
@@ -1411,6 +1420,7 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
             params = layerParams,
             enableVideoLog = enableVideoLog,
             spectralFilmEnabled = spectralFilmLut != null,
+            dcpEnabled = dcpPlan != null,
         ) ?: return
         drawColorPass(
             locations = locations,
@@ -1431,6 +1441,7 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
             curveEnabled = layerCurveEnabled,
             enableVideoLog = enableVideoLog,
             spectralFilmLut = spectralFilmLut,
+            dcpPlan = dcpPlan,
         )
 
         // 测光和直方图（按需）
@@ -2253,6 +2264,10 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
         spectralFilmPreviewLut = lut
     }
 
+    fun setDcpPreview(plan: DcpPreviewPlan?) {
+        dcpPreviewPlan = plan
+    }
+
     fun setBaselineLut(lutConfig: LutConfig?) {
         if (!surfaceReady) {
             currentBaselineLutConfig = lutConfig
@@ -2713,7 +2728,7 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
                     targetMvpMatrix = buildMvpMatrix(targetWidth, targetHeight),
                     suppressBaselineLayer = suppressColorLayers,
                     suppressCreativeLayer = suppressColorLayers,
-                    suppressSpectralFilm = suppressColorLayers,
+                    suppressCameraEngine = suppressColorLayers,
                 )
             }
 
@@ -2828,7 +2843,7 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
                     targetMvpMatrix = buildMvpMatrix(METERING_SIZE, METERING_SIZE),
                     suppressBaselineLayer = true,
                     suppressCreativeLayer = true,
-                    suppressSpectralFilm = true,
+                    suppressCameraEngine = true,
                 )
             }
 

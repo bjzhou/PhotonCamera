@@ -1197,6 +1197,7 @@ fun CameraScreen(
                             baselineLut = viewModel.currentBaselineLutConfig,
                             currentLut = viewModel.currentLutConfig,
                             spectralFilmPreviewLut = viewModel.currentSpectralFilmPreviewLut,
+                            dcpPreviewPlan = viewModel.currentDcpPreviewPlan,
                             baselineColorRecipeParams = currentBaselineRecipeParams,
                             colorRecipeParams = previewRecipeParamsOverride ?: currentRecipeParams,
                             focusPoint = state.focusPoint,

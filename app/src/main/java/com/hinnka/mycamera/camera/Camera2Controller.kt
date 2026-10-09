@@ -27,6 +27,8 @@ import android.net.Uri
 import androidx.exifinterface.media.ExifInterface
 import com.hinnka.mycamera.raw.ColorSpace as RawColorSpace
 import com.hinnka.mycamera.raw.DngSdkColorSpec
+import com.hinnka.mycamera.raw.DcpPreviewSource
+import com.hinnka.mycamera.raw.RawCameraCalibration
 import com.hinnka.mycamera.raw.RawColorCalibrationPolicy
 import com.hinnka.mycamera.utils.PLog
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -439,6 +441,56 @@ class Camera2Controller(private val context: Context) {
     // 保留最近的一个结果作为后备
     @Volatile
     private var lastCaptureResult: TotalCaptureResult? = null
+
+    @Volatile
+    private var dcpPreviewEnabled = false
+    private val _dcpPreviewSource = MutableStateFlow<DcpPreviewSource?>(null)
+    val dcpPreviewSource: StateFlow<DcpPreviewSource?> = _dcpPreviewSource.asStateFlow()
+    private var dcpPreviewCharacteristics: CameraCharacteristics? = null
+    private var dcpPreviewCalibration: RawCameraCalibration? = null
+
+    fun setDcpPreviewEnabled(enabled: Boolean) {
+        dcpPreviewEnabled = enabled
+        if (!enabled) _dcpPreviewSource.value = null
+    }
+
+    private fun updateDcpPreviewSource(result: TotalCaptureResult) {
+        if (!dcpPreviewEnabled) return
+        val physicalId = activeOutputPhysicalCameraId
+            ?: result.get(CaptureResult.LOGICAL_MULTI_CAMERA_ACTIVE_PHYSICAL_ID)
+        val cameraId = physicalId ?: getActiveOpenCameraId()
+        val frame = physicalId?.let { result.physicalCameraResults[it] } ?: result
+        val characteristics = getCameraCharacteristicsOrNull(cameraId, "DCP preview") ?: run {
+            _dcpPreviewSource.value = null
+            return
+        }
+        val gains = frame.get(CaptureResult.COLOR_CORRECTION_GAINS)
+            ?: result.get(CaptureResult.COLOR_CORRECTION_GAINS)
+        if (gains == null) {
+            _dcpPreviewSource.value = null
+            return
+        }
+        if (dcpPreviewCharacteristics !== characteristics) {
+            dcpPreviewCalibration = RawColorCalibrationPolicy.fromCharacteristics(characteristics).toRawCalibration()
+            dcpPreviewCharacteristics = characteristics
+            PLog.d(TAG, "DCP preview source camera=$cameraId")
+        }
+        val mode = frame.get(CaptureResult.COLOR_CORRECTION_MODE)
+            ?: result.get(CaptureResult.COLOR_CORRECTION_MODE)
+        val transform = if (mode == CaptureResult.COLOR_CORRECTION_MODE_TRANSFORM_MATRIX) {
+            frame.get(CaptureResult.COLOR_CORRECTION_TRANSFORM)
+                ?: result.get(CaptureResult.COLOR_CORRECTION_TRANSFORM)
+        } else null
+        val source = DcpPreviewSource(
+            cameraId = cameraId,
+            calibration = requireNotNull(dcpPreviewCalibration),
+            whiteBalanceGains = listOf(gains.red, gains.greenEven, gains.greenOdd, gains.blue),
+            camera2Transform = transform?.let { matrix ->
+                List(9) { index -> matrix.getElement(index % 3, index / 3).toFloat() }
+            },
+        )
+        if (dcpPreviewEnabled) _dcpPreviewSource.value = source
+    }
 
     // 场景变化检测：用于替代固定延迟恢复连续对焦
     private var isFocusLockedWaitingForSceneChange = false
@@ -1105,6 +1157,7 @@ class Camera2Controller(private val context: Context) {
 
             lastCaptureResult = result
             logVideoCaptureStats(result)
+            if (session === captureSession) updateDcpPreviewSource(result)
 
             // 处理拍照状态机
             processStillFlashPrecapture(request, result)
@@ -2021,6 +2074,9 @@ class Camera2Controller(private val context: Context) {
     }
 
     private fun clearCameraCapabilityCache() {
+        _dcpPreviewSource.value = null
+        dcpPreviewCharacteristics = null
+        dcpPreviewCalibration = null
         cachedCharacteristics = null
         cachedCharacteristicsCameraId = ""
         activeOpenCameraId = ""
@@ -2098,6 +2154,7 @@ class Camera2Controller(private val context: Context) {
         clearCaptureFocusState("session cleared: $reason")
         safeCloseCaptureSession(captureSession, reason)
         captureSession = null
+        _dcpPreviewSource.value = null
         previewRequestBuilder = null
         safeReleasePreviewSurface(reason)
         if (closeImageReader) {
@@ -6192,6 +6249,7 @@ class Camera2Controller(private val context: Context) {
         refreshHyperfocalFocusDistanceIfEnabled(updatePreview = false)
         safeCloseCaptureSession(captureSession, "physical zoom output changed")
         captureSession = null
+        _dcpPreviewSource.value = null
         createPreviewSession(openGeneration = cameraOpenGeneration)
         return true
     }
@@ -8665,6 +8723,7 @@ class Camera2Controller(private val context: Context) {
         // A delayed close callback from the old session must not clear its replacement.
         if (session == null || captureSession !== session) return
         captureSession = null
+        _dcpPreviewSource.value = null
         previewRequestBuilder = null
         val wasBurstCapturing = _state.value.burstCapturing
         burstCapturing = false

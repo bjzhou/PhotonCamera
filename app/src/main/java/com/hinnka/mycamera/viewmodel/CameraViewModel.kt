@@ -69,6 +69,7 @@ import com.hinnka.mycamera.processor.RawStackFrame
 import com.hinnka.mycamera.raw.ColorSpace
 import com.hinnka.mycamera.raw.DcpProfileParser
 import com.hinnka.mycamera.raw.DcpInfo
+import com.hinnka.mycamera.raw.DcpPreviewPlan
 import com.hinnka.mycamera.raw.HncsFilmCurveMode
 import com.hinnka.mycamera.raw.HncsRenderIntent
 import com.hinnka.mycamera.raw.RawOutputUpscaleMode
@@ -637,6 +638,9 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     /** RAW 引擎为 Spektrafilm 时用于取景器实时预览的胶片/相纸阶段。 */
     var currentSpectralFilmPreviewLut: SpectralFilmLut? by mutableStateOf(null)
         private set
+
+    private val _currentDcpPreviewPlan = MutableStateFlow<DcpPreviewPlan?>(null)
+    val currentDcpPreviewPlan = _currentDcpPreviewPlan.asStateFlow()
 
     var currentLutId = MutableStateFlow("standard")
         private set
@@ -2417,6 +2421,31 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 }
         }
 
+        viewModelScope.launch {
+            userPreferencesRepository.userPreferences.combine(contentRepository.availableDcps) { prefs, dcps ->
+                val info = dcps.firstOrNull { it.id == prefs.rawDcpId }
+                    ?.takeIf {
+                        resolvePreviewBaselineTarget(prefs) != null &&
+                            prefs.rawRenderingEngine == RawRenderingEngine.AdobeCurve
+                    }
+                info?.let { Triple(it, prefs.rawExposureCompensation, prefs.rawToneMappingParameters.profileToneMapMode) }
+            }.distinctUntilChanged().collectLatest { selection ->
+                _currentDcpPreviewPlan.value = null
+                cameraController.setDcpPreviewEnabled(false)
+                if (selection == null) return@collectLatest
+                val profile = withContext(Dispatchers.IO) {
+                    DcpProfileParser.resolveProfile(getApplication(), selection.first)
+                } ?: return@collectLatest
+                cameraController.setDcpPreviewEnabled(true)
+                PLog.d(TAG, "DCP preview profile=${profile.profileName}, working=ProPhoto, output=sRGB")
+                cameraController.dcpPreviewSource.collectLatest { source ->
+                    _currentDcpPreviewPlan.value = if (source == null) null else withContext(Dispatchers.Default) {
+                        DcpPreviewPlan.resolve(source, profile, selection.second, selection.third)
+                    }
+                }
+            }
+        }
+
         // 加载用户偏好设置
         viewModelScope.launch {
             val prefs = userPreferencesRepository.userPreferences.firstOrNull()
@@ -3036,6 +3065,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             glSurfaceView?.let { view ->
                 val currentState = state.value
                 view.setSpectralFilmPreview(currentSpectralFilmPreviewLut)
+                view.setDcpPreview(currentDcpPreviewPlan.value)
                 view.setBaselineLut(currentBaselineLutConfig)
                 view.setBaselineLutEnabled(currentBaselineLutConfig != null)
                 view.setBaselineParams(currentBaselineRecipeParams.value)
