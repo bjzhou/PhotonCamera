@@ -401,6 +401,7 @@ class UserPreferencesRepository(private val context: Context) {
         private val RAW_CANON_EXPOSURE_COMPENSATION_KEY = floatPreferencesKey("raw_canon_exposure_compensation_ev")
         private val RAW_LUMIX_COLOR_MATCHING_KEY = booleanPreferencesKey("raw_lumix_color_matching_enabled")
         private val RAW_HNCS_COLOR_MATCHING_KEY = booleanPreferencesKey("raw_hncs_color_matching_enabled")
+        private val RAW_LEICA_USE_M9_COLOR_MATRIX_KEY = booleanPreferencesKey("raw_leica_use_m9_color_matrix")
         private val RAW_PHOTON_HDR_KEY = booleanPreferencesKey("raw_photon_hdr")
         private val LEGACY_RAW_PHOTON_PGTM_TONE_MAP_KEY =
             booleanPreferencesKey("raw_photon_pgtm_tone_map")
@@ -711,6 +712,7 @@ class UserPreferencesRepository(private val context: Context) {
                         ?: RawToneMappingParameters.CANON_EXPOSURE_COMPENSATION_DEFAULT,
                     lumixColorMatchingEnabled = preferences[RAW_LUMIX_COLOR_MATCHING_KEY] ?: true,
                     hncsColorMatchingEnabled = preferences[RAW_HNCS_COLOR_MATCHING_KEY] ?: true,
+                    leicaUseM9ColorMatrix = preferences[RAW_LEICA_USE_M9_COLOR_MATRIX_KEY] ?: false,
                     usePhotonHdr = true
                 ).normalized(),
                 rawExposureCompensation = preferences[RAW_EXPOSURE_COMPENSATION_KEY] ?: 0f,
@@ -1344,6 +1346,7 @@ class UserPreferencesRepository(private val context: Context) {
             preferences[RAW_CANON_EXPOSURE_COMPENSATION_KEY] = normalized.canonExposureCompensationEv
             preferences[RAW_LUMIX_COLOR_MATCHING_KEY] = normalized.lumixColorMatchingEnabled
             preferences[RAW_HNCS_COLOR_MATCHING_KEY] = normalized.hncsColorMatchingEnabled
+            preferences[RAW_LEICA_USE_M9_COLOR_MATRIX_KEY] = normalized.leicaUseM9ColorMatrix
             preferences[RAW_PHOTON_HDR_KEY] = normalized.usePhotonHdr
             preferences[LEGACY_RAW_PHOTON_PGTM_TONE_MAP_KEY] = false
             preferences[RAW_AUTO_EXPOSURE_KEY] = false
@@ -2691,6 +2694,7 @@ class UserPreferencesRepository(private val context: Context) {
                 preferences[RAW_CANON_EXPOSURE_COMPENSATION_KEY] = normalized.canonExposureCompensationEv
                 preferences[RAW_LUMIX_COLOR_MATCHING_KEY] = normalized.lumixColorMatchingEnabled
                 preferences[RAW_HNCS_COLOR_MATCHING_KEY] = normalized.hncsColorMatchingEnabled
+                preferences[RAW_LEICA_USE_M9_COLOR_MATRIX_KEY] = normalized.leicaUseM9ColorMatrix
                 preferences[RAW_PHOTON_HDR_KEY] = normalized.usePhotonHdr
                 preferences[LEGACY_RAW_PHOTON_PGTM_TONE_MAP_KEY] = false
                 preferences[RAW_AUTO_EXPOSURE_KEY] = false

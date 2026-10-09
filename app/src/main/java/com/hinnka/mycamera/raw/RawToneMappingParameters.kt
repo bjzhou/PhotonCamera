@@ -16,6 +16,8 @@ data class RawToneMappingParameters(
     val canonExposureCompensationEv: Float = CANON_EXPOSURE_COMPENSATION_DEFAULT,
     val lumixColorMatchingEnabled: Boolean = true,
     val hncsColorMatchingEnabled: Boolean = true,
+    /** Use M9 sensor calibration directly instead of the capture device calibration. */
+    val leicaUseM9ColorMatrix: Boolean = false,
 ) {
     /** Explicit engine adjustment, applied once after PGTM with the shared render exposure. */
     fun engineExposureCompensationEv(engine: RawRenderingEngine): Float =
@@ -24,7 +26,8 @@ data class RawToneMappingParameters(
     fun colorMatchingEnabled(engine: RawRenderingEngine): Boolean = when {
         engine.isLumix -> lumixColorMatchingEnabled
         engine.isHncs -> hncsColorMatchingEnabled
-        engine.isCanon || engine.isLeica -> true
+        engine.isCanon -> true
+        engine.isLeica -> !leicaUseM9ColorMatrix
         else -> false
     }
 

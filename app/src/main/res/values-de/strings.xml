@@ -350,4 +350,8 @@
     <string name="settings_raw_fuji_film_simulation_description">Fuji Filmsimulation wählen. PROVIA ist die Standardeinstellung.</string>
     <string name="settings_raw_color_engine_fuji_description">Filmsimulation auf Basis von Firmware-Daten mit angenäherter Wiedergabe.</string>
     <string name="settings_raw_color_engine_leica_description">Farben und Tonwerte der Leica M9.</string>
+    <string name="settings_raw_leica_color_matrix">Farbmatrix</string>
+    <string name="settings_raw_leica_color_matrix_description">Wählen Sie zur RAW-Farbkalibrierung die Farbmatrix des Aufnahmegeräts oder der M9.</string>
+    <string name="settings_raw_leica_color_matrix_device">Standard</string>
+    <string name="settings_raw_leica_color_matrix_m9">M9</string>
 </resources>

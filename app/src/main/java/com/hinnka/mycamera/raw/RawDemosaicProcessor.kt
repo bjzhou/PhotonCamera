@@ -2516,6 +2516,13 @@ class RawDemosaicProcessor {
             }
         }
 
+        // An explicit source-matrix selection must not silently use the M9 matrix
+        // when an imported RAW has no source calibration.
+        if (requestedColorEngine.isLeica && cameraColorMatchingEnabled && actualMetadata != null) {
+            check(actualMetadata.cameraCalibration != null) {
+                "Leica device color matrix requires source camera calibration"
+            }
+        }
         val engineWhitePointXy = if (targetCamera != null && actualMetadata != null &&
             (!cameraColorMatchingEnabled || actualMetadata.cameraCalibration == null)
         ) {
@@ -3075,11 +3082,9 @@ class RawDemosaicProcessor {
             }
         } else null
         val leicaRenderPlan = if (colorEngine.isLeica) {
-            check(dngFile != null || actualMetadata.cameraCalibration != null) {
-                "Leica M9 requires fixed source ColorMatrix calibration for camera capture"
-            }
             LeicaProfile.createRenderPlan(context).also {
                 PLog.i(TAG, "Leica M9 DSP: input=wb-camera-rgb output=linear-sRGB " +
+                    "calibration=${if (directCameraInput) "M9" else "capture-device"} " +
                     "curve=${it.curveIndex} " +
                     "matrix=2 branch=R>=G contrast=2 saturation=2 localMapping=shared-PGTM " +
                     "photonHdr=${normalizedToneMappingParameters.usePhotonHdr}")

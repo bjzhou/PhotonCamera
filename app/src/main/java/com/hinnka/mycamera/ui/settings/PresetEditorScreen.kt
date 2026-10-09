@@ -150,6 +150,9 @@ fun PresetEditorScreen(
     var rawFujiFilmSimulation by remember {
         mutableStateOf(FujiFilmSimulation.fromPersistedValue(sourcePreset?.rawFujiFilmSimulation))
     }
+    var rawLeicaUseM9ColorMatrix by remember {
+        mutableStateOf(sourcePreset?.rawLeicaUseM9ColorMatrix ?: false)
+    }
     var rawCanonExposureCompensationEv by remember {
         mutableStateOf(sourcePreset?.rawCanonExposureCompensationEv
             ?: RawToneMappingParameters.CANON_EXPOSURE_COMPENSATION_DEFAULT)
@@ -199,6 +202,7 @@ fun PresetEditorScreen(
             rawCanonExposureCompensationEv = rawCanonExposureCompensationEv,
             rawLumixColorMatchingEnabled = sourcePreset?.rawLumixColorMatchingEnabled ?: true,
             rawHncsColorMatchingEnabled = sourcePreset?.rawHncsColorMatchingEnabled ?: true,
+            rawLeicaUseM9ColorMatrix = rawLeicaUseM9ColorMatrix,
             rawSpectralFilmStock = rawSpectralFilmStock,
             rawSpectralFilmPrint = rawSpectralFilmPrint,
             rawDROMode = rawDROMode,
@@ -502,6 +506,25 @@ fun PresetEditorScreen(
                     LumixPhotoStyleSelector(
                         selectedStyle = rawLumixPhotoStyle,
                         onSelectStyle = { rawLumixPhotoStyle = it },
+                    )
+                }
+
+                AnimatedVisibility(visible = rawRenderingEngine.isLeica) {
+                    val matrixLabels = mapOf(
+                        false to stringResource(R.string.settings_raw_leica_color_matrix_device),
+                        true to stringResource(R.string.settings_raw_leica_color_matrix_m9),
+                    )
+                    DropdownSettingItem(
+                        title = stringResource(R.string.settings_raw_leica_color_matrix),
+                        description = stringResource(R.string.settings_raw_leica_color_matrix_description),
+                        value = matrixLabels.getValue(rawLeicaUseM9ColorMatrix),
+                        options = matrixLabels.values.toList(),
+                        isLoading = false,
+                        onExpanded = {},
+                        onOptionSelected = { selectedLabel ->
+                            rawLeicaUseM9ColorMatrix = matrixLabels.entries
+                                .first { it.value == selectedLabel }.key
+                        },
                     )
                 }
 

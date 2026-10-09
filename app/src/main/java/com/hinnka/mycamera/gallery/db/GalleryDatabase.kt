@@ -8,7 +8,7 @@ import com.hinnka.mycamera.raw.RawToneMappingParameters
 
 @Database(
     entities = [GalleryMediaEntity::class],
-    version = 47,
+    version = 48,
     exportSchema = false
 )
 @androidx.room.TypeConverters(GalleryConverters::class)
@@ -820,6 +820,12 @@ abstract class GalleryDatabase : RoomDatabase() {
             }
         }
 
+        private val MIGRATION_47_48 = object : androidx.room.migration.Migration(47, 48) {
+            override fun migrate(db: androidx.sqlite.db.SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE gallery_media ADD COLUMN rawLeicaUseM9ColorMatrix INTEGER NOT NULL DEFAULT 0")
+            }
+        }
+
         fun getInstance(context: Context): GalleryDatabase {
             return INSTANCE ?: synchronized(this) {
                 INSTANCE ?: Room.databaseBuilder(
@@ -873,7 +879,8 @@ abstract class GalleryDatabase : RoomDatabase() {
                         MIGRATION_43_44,
                         MIGRATION_44_45,
                         MIGRATION_45_46,
-                        MIGRATION_46_47
+                        MIGRATION_46_47,
+                        MIGRATION_47_48
                     )
                     .fallbackToDestructiveMigrationOnDowngrade(false)
                     .fallbackToDestructiveMigration(false)

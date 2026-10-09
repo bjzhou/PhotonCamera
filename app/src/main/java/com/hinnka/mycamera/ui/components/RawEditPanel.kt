@@ -404,6 +404,26 @@ fun RawRenderingEngineSettingsPanel(
             Spacer(modifier = Modifier.height(16.dp))
         }
 
+        if (rawRenderingEngine.isLeica) {
+            RawChoiceSetting(
+                title = stringResource(R.string.settings_raw_leica_color_matrix),
+                description = stringResource(R.string.settings_raw_leica_color_matrix_description),
+                levels = listOf(
+                    "device" to stringResource(R.string.settings_raw_leica_color_matrix_device),
+                    "m9" to stringResource(R.string.settings_raw_leica_color_matrix_m9),
+                ),
+                currentLevel = if (rawToneMappingParameters.leicaUseM9ColorMatrix) "m9" else "device",
+                onLevelSelected = { source ->
+                    onAdjustmentStart()
+                    onRawToneMappingParametersChange(
+                        rawToneMappingParameters.copy(leicaUseM9ColorMatrix = source == "m9")
+                    )
+                    onAdjustmentEnd()
+                },
+            )
+            Spacer(modifier = Modifier.height(16.dp))
+        }
+
         if (rawRenderingEngine.isFuji) {
             FujiFilmSimulationSelector(
                 selectedStyle = rawToneMappingParameters.fujiFilmSimulation,

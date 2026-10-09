@@ -77,6 +77,8 @@ data class GalleryMediaEntity(
     val rawLumixColorMatchingEnabled: Boolean = true,
     @ColumnInfo(defaultValue = "1")
     val rawHncsColorMatchingEnabled: Boolean = true,
+    @ColumnInfo(defaultValue = "0")
+    val rawLeicaUseM9ColorMatrix: Boolean = false,
     val rawAgxBlackRelativeExposure: Float,
     val rawAgxWhiteRelativeExposure: Float,
     val rawAgxToe: Float,

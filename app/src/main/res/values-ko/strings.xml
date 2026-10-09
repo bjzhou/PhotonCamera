@@ -351,4 +351,8 @@
     <string name="settings_raw_fuji_film_simulation_description">Fuji 필름 시뮬레이션을 선택하세요. 기본값은 PROVIA입니다.</string>
     <string name="settings_raw_color_engine_fuji_description">펌웨어 데이터를 바탕으로 필름 시뮬레이션을 근사 재현합니다.</string>
     <string name="settings_raw_color_engine_leica_description">Leica M9의 색상과 계조.</string>
+    <string name="settings_raw_leica_color_matrix">색상 행렬</string>
+    <string name="settings_raw_leica_color_matrix_description">RAW 색상 보정에 촬영 기기 또는 M9의 색상 행렬을 사용합니다.</string>
+    <string name="settings_raw_leica_color_matrix_device">기본값</string>
+    <string name="settings_raw_leica_color_matrix_m9">M9</string>
 </resources>
