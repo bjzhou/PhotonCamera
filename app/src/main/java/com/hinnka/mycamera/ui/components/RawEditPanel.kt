@@ -45,7 +45,6 @@ import com.hinnka.mycamera.raw.RawProcessingPreferences.DROMode
 import com.hinnka.mycamera.raw.RawProfileToneMapMode
 import com.hinnka.mycamera.raw.LumixPhotoStyle
 import com.hinnka.mycamera.raw.CanonPictureStyle
-import com.hinnka.mycamera.raw.FujiFilmSimulation
 import com.hinnka.mycamera.raw.RawRenderingEngine
 import com.hinnka.mycamera.raw.RawToneMappingParameters
 import com.hinnka.mycamera.raw.RawWhiteLevelCorrection
@@ -441,18 +440,6 @@ fun RawRenderingEngineSettingsPanel(
             Spacer(modifier = Modifier.height(16.dp))
         }
 
-        if (rawRenderingEngine.isFuji) {
-            FujiFilmSimulationSelector(
-                selectedStyle = rawToneMappingParameters.fujiFilmSimulation,
-                onSelectStyle = {
-                    onAdjustmentStart()
-                    onRawToneMappingParametersChange(rawToneMappingParameters.copy(fujiFilmSimulation = it))
-                    onAdjustmentEnd()
-                },
-            )
-            Spacer(modifier = Modifier.height(16.dp))
-        }
-
         if (rawRenderingEngine == RawRenderingEngine.AdobeCurve) {
             RawDcpSelector(
                 selectedDcpId = selectedDcpId,
@@ -649,33 +636,6 @@ fun CanonPictureStyleSelector(
         title = stringResource(R.string.settings_raw_canon_picture_style),
         description = stringResource(R.string.settings_raw_canon_picture_style_description),
         styles = CanonPictureStyle.entries,
-        styleKey = { it.persistedValue },
-        labels = labels,
-        selectedStyle = selectedStyle,
-        onSelectStyle = onSelectStyle,
-    )
-}
-
-@Composable
-fun FujiFilmSimulationSelector(
-    selectedStyle: FujiFilmSimulation,
-    onSelectStyle: (FujiFilmSimulation) -> Unit,
-) {
-    val labels = FujiFilmSimulation.entries.associateWith { style ->
-        stringResource(when (style) {
-            FujiFilmSimulation.Provia -> R.string.settings_raw_fuji_style_provia
-            FujiFilmSimulation.Velvia -> R.string.settings_raw_fuji_style_velvia
-            FujiFilmSimulation.Astia -> R.string.settings_raw_fuji_style_astia
-            FujiFilmSimulation.ClassicChrome -> R.string.settings_raw_fuji_style_classic_chrome
-            FujiFilmSimulation.ClassicNegative -> R.string.settings_raw_fuji_style_classic_negative
-            FujiFilmSimulation.NostalgicNeg -> R.string.settings_raw_fuji_style_nostalgic_neg
-            FujiFilmSimulation.RealaAce -> R.string.settings_raw_fuji_style_reala_ace
-        })
-    }
-    RawPhotoStyleSelector(
-        title = stringResource(R.string.settings_raw_fuji_film_simulation),
-        description = stringResource(R.string.settings_raw_fuji_film_simulation_description),
-        styles = FujiFilmSimulation.entries,
         styleKey = { it.persistedValue },
         labels = labels,
         selectedStyle = selectedStyle,
@@ -1033,7 +993,6 @@ private fun RawToneMappingControls(
         RawRenderingEngine.Hncs,
         RawRenderingEngine.Lumix,
         RawRenderingEngine.Canon,
-        RawRenderingEngine.Fuji,
         RawRenderingEngine.Leica -> Unit
 
         RawRenderingEngine.AgX -> {
@@ -1417,7 +1376,6 @@ private fun rawRenderingEngineName(engine: RawRenderingEngine): String {
         RawRenderingEngine.Hncs -> stringResource(R.string.settings_raw_color_engine_hncs)
         RawRenderingEngine.Lumix -> stringResource(R.string.settings_raw_color_engine_lumix)
         RawRenderingEngine.Canon -> stringResource(R.string.settings_raw_color_engine_canon)
-        RawRenderingEngine.Fuji -> stringResource(R.string.settings_raw_color_engine_fuji)
         RawRenderingEngine.Leica -> stringResource(R.string.settings_raw_color_engine_leica)
     }
 }
@@ -1433,7 +1391,6 @@ private fun rawColorEngineDescription(engine: RawRenderingEngine): String {
         RawRenderingEngine.Hncs -> stringResource(R.string.settings_raw_color_engine_hncs_description)
         RawRenderingEngine.Lumix -> stringResource(R.string.settings_raw_color_engine_lumix_description)
         RawRenderingEngine.Canon -> stringResource(R.string.settings_raw_color_engine_canon_description)
-        RawRenderingEngine.Fuji -> stringResource(R.string.settings_raw_color_engine_fuji_description)
         RawRenderingEngine.Leica -> stringResource(R.string.settings_raw_color_engine_leica_description)
     }
 }

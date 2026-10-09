@@ -8,7 +8,7 @@ import com.hinnka.mycamera.raw.RawToneMappingParameters
 
 @Database(
     entities = [GalleryMediaEntity::class],
-    version = 49,
+    version = 50,
     exportSchema = false
 )
 @androidx.room.TypeConverters(GalleryConverters::class)
@@ -832,6 +832,45 @@ abstract class GalleryDatabase : RoomDatabase() {
             }
         }
 
+        private val MIGRATION_49_50 = object : androidx.room.migration.Migration(49, 50) {
+            override fun migrate(db: androidx.sqlite.db.SupportSQLiteDatabase) {
+                // Android 11 SQLite requires a table rebuild to remove a column.
+                // Preserve all remaining values, column defaults, and indices.
+                val columns = mutableListOf<String>()
+                val definitions = mutableListOf<String>()
+                db.query("PRAGMA table_info(`gallery_media`)").use { cursor ->
+                    val nameIndex = cursor.getColumnIndexOrThrow("name")
+                    val typeIndex = cursor.getColumnIndexOrThrow("type")
+                    val notNullIndex = cursor.getColumnIndexOrThrow("notnull")
+                    val defaultIndex = cursor.getColumnIndexOrThrow("dflt_value")
+                    val primaryKeyIndex = cursor.getColumnIndexOrThrow("pk")
+                    while (cursor.moveToNext()) {
+                        val name = cursor.getString(nameIndex)
+                        if (name == "rawFujiFilmSimulation") continue
+                        val quotedName = "`${name.replace("`", "``")}`"
+                        columns += quotedName
+                        definitions += buildString {
+                            append(quotedName).append(' ').append(cursor.getString(typeIndex))
+                            if (cursor.getInt(notNullIndex) != 0) append(" NOT NULL")
+                            if (!cursor.isNull(defaultIndex)) append(" DEFAULT ").append(cursor.getString(defaultIndex))
+                            if (cursor.getInt(primaryKeyIndex) != 0) append(" PRIMARY KEY")
+                        }
+                    }
+                }
+                val indices = mutableListOf<String>()
+                db.query("SELECT sql FROM sqlite_master WHERE type = 'index' AND tbl_name = 'gallery_media' AND sql IS NOT NULL").use { cursor ->
+                    while (cursor.moveToNext()) indices += cursor.getString(0)
+                }
+                db.execSQL("CREATE TABLE `gallery_media_new` (${definitions.joinToString(", ")})")
+                val columnList = columns.joinToString(", ")
+                db.execSQL("INSERT INTO `gallery_media_new` ($columnList) SELECT $columnList FROM `gallery_media`")
+                db.execSQL("DROP TABLE `gallery_media`")
+                db.execSQL("ALTER TABLE `gallery_media_new` RENAME TO `gallery_media`")
+                indices.forEach(db::execSQL)
+                db.execSQL("UPDATE gallery_media SET rawColorEngine = 'AdobeCurve' WHERE rawColorEngine = 'Fuji' COLLATE NOCASE")
+            }
+        }
+
         fun getInstance(context: Context): GalleryDatabase {
             return INSTANCE ?: synchronized(this) {
                 INSTANCE ?: Room.databaseBuilder(
@@ -887,7 +926,8 @@ abstract class GalleryDatabase : RoomDatabase() {
                         MIGRATION_45_46,
                         MIGRATION_46_47,
                         MIGRATION_47_48,
-                        MIGRATION_48_49
+                        MIGRATION_48_49,
+                        MIGRATION_49_50
                     )
                     .fallbackToDestructiveMigrationOnDowngrade(false)
                     .fallbackToDestructiveMigration(false)

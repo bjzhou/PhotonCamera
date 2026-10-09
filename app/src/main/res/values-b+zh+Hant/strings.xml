@@ -1295,10 +1295,6 @@
     <string name="category_empty_title">此分類尚無濾鏡</string>
     <string name="category_empty_message">可匯入濾鏡，或透過「編輯分類」將現有濾鏡移入。空分類會保留，直到你主動刪除。</string>
     <string name="category_name_unavailable">此名稱已被使用或屬於系統分類，請使用其他名稱。</string>
-    <string name="settings_raw_color_engine_fuji">富士膠片模擬</string>
-    <string name="settings_raw_fuji_film_simulation">軟片模擬</string>
-    <string name="settings_raw_fuji_film_simulation_description">選擇 Fuji 軟片模擬，預設為 PROVIA。</string>
-    <string name="settings_raw_color_engine_fuji_description">根據韌體資料調整的軟片模擬，呈現效果為近似實作。</string>
     <string name="settings_raw_color_engine_leica">徠卡 M9</string>
     <string name="settings_raw_color_engine_leica_description">徠卡 M9 色彩與色調。</string>
     <string name="settings_raw_canon_color_matrix">色彩矩陣</string>

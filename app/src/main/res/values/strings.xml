@@ -1375,17 +1375,6 @@
     <string name="frame_editor_text_gradient_end">Gradient end color</string>
     <string name="frame_editor_text_gradient_hint">The fill blends vertically from the text color to the gradient end color.</string>
     <string name="frame_editor_summary_free_layer">Free layer · %1$s · X %2$.1f%% · Y %3$.1f%%</string>
-    <string name="settings_raw_color_engine_fuji">Fuji FilmSimulation</string>
-    <string name="settings_raw_fuji_film_simulation">Film simulation</string>
-    <string name="settings_raw_fuji_film_simulation_description">Choose a Fuji film simulation. PROVIA is the default.</string>
-    <string name="settings_raw_color_engine_fuji_description">Film simulation adapted from firmware data, with approximate rendering.</string>
-    <string name="settings_raw_fuji_style_provia" translatable="false">PROVIA</string>
-    <string name="settings_raw_fuji_style_velvia" translatable="false">Velvia</string>
-    <string name="settings_raw_fuji_style_astia" translatable="false">ASTIA</string>
-    <string name="settings_raw_fuji_style_classic_chrome" translatable="false">CLASSIC CHROME</string>
-    <string name="settings_raw_fuji_style_classic_negative" translatable="false">Classic Negative</string>
-    <string name="settings_raw_fuji_style_nostalgic_neg" translatable="false">Nostalgic Neg</string>
-    <string name="settings_raw_fuji_style_reala_ace" translatable="false">Reala Ace</string>
     <string name="settings_raw_color_engine_leica">Leica M9</string>
     <string name="settings_raw_color_engine_leica_description">Leica M9 color and tone.</string>
     <string name="settings_raw_canon_color_matrix">Color matrix</string>

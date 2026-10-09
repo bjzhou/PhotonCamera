@@ -1171,9 +1171,6 @@
     <string name="settings_accent_color_reset">初期値に戻す</string>
     <string name="settings_accent_color_hex_hint">#RRGGBB 形式で6桁のカラーコードを入力してください。</string>
     <string name="settings_accent_color_hex_error">16進数の文字（0–9、A–F）を6桁入力してください。</string>
-    <string name="settings_raw_fuji_film_simulation">フィルムシミュレーション</string>
-    <string name="settings_raw_fuji_film_simulation_description">Fuji フィルムシミュレーションを選択します。初期設定は PROVIA です。</string>
-    <string name="settings_raw_color_engine_fuji_description">ファームウェアのデータを基にしたフィルムシミュレーションです。描画は近似再現です。</string>
     <string name="settings_raw_color_engine_leica_description">Leica M9 の色と階調。</string>
     <string name="settings_raw_canon_color_matrix">カラーマトリクス</string>
     <string name="settings_raw_canon_color_matrix_description">RAW の色補正に撮影機器または EOS R5 のカラーマトリクスを使用します。</string>

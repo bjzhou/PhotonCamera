@@ -12,7 +12,6 @@ data class RawToneMappingParameters(
     val usePhotonHdr: Boolean = PHOTON_HDR_DEFAULT,
     val lumixPhotoStyle: LumixPhotoStyle = LumixPhotoStyle.Standard,
     val canonPictureStyle: CanonPictureStyle = CanonPictureStyle.Standard,
-    val fujiFilmSimulation: FujiFilmSimulation = FujiFilmSimulation.Provia,
     val canonExposureCompensationEv: Float = CANON_EXPOSURE_COMPENSATION_DEFAULT,
     val lumixColorMatchingEnabled: Boolean = true,
     val hncsColorMatchingEnabled: Boolean = true,

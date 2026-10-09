@@ -19,7 +19,6 @@ import com.hinnka.mycamera.raw.HncsRenderIntent
 import com.hinnka.mycamera.raw.HncsProfileManager
 import com.hinnka.mycamera.raw.LumixPhotoStyle
 import com.hinnka.mycamera.raw.CanonPictureStyle
-import com.hinnka.mycamera.raw.FujiFilmSimulation
 import com.hinnka.mycamera.raw.RawOutputUpscaleMode
 import com.hinnka.mycamera.raw.RawRenderingEngine
 import com.hinnka.mycamera.raw.RawToneMappingParameters
@@ -257,7 +256,6 @@ object GalleryMediaStore {
             rawOppoMasterToneMap = metadata.rawToneMappingParameters.useOppoMasterToneMap,
             rawLumixPhotoStyle = metadata.rawToneMappingParameters.lumixPhotoStyle.assetName,
             rawCanonPictureStyle = metadata.rawToneMappingParameters.canonPictureStyle.persistedValue,
-            rawFujiFilmSimulation = metadata.rawToneMappingParameters.fujiFilmSimulation.persistedValue,
             rawCanonExposureCompensationEv = RawToneMappingParameters.normalizeCanonExposureCompensation(
                 metadata.rawToneMappingParameters.canonExposureCompensationEv
             ),
@@ -469,7 +467,6 @@ object GalleryMediaStore {
                 useOppoMasterToneMap = rawOppoMasterToneMap,
                 lumixPhotoStyle = LumixPhotoStyle.fromPersistedValue(rawLumixPhotoStyle),
                 canonPictureStyle = CanonPictureStyle.fromPersistedValue(rawCanonPictureStyle),
-                fujiFilmSimulation = FujiFilmSimulation.fromPersistedValue(rawFujiFilmSimulation),
                 canonExposureCompensationEv = rawCanonExposureCompensationEv,
                 lumixColorMatchingEnabled = rawLumixColorMatchingEnabled,
                 hncsColorMatchingEnabled = rawHncsColorMatchingEnabled,

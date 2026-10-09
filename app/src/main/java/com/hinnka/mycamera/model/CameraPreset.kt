@@ -8,7 +8,6 @@ import com.hinnka.mycamera.raw.HncsRenderIntent
 import com.hinnka.mycamera.raw.HncsProfileManager
 import com.hinnka.mycamera.raw.LumixPhotoStyle
 import com.hinnka.mycamera.raw.CanonPictureStyle
-import com.hinnka.mycamera.raw.FujiFilmSimulation
 import com.hinnka.mycamera.raw.RawRenderingEngine
 import com.hinnka.mycamera.raw.RawDenoiseDefaults
 import com.hinnka.mycamera.raw.RawSharpeningDefaults
@@ -45,7 +44,6 @@ data class CameraPreset(
     val rawOppoMasterToneMap: Boolean = false,
     val rawLumixPhotoStyle: String = LumixPhotoStyle.Standard.assetName,
     val rawCanonPictureStyle: String = CanonPictureStyle.Standard.persistedValue,
-    val rawFujiFilmSimulation: String = FujiFilmSimulation.Provia.persistedValue,
     val rawCanonExposureCompensationEv: Float = RawToneMappingParameters.CANON_EXPOSURE_COMPENSATION_DEFAULT,
     val rawLumixColorMatchingEnabled: Boolean = true,
     val rawHncsColorMatchingEnabled: Boolean = true,
@@ -157,7 +155,6 @@ data class CameraPreset(
                 rawOppoMasterToneMap = rawOppoMasterToneMap,
                 rawLumixPhotoStyle = LumixPhotoStyle.fromPersistedValue(rawLumixPhotoStyle).assetName,
                 rawCanonPictureStyle = CanonPictureStyle.fromPersistedValue(rawCanonPictureStyle).persistedValue,
-                rawFujiFilmSimulation = FujiFilmSimulation.fromPersistedValue(rawFujiFilmSimulation).persistedValue,
                 rawCanonExposureCompensationEv = RawToneMappingParameters.normalizeCanonExposureCompensation(
                     rawCanonExposureCompensationEv
                 ),

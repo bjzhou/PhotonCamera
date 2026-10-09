@@ -19,7 +19,6 @@ import com.hinnka.mycamera.raw.HncsRenderIntent
 import com.hinnka.mycamera.raw.HncsProfileManager
 import com.hinnka.mycamera.raw.LumixPhotoStyle
 import com.hinnka.mycamera.raw.CanonPictureStyle
-import com.hinnka.mycamera.raw.FujiFilmSimulation
 import com.hinnka.mycamera.raw.RawRenderingEngine
 import com.hinnka.mycamera.raw.RawToneMappingParameters
 import com.hinnka.mycamera.raw.RawOutputUpscaleMode
@@ -399,7 +398,6 @@ data class MediaMetadata(
                         },
                         lumixPhotoStyle = LumixPhotoStyle.fromPersistedValue(obj.optString("rawLumixPhotoStyle")),
                         canonPictureStyle = CanonPictureStyle.fromPersistedValue(obj.optString("rawCanonPictureStyle")),
-                        fujiFilmSimulation = FujiFilmSimulation.fromPersistedValue(obj.optString("rawFujiFilmSimulation")),
                         canonExposureCompensationEv = obj.optDouble(
                             "rawCanonExposureCompensationEv",
                             RawToneMappingParameters.CANON_EXPOSURE_COMPENSATION_DEFAULT.toDouble()

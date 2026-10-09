@@ -9,7 +9,6 @@ import com.hinnka.mycamera.raw.HncsRenderIntent
 import com.hinnka.mycamera.raw.HncsProfileManager
 import com.hinnka.mycamera.raw.LumixPhotoStyle
 import com.hinnka.mycamera.raw.CanonPictureStyle
-import com.hinnka.mycamera.raw.FujiFilmSimulation
 import com.hinnka.mycamera.raw.RawRenderingEngine
 import com.hinnka.mycamera.raw.RawDenoiseDefaults
 import com.hinnka.mycamera.raw.RawSharpeningDefaults
@@ -89,7 +88,6 @@ internal object CameraPresetJsonCodec {
                 .coerceIn(-1f, 1f),
             rawLumixPhotoStyle = LumixPhotoStyle.fromPersistedValue(obj.stringOrNull("rawLumixPhotoStyle")).assetName,
             rawCanonPictureStyle = CanonPictureStyle.fromPersistedValue(obj.stringOrNull("rawCanonPictureStyle")).persistedValue,
-            rawFujiFilmSimulation = FujiFilmSimulation.fromPersistedValue(obj.stringOrNull("rawFujiFilmSimulation")).persistedValue,
             rawCanonExposureCompensationEv = RawToneMappingParameters.normalizeCanonExposureCompensation(
                 obj.float("rawCanonExposureCompensationEv", RawToneMappingParameters.CANON_EXPOSURE_COMPENSATION_DEFAULT)
             ),

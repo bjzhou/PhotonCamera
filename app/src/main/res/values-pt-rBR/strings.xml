@@ -347,9 +347,6 @@
     <string name="settings_accent_color_reset">Restaurar padrão</string>
     <string name="settings_accent_color_hex_hint">Insira um código de cor de seis dígitos no formato #RRGGBB.</string>
     <string name="settings_accent_color_hex_error">Insira seis caracteres hexadecimais (0–9, A–F).</string>
-    <string name="settings_raw_fuji_film_simulation">Simulação de filme</string>
-    <string name="settings_raw_fuji_film_simulation_description">Escolha uma simulação de filme Fuji. PROVIA é a opção padrão.</string>
-    <string name="settings_raw_color_engine_fuji_description">Simulação de filme adaptada de dados do firmware, com renderização aproximada.</string>
     <string name="settings_raw_color_engine_leica_description">Cores e tonalidade da Leica M9.</string>
     <string name="settings_raw_canon_color_matrix">Matriz de cores</string>
     <string name="settings_raw_canon_color_matrix_description">Escolha a matriz de cores do dispositivo de captura ou da EOS R5 para calibrar as cores RAW.</string>

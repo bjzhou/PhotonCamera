@@ -33,7 +33,6 @@ import com.hinnka.mycamera.raw.HncsRenderIntent
 import com.hinnka.mycamera.raw.HncsProfileManager
 import com.hinnka.mycamera.raw.LumixPhotoStyle
 import com.hinnka.mycamera.raw.CanonPictureStyle
-import com.hinnka.mycamera.raw.FujiFilmSimulation
 import com.hinnka.mycamera.raw.RawRenderingEngine
 import com.hinnka.mycamera.raw.RawAdaptiveExposureMode
 import com.hinnka.mycamera.raw.RawProcessingPreferences
@@ -397,7 +396,6 @@ class UserPreferencesRepository(private val context: Context) {
         private val RAW_OPPO_MASTER_TONE_MAP_KEY = booleanPreferencesKey("raw_oppo_master_tone_map")
         private val RAW_LUMIX_PHOTO_STYLE_KEY = stringPreferencesKey("raw_lumix_photo_style")
         private val RAW_CANON_PICTURE_STYLE_KEY = stringPreferencesKey("raw_canon_picture_style")
-        private val RAW_FUJI_FILM_SIMULATION_KEY = stringPreferencesKey("raw_fuji_film_simulation")
         private val RAW_CANON_EXPOSURE_COMPENSATION_KEY = floatPreferencesKey("raw_canon_exposure_compensation_ev")
         private val RAW_LUMIX_COLOR_MATCHING_KEY = booleanPreferencesKey("raw_lumix_color_matching_enabled")
         private val RAW_HNCS_COLOR_MATCHING_KEY = booleanPreferencesKey("raw_hncs_color_matching_enabled")
@@ -708,7 +706,6 @@ class UserPreferencesRepository(private val context: Context) {
                     // Photo-level metadata may still disable it for an imported DNG.
                     lumixPhotoStyle = LumixPhotoStyle.fromPersistedValue(preferences[RAW_LUMIX_PHOTO_STYLE_KEY]),
                     canonPictureStyle = CanonPictureStyle.fromPersistedValue(preferences[RAW_CANON_PICTURE_STYLE_KEY]),
-                    fujiFilmSimulation = FujiFilmSimulation.fromPersistedValue(preferences[RAW_FUJI_FILM_SIMULATION_KEY]),
                     canonExposureCompensationEv = preferences[RAW_CANON_EXPOSURE_COMPENSATION_KEY]
                         ?: RawToneMappingParameters.CANON_EXPOSURE_COMPENSATION_DEFAULT,
                     lumixColorMatchingEnabled = preferences[RAW_LUMIX_COLOR_MATCHING_KEY] ?: true,
@@ -1344,7 +1341,6 @@ class UserPreferencesRepository(private val context: Context) {
             preferences[RAW_OPPO_MASTER_TONE_MAP_KEY] = normalized.useOppoMasterToneMap
             preferences[RAW_LUMIX_PHOTO_STYLE_KEY] = normalized.lumixPhotoStyle.assetName
             preferences[RAW_CANON_PICTURE_STYLE_KEY] = normalized.canonPictureStyle.persistedValue
-            preferences[RAW_FUJI_FILM_SIMULATION_KEY] = normalized.fujiFilmSimulation.persistedValue
             preferences[RAW_CANON_EXPOSURE_COMPENSATION_KEY] = normalized.canonExposureCompensationEv
             preferences[RAW_LUMIX_COLOR_MATCHING_KEY] = normalized.lumixColorMatchingEnabled
             preferences[RAW_HNCS_COLOR_MATCHING_KEY] = normalized.hncsColorMatchingEnabled
@@ -2693,7 +2689,6 @@ class UserPreferencesRepository(private val context: Context) {
                 preferences[RAW_OPPO_MASTER_TONE_MAP_KEY] = normalized.useOppoMasterToneMap
                 preferences[RAW_LUMIX_PHOTO_STYLE_KEY] = normalized.lumixPhotoStyle.assetName
                 preferences[RAW_CANON_PICTURE_STYLE_KEY] = normalized.canonPictureStyle.persistedValue
-                preferences[RAW_FUJI_FILM_SIMULATION_KEY] = normalized.fujiFilmSimulation.persistedValue
                 preferences[RAW_CANON_EXPOSURE_COMPENSATION_KEY] = normalized.canonExposureCompensationEv
                 preferences[RAW_LUMIX_COLOR_MATCHING_KEY] = normalized.lumixColorMatchingEnabled
                 preferences[RAW_HNCS_COLOR_MATCHING_KEY] = normalized.hncsColorMatchingEnabled

@@ -40,13 +40,6 @@ enum class RawRenderingEngine(
         defaultExposureCompensationEv = 0f,
         exposureCompensationDomain = RawExposureCompensationDomain.Linear
     ),
-    Fuji(
-        shaderId = 9,
-        // Host adaptation uses calibrated linear sRGB, not an unverified Fuji camera space.
-        workingColorSpace = ColorSpace.SRGB,
-        defaultExposureCompensationEv = 0f,
-        exposureCompensationDomain = RawExposureCompensationDomain.Linear
-    ),
     Leica(
         shaderId = 10,
         // Output/adjustment space; M9's matrix/LUT stage consumes WB camera RGB.
@@ -88,9 +81,6 @@ enum class RawRenderingEngine(
 
     val isCanon: Boolean
         get() = this == Canon
-
-    val isFuji: Boolean
-        get() = this == Fuji
 
     val isLeica: Boolean
         get() = this == Leica

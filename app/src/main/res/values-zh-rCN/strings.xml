@@ -1351,10 +1351,6 @@
     <string name="frame_editor_text_gradient_end">渐变终点颜色</string>
     <string name="frame_editor_text_gradient_hint">填充色从上到下，由文字颜色渐变到终点颜色。</string>
     <string name="frame_editor_summary_free_layer">自由图层 · %1$s · 水平 %2$.1f%% · 垂直 %3$.1f%%</string>
-    <string name="settings_raw_color_engine_fuji">富士胶片模拟</string>
-    <string name="settings_raw_fuji_film_simulation">胶片模拟</string>
-    <string name="settings_raw_fuji_film_simulation_description">选择 Fuji 胶片模拟，默认为 PROVIA。</string>
-    <string name="settings_raw_color_engine_fuji_description">基于固件数据适配的胶片模拟，渲染效果为近似实现。</string>
     <string name="settings_raw_color_engine_leica">徕卡 M9</string>
     <string name="settings_raw_color_engine_leica_description">徕卡 M9 色彩与调性。</string>
     <string name="settings_raw_canon_color_matrix">色彩矩阵</string>
