@@ -263,6 +263,7 @@ object GalleryMediaStore {
             ),
             rawLumixColorMatchingEnabled = metadata.rawToneMappingParameters.lumixColorMatchingEnabled,
             rawHncsColorMatchingEnabled = metadata.rawToneMappingParameters.hncsColorMatchingEnabled,
+            rawCanonUseR5ColorMatrix = metadata.rawToneMappingParameters.canonUseR5ColorMatrix,
             rawLeicaUseM9ColorMatrix = metadata.rawToneMappingParameters.leicaUseM9ColorMatrix,
             rawPhotonHdr = metadata.rawToneMappingParameters.usePhotonHdr,
             rawAppleProRawToneMap = false,
@@ -472,6 +473,7 @@ object GalleryMediaStore {
                 canonExposureCompensationEv = rawCanonExposureCompensationEv,
                 lumixColorMatchingEnabled = rawLumixColorMatchingEnabled,
                 hncsColorMatchingEnabled = rawHncsColorMatchingEnabled,
+                canonUseR5ColorMatrix = rawCanonUseR5ColorMatrix,
                 leicaUseM9ColorMatrix = rawLeicaUseM9ColorMatrix,
                 usePhotonHdr = rawPhotonHdr || legacyPhotonToneMap
             ).normalized(),

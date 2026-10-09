@@ -2516,11 +2516,13 @@ class RawDemosaicProcessor {
             }
         }
 
-        // An explicit source-matrix selection must not silently use the M9 matrix
+        // An explicit source-matrix selection must not silently use the target matrix
         // when an imported RAW has no source calibration.
-        if (requestedColorEngine.isLeica && cameraColorMatchingEnabled && actualMetadata != null) {
+        if ((requestedColorEngine.isLeica || requestedColorEngine.isCanon) &&
+            cameraColorMatchingEnabled && actualMetadata != null
+        ) {
             check(actualMetadata.cameraCalibration != null) {
-                "Leica device color matrix requires source camera calibration"
+                "$requestedColorEngine device color matrix requires source camera calibration"
             }
         }
         val engineWhitePointXy = if (targetCamera != null && actualMetadata != null &&
@@ -3092,13 +3094,11 @@ class RawDemosaicProcessor {
         } else null
         val canonRenderPlan = if (colorEngine.isCanon) {
             check(profileWorkingColorSpace == ColorSpace.ProPhoto)
-            check(dngFile != null || actualMetadata.cameraCalibration != null) {
-                "Canon requires fixed source ColorMatrix calibration for camera capture"
-            }
             CanonProfile.createRenderPlan(context, normalizedToneMappingParameters.canonPictureStyle)
         } else null
         if (colorEngine.isCanon) {
             PLog.i(TAG, "Canon EOS R5 rendering: style=${normalizedToneMappingParameters.canonPictureStyle} " +
+                "calibration=${if (directCameraInput) "EOS-R5" else "capture-device"} " +
                 "input=wb-camera-rgb profileToCamera=${cameraInputTransform.contentToString()} " +
                 "target=${targetCamera?.assetPath} position=after-public-pgtm " +
                 "kernel=0x1f5b20 nativeOutput=YUV referenceISO=100 " +

@@ -275,6 +275,7 @@ private data class PresetMatchSnapshot(
     val rawCanonExposureCompensationEv: Float,
     val rawLumixColorMatchingEnabled: Boolean,
     val rawHncsColorMatchingEnabled: Boolean,
+    val rawCanonUseR5ColorMatrix: Boolean,
     val rawLeicaUseM9ColorMatrix: Boolean,
     val rawSpectralFilmStock: String?,
     val rawSpectralFilmPrint: String?,
@@ -318,6 +319,7 @@ private data class PresetMatchSnapshot(
             rawCanonExposureCompensationEv == preset.rawCanonExposureCompensationEv &&
             rawLumixColorMatchingEnabled == preset.rawLumixColorMatchingEnabled &&
             rawHncsColorMatchingEnabled == preset.rawHncsColorMatchingEnabled &&
+            rawCanonUseR5ColorMatrix == preset.rawCanonUseR5ColorMatrix &&
             rawLeicaUseM9ColorMatrix == preset.rawLeicaUseM9ColorMatrix &&
             rawOppoMasterToneMap == preset.rawOppoMasterToneMap &&
             rawSpectralFilmStock == preset.rawSpectralFilmStock &&
@@ -430,6 +432,12 @@ private data class PresetMatchSnapshot(
                             "preset=${preset.rawLumixColorMatchingEnabled}/${preset.rawHncsColorMatchingEnabled}"
                     )
                 }
+                if (rawCanonUseR5ColorMatrix != preset.rawCanonUseR5ColorMatrix) {
+                    add(
+                        "rawCanonUseR5ColorMatrix current=$rawCanonUseR5ColorMatrix " +
+                            "preset=${preset.rawCanonUseR5ColorMatrix}"
+                    )
+                }
                 if (rawLeicaUseM9ColorMatrix != preset.rawLeicaUseM9ColorMatrix) {
                     add(
                         "rawLeicaUseM9ColorMatrix current=$rawLeicaUseM9ColorMatrix " +
@@ -533,6 +541,7 @@ private data class CameraFeatureUpdate(
     val rawCanonExposureCompensationEv: SettingValue<Float>? = null,
     val rawLumixColorMatchingEnabled: SettingValue<Boolean>? = null,
     val rawHncsColorMatchingEnabled: SettingValue<Boolean>? = null,
+    val rawCanonUseR5ColorMatrix: SettingValue<Boolean>? = null,
     val rawLeicaUseM9ColorMatrix: SettingValue<Boolean>? = null,
     val rawSpectralFilmStock: SettingValue<String?>? = null,
     val rawSpectralFilmPrint: SettingValue<String?>? = null,
@@ -694,6 +703,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                             rawCanonExposureCompensationEv = saved.rawCanonExposureCompensationEv,
                             rawLumixColorMatchingEnabled = saved.rawLumixColorMatchingEnabled,
                             rawHncsColorMatchingEnabled = saved.rawHncsColorMatchingEnabled,
+                            rawCanonUseR5ColorMatrix = saved.rawCanonUseR5ColorMatrix,
                             rawLeicaUseM9ColorMatrix = saved.rawLeicaUseM9ColorMatrix,
                             rawSpectralFilmStock = saved.rawSpectralFilmStock,
                             rawSpectralFilmPrint = saved.rawSpectralFilmPrint,
@@ -833,6 +843,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             rawCanonExposureCompensationEv = rawToneMappingParameters.value.canonExposureCompensationEv,
             rawLumixColorMatchingEnabled = rawToneMappingParameters.value.lumixColorMatchingEnabled,
             rawHncsColorMatchingEnabled = rawToneMappingParameters.value.hncsColorMatchingEnabled,
+            rawCanonUseR5ColorMatrix = rawToneMappingParameters.value.canonUseR5ColorMatrix,
             rawLeicaUseM9ColorMatrix = rawToneMappingParameters.value.leicaUseM9ColorMatrix,
             rawSpectralFilmStock = rawSpectralFilmStock.value,
             rawSpectralFilmPrint = rawSpectralFilmPrint.value,
@@ -946,6 +957,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 ?: RawToneMappingParameters.CANON_EXPOSURE_COMPENSATION_DEFAULT),
             rawLumixColorMatchingEnabled = SettingValue(this?.rawLumixColorMatchingEnabled ?: true),
             rawHncsColorMatchingEnabled = SettingValue(this?.rawHncsColorMatchingEnabled ?: true),
+            rawCanonUseR5ColorMatrix = SettingValue(this?.rawCanonUseR5ColorMatrix ?: false),
             rawLeicaUseM9ColorMatrix = SettingValue(this?.rawLeicaUseM9ColorMatrix ?: false),
             rawSpectralFilmStock = SettingValue(this?.rawSpectralFilmStock),
             rawSpectralFilmPrint = SettingValue(this?.rawSpectralFilmPrint),
@@ -1091,6 +1103,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             update.rawCanonPictureStyle != null || update.rawCanonExposureCompensationEv != null ||
             update.rawFujiFilmSimulation != null ||
             update.rawLumixColorMatchingEnabled != null || update.rawHncsColorMatchingEnabled != null ||
+            update.rawCanonUseR5ColorMatrix != null ||
             update.rawLeicaUseM9ColorMatrix != null
         ) {
             var toneMappingParameters = prefs.rawToneMappingParameters
@@ -1117,6 +1130,9 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             }
             update.rawHncsColorMatchingEnabled?.let {
                 toneMappingParameters = toneMappingParameters.copy(hncsColorMatchingEnabled = it.value)
+            }
+            update.rawCanonUseR5ColorMatrix?.let {
+                toneMappingParameters = toneMappingParameters.copy(canonUseR5ColorMatrix = it.value)
             }
             update.rawLeicaUseM9ColorMatrix?.let {
                 toneMappingParameters = toneMappingParameters.copy(leicaUseM9ColorMatrix = it.value)
@@ -1393,6 +1409,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             rawCanonExposureCompensationEv = prefs.rawToneMappingParameters.canonExposureCompensationEv,
             rawLumixColorMatchingEnabled = prefs.rawToneMappingParameters.lumixColorMatchingEnabled,
             rawHncsColorMatchingEnabled = prefs.rawToneMappingParameters.hncsColorMatchingEnabled,
+            rawCanonUseR5ColorMatrix = prefs.rawToneMappingParameters.canonUseR5ColorMatrix,
             rawLeicaUseM9ColorMatrix = prefs.rawToneMappingParameters.leicaUseM9ColorMatrix,
             rawSpectralFilmStock = prefs.rawSpectralFilmStock,
             rawSpectralFilmPrint = prefs.rawSpectralFilmPrint,

@@ -406,6 +406,7 @@ data class MediaMetadata(
                         ).toFloat(),
                         lumixColorMatchingEnabled = obj.optBoolean("rawLumixColorMatchingEnabled", true),
                         hncsColorMatchingEnabled = obj.optBoolean("rawHncsColorMatchingEnabled", true),
+                        canonUseR5ColorMatrix = obj.optBoolean("rawCanonUseR5ColorMatrix", false),
                         leicaUseM9ColorMatrix = obj.optBoolean("rawLeicaUseM9ColorMatrix", false),
                         useOppoMasterToneMap = obj.optBoolean("rawOppoMasterToneMap", false),
                         usePhotonHdr =

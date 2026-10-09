@@ -78,6 +78,8 @@ data class GalleryMediaEntity(
     @ColumnInfo(defaultValue = "1")
     val rawHncsColorMatchingEnabled: Boolean = true,
     @ColumnInfo(defaultValue = "0")
+    val rawCanonUseR5ColorMatrix: Boolean = false,
+    @ColumnInfo(defaultValue = "0")
     val rawLeicaUseM9ColorMatrix: Boolean = false,
     val rawAgxBlackRelativeExposure: Float,
     val rawAgxWhiteRelativeExposure: Float,

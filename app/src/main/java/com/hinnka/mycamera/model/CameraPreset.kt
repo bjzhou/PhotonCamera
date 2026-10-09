@@ -49,6 +49,7 @@ data class CameraPreset(
     val rawCanonExposureCompensationEv: Float = RawToneMappingParameters.CANON_EXPOSURE_COMPENSATION_DEFAULT,
     val rawLumixColorMatchingEnabled: Boolean = true,
     val rawHncsColorMatchingEnabled: Boolean = true,
+    val rawCanonUseR5ColorMatrix: Boolean = false,
     val rawLeicaUseM9ColorMatrix: Boolean = false,
     val rawSpectralFilmStock: String? = null,
     val rawSpectralFilmPrint: String? = null,

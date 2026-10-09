@@ -1297,6 +1297,10 @@
     <string name="settings_raw_color_engine_fuji_description">根據韌體資料調整的菲林模擬，呈現效果為近似實作。</string>
     <string name="settings_raw_color_engine_leica">徠卡 M9</string>
     <string name="settings_raw_color_engine_leica_description">徠卡 M9 色彩與色調。</string>
+    <string name="settings_raw_canon_color_matrix">色彩矩陣</string>
+    <string name="settings_raw_canon_color_matrix_description">選擇使用拍攝裝置或 EOS R5 的色彩矩陣校準 RAW 色彩。</string>
+    <string name="settings_raw_canon_color_matrix_device">預設</string>
+    <string name="settings_raw_canon_color_matrix_r5">EOS R5</string>
     <string name="settings_raw_leica_color_matrix">色彩矩陣</string>
     <string name="settings_raw_leica_color_matrix_description">選擇使用拍攝裝置或 M9 的色彩矩陣校準 RAW 色彩。</string>
     <string name="settings_raw_leica_color_matrix_device">預設</string>

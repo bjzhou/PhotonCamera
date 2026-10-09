@@ -44,6 +44,8 @@ Canon 提供独立的宿主曝光设置 `canonExposureCompensationEv`，默认 �
 
 固定目标为 EOS R5，ModelID `0x80000421`、原模型索引 `0x67`。`EquivalentCameraCalibration` 复用公共源标定，把 PGTM/曝光后的 ProPhoto 转为目标白平衡 camera RGB。源白平衡、曝光均已消费，Canon 不再重复执行。
 
+Canon 色彩矩阵提供「默认 / EOS R5」选择，与 Leica M9 的选择语义一致。默认使用拍摄设备标定，再映射到 R5 输入域；EOS R5 直接以目标 R5 标定解释传感器 RGB，并通过可逆矩阵桥接到公共 ProPhoto，保持 PGTM、曝光和 HDR 的工作空间不变。选择默认时必须存在源相机标定，缺失时明确报错，不静默切换到 R5。`canonUseR5ColorMatrix` 默认 `false`，贯通 RAW 编辑面板、设置、照片保存恢复及预设导入导出和匹配；Room 48→49 迁移新增 `rawCanonUseR5ColorMatrix`，旧记录使用默认选项。
+
 目标配方固定 ISO100，原生属性 `0x1000a` 与公开属性 `0x10026` 必须同时提供。Model provider 实际读取前者；只提供后者会退到 ISO0 分支，生成错误的 `gamma_c`，造成亮度基本正常但色彩不够鲜艳。它与手机拍摄 ISO 无关，不动态套用手机 ISO。`CanonProfile` 加载时验证这一来源契约；原指令、真实 R5 RAW/JPG 对照见 [ISO 配方审计](../../.codex-tmp/canon_dpp/iso-property-audit.md)。
 
 目标标定在 `assets/canon/eos_r5/calibration.json`，来源是有 SHA 记录的 `Canon EOS R5 Adobe Standard.dcp`，**仅使用 ColorMatrix 与标定光源**。不使用 Adobe tone curve、LookTable 或风格处理。它负责不同相机之间的三通道线性颜色域适配；Canon Picture Style 来自 Canon 原生资源。矩阵标定不能消除不同传感器光谱响应的一切差异，不能据此宣称手机输入与真实 R5 RAW 完全等价。

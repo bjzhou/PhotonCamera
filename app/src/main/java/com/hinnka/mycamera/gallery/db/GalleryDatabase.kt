@@ -8,7 +8,7 @@ import com.hinnka.mycamera.raw.RawToneMappingParameters
 
 @Database(
     entities = [GalleryMediaEntity::class],
-    version = 48,
+    version = 49,
     exportSchema = false
 )
 @androidx.room.TypeConverters(GalleryConverters::class)
@@ -826,6 +826,12 @@ abstract class GalleryDatabase : RoomDatabase() {
             }
         }
 
+        private val MIGRATION_48_49 = object : androidx.room.migration.Migration(48, 49) {
+            override fun migrate(db: androidx.sqlite.db.SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE gallery_media ADD COLUMN rawCanonUseR5ColorMatrix INTEGER NOT NULL DEFAULT 0")
+            }
+        }
+
         fun getInstance(context: Context): GalleryDatabase {
             return INSTANCE ?: synchronized(this) {
                 INSTANCE ?: Room.databaseBuilder(
@@ -880,7 +886,8 @@ abstract class GalleryDatabase : RoomDatabase() {
                         MIGRATION_44_45,
                         MIGRATION_45_46,
                         MIGRATION_46_47,
-                        MIGRATION_47_48
+                        MIGRATION_47_48,
+                        MIGRATION_48_49
                     )
                     .fallbackToDestructiveMigrationOnDowngrade(false)
                     .fallbackToDestructiveMigration(false)

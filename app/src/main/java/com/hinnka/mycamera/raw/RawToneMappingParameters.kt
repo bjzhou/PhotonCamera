@@ -16,6 +16,8 @@ data class RawToneMappingParameters(
     val canonExposureCompensationEv: Float = CANON_EXPOSURE_COMPENSATION_DEFAULT,
     val lumixColorMatchingEnabled: Boolean = true,
     val hncsColorMatchingEnabled: Boolean = true,
+    /** Use EOS R5 sensor calibration directly instead of the capture device calibration. */
+    val canonUseR5ColorMatrix: Boolean = false,
     /** Use M9 sensor calibration directly instead of the capture device calibration. */
     val leicaUseM9ColorMatrix: Boolean = false,
 ) {
@@ -26,7 +28,7 @@ data class RawToneMappingParameters(
     fun colorMatchingEnabled(engine: RawRenderingEngine): Boolean = when {
         engine.isLumix -> lumixColorMatchingEnabled
         engine.isHncs -> hncsColorMatchingEnabled
-        engine.isCanon -> true
+        engine.isCanon -> !canonUseR5ColorMatrix
         engine.isLeica -> !leicaUseM9ColorMatrix
         else -> false
     }

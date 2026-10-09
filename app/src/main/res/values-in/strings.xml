@@ -350,6 +350,10 @@
     <string name="settings_raw_fuji_film_simulation_description">Pilih simulasi film Fuji. PROVIA adalah pilihan default.</string>
     <string name="settings_raw_color_engine_fuji_description">Simulasi film yang diadaptasi dari data firmware, dengan hasil yang mendekati aslinya.</string>
     <string name="settings_raw_color_engine_leica_description">Warna dan tonal Leica M9.</string>
+    <string name="settings_raw_canon_color_matrix">Matriks warna</string>
+    <string name="settings_raw_canon_color_matrix_description">Pilih matriks warna perangkat pengambilan gambar atau EOS R5 untuk kalibrasi warna RAW.</string>
+    <string name="settings_raw_canon_color_matrix_device">Default</string>
+    <string name="settings_raw_canon_color_matrix_r5">EOS R5</string>
     <string name="settings_raw_leica_color_matrix">Matriks warna</string>
     <string name="settings_raw_leica_color_matrix_description">Pilih matriks warna perangkat pengambilan gambar atau M9 untuk kalibrasi warna RAW.</string>
     <string name="settings_raw_leica_color_matrix_device">Default</string>

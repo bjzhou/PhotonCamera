@@ -150,6 +150,9 @@ fun PresetEditorScreen(
     var rawFujiFilmSimulation by remember {
         mutableStateOf(FujiFilmSimulation.fromPersistedValue(sourcePreset?.rawFujiFilmSimulation))
     }
+    var rawCanonUseR5ColorMatrix by remember {
+        mutableStateOf(sourcePreset?.rawCanonUseR5ColorMatrix ?: false)
+    }
     var rawLeicaUseM9ColorMatrix by remember {
         mutableStateOf(sourcePreset?.rawLeicaUseM9ColorMatrix ?: false)
     }
@@ -202,6 +205,7 @@ fun PresetEditorScreen(
             rawCanonExposureCompensationEv = rawCanonExposureCompensationEv,
             rawLumixColorMatchingEnabled = sourcePreset?.rawLumixColorMatchingEnabled ?: true,
             rawHncsColorMatchingEnabled = sourcePreset?.rawHncsColorMatchingEnabled ?: true,
+            rawCanonUseR5ColorMatrix = rawCanonUseR5ColorMatrix,
             rawLeicaUseM9ColorMatrix = rawLeicaUseM9ColorMatrix,
             rawSpectralFilmStock = rawSpectralFilmStock,
             rawSpectralFilmPrint = rawSpectralFilmPrint,
@@ -506,6 +510,25 @@ fun PresetEditorScreen(
                     LumixPhotoStyleSelector(
                         selectedStyle = rawLumixPhotoStyle,
                         onSelectStyle = { rawLumixPhotoStyle = it },
+                    )
+                }
+
+                AnimatedVisibility(visible = rawRenderingEngine.isCanon) {
+                    val matrixLabels = mapOf(
+                        false to stringResource(R.string.settings_raw_canon_color_matrix_device),
+                        true to stringResource(R.string.settings_raw_canon_color_matrix_r5),
+                    )
+                    DropdownSettingItem(
+                        title = stringResource(R.string.settings_raw_canon_color_matrix),
+                        description = stringResource(R.string.settings_raw_canon_color_matrix_description),
+                        value = matrixLabels.getValue(rawCanonUseR5ColorMatrix),
+                        options = matrixLabels.values.toList(),
+                        isLoading = false,
+                        onExpanded = {},
+                        onOptionSelected = { selectedLabel ->
+                            rawCanonUseR5ColorMatrix = matrixLabels.entries
+                                .first { it.value == selectedLabel }.key
+                        },
                     )
                 }
 

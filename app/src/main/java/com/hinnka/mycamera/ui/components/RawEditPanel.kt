@@ -402,6 +402,23 @@ fun RawRenderingEngineSettingsPanel(
                 onValueChangeFinished = onAdjustmentEnd,
             )
             Spacer(modifier = Modifier.height(16.dp))
+            RawChoiceSetting(
+                title = stringResource(R.string.settings_raw_canon_color_matrix),
+                description = stringResource(R.string.settings_raw_canon_color_matrix_description),
+                levels = listOf(
+                    "device" to stringResource(R.string.settings_raw_canon_color_matrix_device),
+                    "r5" to stringResource(R.string.settings_raw_canon_color_matrix_r5),
+                ),
+                currentLevel = if (rawToneMappingParameters.canonUseR5ColorMatrix) "r5" else "device",
+                onLevelSelected = { source ->
+                    onAdjustmentStart()
+                    onRawToneMappingParametersChange(
+                        rawToneMappingParameters.copy(canonUseR5ColorMatrix = source == "r5")
+                    )
+                    onAdjustmentEnd()
+                },
+            )
+            Spacer(modifier = Modifier.height(16.dp))
         }
 
         if (rawRenderingEngine.isLeica) {

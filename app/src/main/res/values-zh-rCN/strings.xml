@@ -1357,6 +1357,10 @@
     <string name="settings_raw_color_engine_fuji_description">基于固件数据适配的胶片模拟，渲染效果为近似实现。</string>
     <string name="settings_raw_color_engine_leica">徕卡 M9</string>
     <string name="settings_raw_color_engine_leica_description">徕卡 M9 色彩与调性。</string>
+    <string name="settings_raw_canon_color_matrix">色彩矩阵</string>
+    <string name="settings_raw_canon_color_matrix_description">选择使用拍摄设备或 EOS R5 的色彩矩阵校准 RAW 色彩。</string>
+    <string name="settings_raw_canon_color_matrix_device">默认</string>
+    <string name="settings_raw_canon_color_matrix_r5">EOS R5</string>
     <string name="settings_raw_leica_color_matrix">色彩矩阵</string>
     <string name="settings_raw_leica_color_matrix_description">选择使用拍摄设备或 M9 的色彩矩阵校准 RAW 色彩。</string>
     <string name="settings_raw_leica_color_matrix_device">默认</string>

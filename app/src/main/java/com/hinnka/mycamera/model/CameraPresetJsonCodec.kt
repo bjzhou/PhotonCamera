@@ -95,6 +95,7 @@ internal object CameraPresetJsonCodec {
             ),
             rawLumixColorMatchingEnabled = obj.boolean("rawLumixColorMatchingEnabled", true),
             rawHncsColorMatchingEnabled = obj.boolean("rawHncsColorMatchingEnabled", true),
+            rawCanonUseR5ColorMatrix = obj.boolean("rawCanonUseR5ColorMatrix", false),
             rawLeicaUseM9ColorMatrix = obj.boolean("rawLeicaUseM9ColorMatrix", false),
             rawOppoMasterToneMap = obj.boolean("rawOppoMasterToneMap", false),
             rawSpectralFilmStock = obj.stringOrNull("rawSpectralFilmStock"),
