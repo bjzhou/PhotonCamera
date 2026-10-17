@@ -9,6 +9,7 @@ import android.os.Build
 import android.os.Bundle
 import android.view.KeyEvent
 import android.view.WindowManager
+import android.widget.Toast
 import androidx.activity.compose.BackHandler
 import androidx.activity.SystemBarStyle
 import androidx.activity.compose.setContent
@@ -649,6 +650,22 @@ fun NavigationHost(
     val containerSize = LocalWindowInfo.current.containerSize
     cameraViewModel.isExpanded =
         (containerSize.width * 1f / containerSize.height) > AspectRatio.RATIO_4_3.getValue(false)
+    val inAppGalleryEnabled by cameraViewModel.inAppGalleryEnabled.collectAsState()
+
+    // Without the in-app gallery there is no library to page into, so the last capture goes
+    // straight to whichever app the user picks in the system chooser.
+    val openLastCaptureWithOtherApp = {
+        val exportedPhoto = GalleryManager.lastExportedPhoto.value
+        if (exportedPhoto == null) {
+            Toast.makeText(
+                context,
+                R.string.settings_in_app_gallery_nothing_to_open,
+                Toast.LENGTH_SHORT
+            ).show()
+        } else {
+            context.startActivity(GalleryManager.buildOpenWithIntent(exportedPhoto))
+        }
+    }
 
     Box(modifier = Modifier.fillMaxSize()) {
         NavHost(
@@ -668,7 +685,7 @@ fun NavigationHost(
             }
         ) {
             composable(Routes.CAMERA) {
-                if (cameraViewModel.isExpanded) {
+                if (cameraViewModel.isExpanded && inAppGalleryEnabled) {
                     Row {
                         CameraScreen(
                             viewModel = cameraViewModel,
@@ -733,23 +750,27 @@ fun NavigationHost(
                         viewModel = cameraViewModel,
                         galleryViewModel = galleryViewModel,
                         onGalleryClick = {
-                            val pendingId = cameraViewModel.capturedThumbnail.value
-                                ?.takeUnless { it.finalThumbnailLoaded }
-                                ?.let { captured ->
-                                    captured.savedPhotoId ?: captured.photoId.takeIf {
-                                        it in GalleryManager.processingPhotos.value ||
-                                            it in galleryViewModel.processingPhotos.value
+                            if (inAppGalleryEnabled) {
+                                val pendingId = cameraViewModel.capturedThumbnail.value
+                                    ?.takeUnless { it.finalThumbnailLoaded }
+                                    ?.let { captured ->
+                                        captured.savedPhotoId ?: captured.photoId.takeIf {
+                                            it in GalleryManager.processingPhotos.value ||
+                                                it in galleryViewModel.processingPhotos.value
+                                        }
                                     }
+                                val latestPhoto = galleryViewModel.latestPhoto.value
+                                if (pendingId != null) {
+                                    galleryViewModel.setCurrentPhotoById(pendingId)
+                                    navController.navigate(Routes.photoDetail(photoId = pendingId))
+                                } else if (latestPhoto != null && System.currentTimeMillis() - latestPhoto.dateAdded < 3 * 60 * 1000) {
+                                    galleryViewModel.setCurrentPhotoById(latestPhoto.id)
+                                    navController.navigate(Routes.photoDetail(photoId = latestPhoto.id))
+                                } else {
+                                    navController.navigate(Routes.GALLERY)
                                 }
-                            val latestPhoto = galleryViewModel.latestPhoto.value
-                            if (pendingId != null) {
-                                galleryViewModel.setCurrentPhotoById(pendingId)
-                                navController.navigate(Routes.photoDetail(photoId = pendingId))
-                            } else if (latestPhoto != null && System.currentTimeMillis() - latestPhoto.dateAdded < 3 * 60 * 1000) {
-                                galleryViewModel.setCurrentPhotoById(latestPhoto.id)
-                                navController.navigate(Routes.photoDetail(photoId = latestPhoto.id))
                             } else {
-                                navController.navigate(Routes.GALLERY)
+                                openLastCaptureWithOtherApp()
                             }
                         },
                         onSettingsClick = {

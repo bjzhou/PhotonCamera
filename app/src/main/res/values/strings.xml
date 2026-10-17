@@ -387,6 +387,10 @@
     <string name="settings_storage_path_permission_failed">Failed to save folder permission</string>
     <string name="settings_auto_save">Auto Save</string>
     <string name="settings_auto_save_description">Automatically save photos after capture</string>
+    <string name="settings_auto_save_forced_description">Always on while the in-app gallery is off</string>
+    <string name="settings_in_app_gallery">In-App Gallery</string>
+    <string name="settings_in_app_gallery_description">Keep photos in the app\'s own gallery. When off, captures are only written to the save path above.</string>
+    <string name="settings_in_app_gallery_nothing_to_open">No exported photo to open yet</string>
     <string name="settings_save_location">Save Location</string>
     <string name="settings_save_location_description">Save location info (GPS) in photo metadata</string>
     <string name="settings_nr_level">Noise Reduction Level</string>

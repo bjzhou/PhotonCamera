@@ -121,6 +121,10 @@
     <string name="settings_volume_key_action_zoom">Changement de focus</string>
     <string name="settings_auto_save">Enregistrement automatique</string>
     <string name="settings_auto_save_description">Enregistrer automatiquement les photos après la capture</string>
+    <string name="settings_auto_save_forced_description">Toujours activé lorsque la galerie intégrée est désactivée</string>
+    <string name="settings_in_app_gallery">Galerie intégrée</string>
+    <string name="settings_in_app_gallery_description">Conserver les photos dans la galerie de l\'application. Désactivée, les captures ne sont écrites que dans le chemin d\'enregistrement ci-dessus.</string>
+    <string name="settings_in_app_gallery_nothing_to_open">Aucune photo exportée à ouvrir pour l\'instant</string>
     <string name="settings_nr_level">Niveau de réduction de bruit</string>
     <string name="settings_nr_level_description">Ajuster le mode de réduction de bruit matériel. \"Désactivé\" peut être utilisé avec des algorithmes de réduction de bruit multi-images pour obtenir davantage de détails.</string>
     <string name="settings_nr_level_off">Désactivé</string>

@@ -353,6 +353,10 @@
     <string name="settings_storage_path_permission_failed">無法儲存資料夾權限</string>
     <string name="settings_auto_save">拍攝后自動儲存</string>
     <string name="settings_auto_save_description">拍攝后自動儲存相片，否則需要手動確認</string>
+    <string name="settings_auto_save_forced_description">關閉應用程式內圖庫時一律開啟</string>
+    <string name="settings_in_app_gallery">應用程式內圖庫</string>
+    <string name="settings_in_app_gallery_description">把相片儲存在應用程式自己的圖庫中。關閉後，拍攝結果只會寫入上方的儲存路徑。</string>
+    <string name="settings_in_app_gallery_nothing_to_open">還沒有可開啟的已匯出相片</string>
     <string name="settings_save_location">儲存地理位置</string>
     <string name="settings_save_location_description">開啟后在相片 EXIF 資訊中記錄經緯度</string>
     <string name="settings_nr_level">降噪等級</string>

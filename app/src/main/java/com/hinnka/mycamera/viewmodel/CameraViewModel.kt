@@ -1489,6 +1489,9 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     val photoSaveTreeUri: StateFlow<String?> = userPreferencesRepository.userPreferences
         .map { it.photoSaveTreeUri }
         .stateIn(viewModelScope, SharingStarted.Eagerly, null)
+    val inAppGalleryEnabled: StateFlow<Boolean> = userPreferencesRepository.userPreferences
+        .map { it.inAppGalleryEnabled }
+        .stateIn(viewModelScope, SharingStarted.Eagerly, true)
     val topSheetAspectRatios: StateFlow<List<AspectRatio>> = userPreferencesRepository.userPreferences
         .map { it.topSheetAspectRatios }
         .stateIn(viewModelScope, SharingStarted.Eagerly, AspectRatio.defaultTopSheetRatios)
@@ -5568,6 +5571,16 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     fun setAutoSaveAfterCapture(enabled: Boolean) {
         viewModelScope.launch {
             userPreferencesRepository.saveAutoSaveAfterCapture(enabled)
+        }
+    }
+
+    /**
+     * Enables or disables the in-app gallery. With it disabled, a capture is written to the
+     * configured save path and the working copy inside the app is dropped right afterwards.
+     */
+    fun setInAppGalleryEnabled(enabled: Boolean) {
+        viewModelScope.launch {
+            userPreferencesRepository.saveInAppGalleryEnabled(enabled)
         }
     }
 

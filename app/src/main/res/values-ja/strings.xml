@@ -138,6 +138,10 @@
     <string name="settings_storage_path_permission_failed">フォルダ権限の保存に失敗しました</string>
     <string name="settings_auto_save">自動保存</string>
     <string name="settings_auto_save_description">撮影後に写真を自動的に保存します</string>
+    <string name="settings_auto_save_forced_description">アプリ内ギャラリーが無効の間は常にオン</string>
+    <string name="settings_in_app_gallery">アプリ内ギャラリー</string>
+    <string name="settings_in_app_gallery_description">写真をアプリ内ギャラリーに保存します。オフの場合、上の保存先だけに書き出されます。</string>
+    <string name="settings_in_app_gallery_nothing_to_open">開ける書き出し済みの写真がありません</string>
     <string name="settings_save_location_description">写真のメタデータに位置情報（GPS）を保存</string>
     <string name="settings_nr_level">ノイズ低減レベル</string>
     <string name="settings_nr_level_description">ハードウェアのノイズ低減モードを調整します。「オフ」はマルチフレームノイズ低減アルゴリズムと組み合わせることで、より多くのディテールを得られます。</string>

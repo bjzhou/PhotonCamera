@@ -374,6 +374,10 @@
     <string name="settings_storage_path_permission_failed">无法保存文件夹权限</string>
     <string name="settings_auto_save">拍摄后自动保存</string>
     <string name="settings_auto_save_description">拍摄后自动保存照片，否则需要手动确认</string>
+    <string name="settings_auto_save_forced_description">关闭应用内图库时始终开启</string>
+    <string name="settings_in_app_gallery">应用内图库</string>
+    <string name="settings_in_app_gallery_description">把照片保存在应用自己的图库里。关闭后，拍摄结果只会写入上方的保存路径。</string>
+    <string name="settings_in_app_gallery_nothing_to_open">还没有可打开的已导出照片</string>
     <string name="settings_save_location">保存地理位置</string>
     <string name="settings_save_location_description">开启后在照片 EXIF 信息中记录经纬度</string>
     <string name="settings_nr_level">降噪等级</string>
