@@ -122,6 +122,10 @@
     <string name="settings_volume_key_action_zoom">초점 전환</string>
     <string name="settings_auto_save">자동 저장</string>
     <string name="settings_auto_save_description">촬영 후 자동으로 사진 저장</string>
+    <string name="settings_auto_save_forced_description">앱 내 갤러리가 꺼져 있는 동안에는 항상 켜짐</string>
+    <string name="settings_in_app_gallery">앱 내 갤러리</string>
+    <string name="settings_in_app_gallery_description">사진을 앱 자체 갤러리에 보관합니다. 끄면 촬영 결과는 위의 저장 경로에만 기록됩니다.</string>
+    <string name="settings_in_app_gallery_nothing_to_open">열 수 있는 내보낸 사진이 아직 없습니다</string>
     <string name="settings_nr_level">노이즈 감소 레벨</string>
     <string name="settings_nr_level_description">하드웨어 노이즈 감소 모드를 조정합니다. \"끄기\"는 멀티 프레임 노이즈 감소 알고리즘과 함께 사용하여 더 많은 디테일을 얻을 수 있습니다.</string>
     <string name="settings_nr_level_off">끄기</string>

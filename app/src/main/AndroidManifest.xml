@@ -23,6 +23,28 @@
             android:name="android.hardware.camera.autofocus"
             android:required="false" />
 
+    <!-- Package visibility for the implicit view intents behind sharing and behind handing the
+         last capture to another app. Without these the system picker would only list apps that
+         happen to be visible for an unrelated reason. -->
+    <queries>
+        <intent>
+            <action android:name="android.intent.action.VIEW" />
+            <data android:mimeType="image/*" />
+        </intent>
+        <intent>
+            <action android:name="android.intent.action.VIEW" />
+            <data android:mimeType="video/*" />
+        </intent>
+        <intent>
+            <action android:name="android.intent.action.SEND" />
+            <data android:mimeType="image/*" />
+        </intent>
+        <intent>
+            <action android:name="android.intent.action.SEND" />
+            <data android:mimeType="video/*" />
+        </intent>
+    </queries>
+
     <application
             android:name=".MyCameraApplication"
             android:allowBackup="true"

@@ -121,6 +121,10 @@
     <string name="settings_volume_key_action_zoom">Fokuswechsel</string>
     <string name="settings_auto_save">Auto-Speichern</string>
     <string name="settings_auto_save_description">Fotos nach der Aufnahme automatisch speichern</string>
+    <string name="settings_auto_save_forced_description">Immer aktiv, solange die app-interne Galerie deaktiviert ist</string>
+    <string name="settings_in_app_gallery">App-interne Galerie</string>
+    <string name="settings_in_app_gallery_description">Fotos in der Galerie der App ablegen. Ist dies aus, werden Aufnahmen nur in den oben gewählten Speicherpfad geschrieben.</string>
+    <string name="settings_in_app_gallery_nothing_to_open">Noch kein exportiertes Foto zum Öffnen</string>
     <string name="settings_nr_level">Rauschunterdrückungs-Level</string>
     <string name="settings_nr_level_description">Hardware-Rauschunterdrückungsmodus anpassen. \"Aus\" kann zusammen mit Algorithmen zur Mehrbild-Rauschunterdrückung verwendet werden, um mehr Details zu erhalten.</string>
     <string name="settings_nr_level_off">Aus</string>

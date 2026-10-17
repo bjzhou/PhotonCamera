@@ -381,6 +381,7 @@ fun SettingsScreen(
     val saveLocation by viewModel.saveLocationEnabled.collectAsState(initial = false)
     val photoSavePath by viewModel.photoSavePath.collectAsState()
     val photoSaveTreeUri by viewModel.photoSaveTreeUri.collectAsState()
+    val inAppGalleryEnabled by viewModel.inAppGalleryEnabled.collectAsState()
     val videoRecordingPath by viewModel.videoRecordingPath.collectAsState()
     val videoRecordingTreeUri by viewModel.videoRecordingTreeUri.collectAsState()
     val separateVideoLutEnabled by viewModel.separateVideoLutEnabled.collectAsState()
@@ -1543,10 +1544,29 @@ fun SettingsScreen(
                         )
 
                         SwitchSettingItem(
+                            title = stringResource(R.string.settings_in_app_gallery),
+                            description = stringResource(R.string.settings_in_app_gallery_description),
+                            checked = inAppGalleryEnabled,
+                            onCheckedChange = { viewModel.setInAppGalleryEnabled(it) }
+                        )
+
+                        HorizontalDivider(
+                            color = Color.White.copy(alpha = 0.1f),
+                            modifier = Modifier.padding(vertical = 8.dp)
+                        )
+
+                        SwitchSettingItem(
                             title = stringResource(R.string.settings_auto_save),
-                            description = stringResource(R.string.settings_auto_save_description),
+                            description = if (inAppGalleryEnabled) {
+                                stringResource(R.string.settings_auto_save_description)
+                            } else {
+                                // With no copy kept inside the app, the export is the only place
+                                // the capture survives, so the switch stays pinned on.
+                                stringResource(R.string.settings_auto_save_forced_description)
+                            },
                             checked = autoSaveAfterCapture,
-                            onCheckedChange = { viewModel.setAutoSaveAfterCapture(it) }
+                            onCheckedChange = { viewModel.setAutoSaveAfterCapture(it) },
+                            enabled = inAppGalleryEnabled
                         )
 
                         HorizontalDivider(

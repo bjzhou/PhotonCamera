@@ -4,6 +4,7 @@ import android.app.PendingIntent
 import android.content.ContentUris
 import android.content.ContentValues
 import android.content.Context
+import android.content.Intent
 import android.graphics.*
 import android.hardware.camera2.CameraCharacteristics
 import android.hardware.camera2.CameraMetadata
@@ -90,6 +91,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.flow.SharedFlow
+import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.firstOrNull
 import kotlinx.coroutines.sync.Mutex
@@ -181,6 +183,19 @@ object GalleryManager {
         val savePath: PhotoSavePath,
         val treeUri: String?
     )
+
+    /**
+     * Last still image this app wrote into public storage. With the in-app gallery switched off
+     * the camera has no library entry left to page into, so the preview hands this out instead.
+     */
+    data class LastExportedPhoto(
+        val photoId: String,
+        val uri: Uri,
+        val mimeType: String,
+    )
+
+    private val _lastExportedPhoto = MutableStateFlow<LastExportedPhoto?>(null)
+    val lastExportedPhoto: StateFlow<LastExportedPhoto?> = _lastExportedPhoto.asStateFlow()
 
     val processingScope = CoroutineScope(Dispatchers.Default + SupervisorJob())
     private val gainmapProducer = UnifiedGainmapProducer()
@@ -1331,6 +1346,46 @@ object GalleryManager {
         preferJpeg444Export: Boolean? = null,
         bitmapComputationalBokehApplied: Boolean = false,
     ): Boolean {
+        val exported = exportPhotoInternal(
+            context = context,
+            id = id,
+            bitmap = bitmap,
+            photoProcessor = photoProcessor,
+            metadata = metadata,
+            sharpeningValue = sharpeningValue,
+            noiseReductionValue = noiseReductionValue,
+            chromaNoiseReductionValue = chromaNoiseReductionValue,
+            photoQuality = photoQuality,
+            suffix = suffix,
+            preparedUltraHdrSource = preparedUltraHdrSource,
+            preparedGainmapResult = preparedGainmapResult,
+            preferHeicExport = preferHeicExport,
+            preferJpeg444Export = preferJpeg444Export,
+            bitmapComputationalBokehApplied = bitmapComputationalBokehApplied,
+        )
+        if (exported) {
+            releaseInternalCopyWhenGalleryDisabled(context, id)
+        }
+        return exported
+    }
+
+    private suspend fun exportPhotoInternal(
+        context: Context,
+        id: String,
+        bitmap: Bitmap? = null,
+        photoProcessor: PhotoProcessor,
+        metadata: MediaMetadata,
+        sharpeningValue: Float,
+        noiseReductionValue: Float,
+        chromaNoiseReductionValue: Float,
+        photoQuality: Int = 95,
+        suffix: String? = null,
+        preparedUltraHdrSource: GainmapSourceSet? = null,
+        preparedGainmapResult: GainmapResult? = null,
+        preferHeicExport: Boolean? = null,
+        preferJpeg444Export: Boolean? = null,
+        bitmapComputationalBokehApplied: Boolean = false,
+    ): Boolean {
         return withContext(Dispatchers.IO) {
             val tempExportFile = File(context.cacheDir, "temp_export_${System.nanoTime()}.jpg")
             try {
@@ -1644,12 +1699,7 @@ object GalleryManager {
                 }
 
                 uri?.let {
-                    // Save exported URI to metadata
-                    updateMetadata(context, id) { current ->
-                        current.copy(
-                            exportedUris = current.exportedUris + uri.toString()
-                        )
-                    }
+                    recordExportedImageUri(context, id, uri, "image/jpeg")
                     PLog.d(TAG, "Exported URI saved: $uri for photo $id")
 
                     if (outputBitmap !== processedBitmap && !outputBitmap.isRecycled) {
@@ -1671,6 +1721,54 @@ object GalleryManager {
             false
         }
     }
+
+    /**
+     * Records a still image export in the library metadata and keeps it as the capture the camera
+     * preview may offer to other apps. Raw sidecars and motion photo companions keep going through
+     * [updateMetadata] directly: on their own they are not something a viewer app can open.
+     */
+    private suspend fun recordExportedImageUri(
+        context: Context,
+        id: String,
+        uri: Uri,
+        mimeType: String,
+    ) {
+        updateMetadata(context, id) { current ->
+            current.copy(
+                exportedUris = current.exportedUris + uri.toString()
+            )
+        }
+        _lastExportedPhoto.value = LastExportedPhoto(id, uri, mimeType)
+    }
+
+    /**
+     * With the in-app gallery switched off the exported file is the only surviving copy, so the
+     * working directory this capture needed is dropped once the export landed. This runs after
+     * every successful [exportPhoto], which is the one funnel all capture pipelines share.
+     */
+    private suspend fun releaseInternalCopyWhenGalleryDisabled(context: Context, photoId: String) {
+        val preferences = ContentRepository.getInstance(context)
+            .userPreferencesRepository
+            .userPreferences
+            .firstOrNull()
+        if (preferences?.inAppGalleryEnabled != false) return
+
+        PLog.d(TAG, "In-app gallery disabled, discarding internal copy of $photoId")
+        deletePhotoOnly(context, photoId)
+        notifyPhotoLibraryChanged()
+    }
+
+    /**
+     * Builds the implicit view intent for an exported photo. It is intentionally not wrapped in
+     * Intent.createChooser: started as-is, the system puts up its own app picker together with the
+     * "Always" and "Just once" choice.
+     */
+    fun buildOpenWithIntent(photo: LastExportedPhoto): Intent =
+        Intent(Intent.ACTION_VIEW).apply {
+            setDataAndType(photo.uri, photo.mimeType)
+            addCategory(Intent.CATEGORY_DEFAULT)
+            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        }
 
     private suspend fun exportBitmapToMediaStore(
         context: Context,
@@ -1710,11 +1808,7 @@ object GalleryManager {
                 dateTaken = date,
             ) ?: return false
 
-            updateMetadata(context, id) { current ->
-                current.copy(
-                    exportedUris = current.exportedUris + uri.toString()
-                )
-            }
+            recordExportedImageUri(context, id, uri, "image/jpeg")
             PLog.d(TAG, "Exported embedded-gainmap URI saved: $uri for photo $id")
             return true
         } finally {
@@ -1769,11 +1863,7 @@ object GalleryManager {
                 dateTaken = dateTaken,
             ) ?: return false
 
-            updateMetadata(context, id) { current ->
-                current.copy(
-                    exportedUris = current.exportedUris + uri.toString()
-                )
-            }
+            recordExportedImageUri(context, id, uri, mimeType)
             PLog.d(TAG, "Exported $mimeType URI saved: $uri for photo $id")
             return true
         } catch (e: Exception) {

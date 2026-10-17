@@ -121,6 +121,10 @@
     <string name="settings_volume_key_action_zoom">Ganti Fokus</string>
     <string name="settings_auto_save">Simpan Otomatis</string>
     <string name="settings_auto_save_description">Simpan foto secara otomatis setelah tangkapan</string>
+    <string name="settings_auto_save_forced_description">Selalu aktif selama galeri dalam aplikasi dinonaktifkan</string>
+    <string name="settings_in_app_gallery">Galeri dalam aplikasi</string>
+    <string name="settings_in_app_gallery_description">Simpan foto di galeri aplikasi sendiri. Jika nonaktif, hasil tangkapan hanya ditulis ke lokasi penyimpanan di atas.</string>
+    <string name="settings_in_app_gallery_nothing_to_open">Belum ada foto hasil ekspor untuk dibuka</string>
     <string name="settings_nr_level">Tingkat Pengurangan Noise</string>
     <string name="settings_nr_level_description">Sesuaikan mode pengurangan noise perangkat keras. \"Off\" dapat digunakan bersama algoritma pengurangan noise multi-frame untuk mendapatkan lebih banyak detail.</string>
     <string name="settings_nr_level_off">Mati</string>

@@ -181,6 +181,8 @@ data class UserPreferences(
     val autoSaveAfterCapture: Boolean = true,  // 自动保存
     val photoSavePath: PhotoSavePath = PhotoSavePath.DCIM_PHOTON,
     val photoSaveTreeUri: String? = null,
+    // When off, captures only reach the external save path and no copy is kept in the app
+    val inAppGalleryEnabled: Boolean = true,
     val nrLevel: Int = NoiseReductionLevel.DEFAULT,  // 降噪等级：0=Off, 1=Fast, 2=High Quality, 3=ZSL, 4=Minimal
     val edgeLevel: Int = 1, // 锐化等级：0=Off, 1=Fast, 2=High Quality, 3=Real-time
     val videoNrLevel: Int = NoiseReductionLevel.DEFAULT,
@@ -444,6 +446,7 @@ class UserPreferencesRepository(private val context: Context) {
         private val AUTO_SAVE_AFTER_CAPTURE = booleanPreferencesKey("auto_save_after_capture")
         private val PHOTO_SAVE_PATH = stringPreferencesKey("photo_save_path")
         private val PHOTO_SAVE_TREE_URI = stringPreferencesKey("photo_save_tree_uri")
+        private val IN_APP_GALLERY_ENABLED = booleanPreferencesKey("in_app_gallery_enabled")
         private val NR_LEVEL = intPreferencesKey("nr_level")
         private val EDGE_LEVEL = intPreferencesKey("edge_level")
         private val VIDEO_NR_LEVEL = intPreferencesKey("video_nr_level")
@@ -602,6 +605,7 @@ class UserPreferencesRepository(private val context: Context) {
             }
             val customAspectRatios = parseCustomAspectRatios(preferences[CUSTOM_ASPECT_RATIOS])
             val availableAspectRatios = AspectRatio.entries + customAspectRatios
+            val inAppGalleryEnabled = preferences[IN_APP_GALLERY_ENABLED] ?: true
             val rawBaselineLutConfigured = preferences[RAW_BASELINE_LUT_CONFIGURED_KEY]
                 ?: preferences.contains(RAW_BASELINE_LUT_ID_KEY)
             val storedUseRaw = preferences[USE_RAW] ?: false
@@ -759,9 +763,13 @@ class UserPreferencesRepository(private val context: Context) {
                 volumeKeyAction = VolumeKeyAction.valueOf(
                     preferences[VOLUME_KEY_ACTION] ?: VolumeKeyAction.CAPTURE.name
                 ),
-                autoSaveAfterCapture = preferences[AUTO_SAVE_AFTER_CAPTURE] ?: true,
+                // Nothing holds a capture once it is no longer stored inside the app, so the
+                // export to the save path is the only remaining copy and cannot be switched off.
+                autoSaveAfterCapture =
+                    (preferences[AUTO_SAVE_AFTER_CAPTURE] ?: true) || !inAppGalleryEnabled,
                 photoSavePath = PhotoSavePath.fromPersistedName(preferences[PHOTO_SAVE_PATH]),
                 photoSaveTreeUri = preferences[PHOTO_SAVE_TREE_URI]?.takeIf { it.isNotBlank() },
+                inAppGalleryEnabled = inAppGalleryEnabled,
                 nrLevel = NoiseReductionLevel.normalize(
                     preferences[NR_LEVEL] ?: NoiseReductionLevel.DEFAULT
                 ),
@@ -1754,6 +1762,12 @@ class UserPreferencesRepository(private val context: Context) {
             } else {
                 preferences.remove(PHOTO_SAVE_TREE_URI)
             }
+        }
+    }
+
+    suspend fun saveInAppGalleryEnabled(enabled: Boolean) {
+        context.dataStore.edit { preferences ->
+            preferences[IN_APP_GALLERY_ENABLED] = enabled
         }
     }
 

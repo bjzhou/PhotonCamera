@@ -122,6 +122,10 @@
     <string name="settings_volume_key_action_zoom">Troca de Foco</string>
     <string name="settings_auto_save">Salvar Automaticamente</string>
     <string name="settings_auto_save_description">Salvar fotos automaticamente após a captura</string>
+    <string name="settings_auto_save_forced_description">Sempre ativo enquanto a galeria no app estiver desativada</string>
+    <string name="settings_in_app_gallery">Galeria no app</string>
+    <string name="settings_in_app_gallery_description">Guarda as fotos na galeria do próprio app. Quando desativado, as capturas são gravadas apenas no local de salvamento acima.</string>
+    <string name="settings_in_app_gallery_nothing_to_open">Nenhuma foto exportada para abrir ainda</string>
     <string name="settings_nr_level">Nível de Redução de Ruído</string>
     <string name="settings_nr_level_description">Ajustar o modo de redução de ruído por hardware. \"Desligado\" pode ser usado com algoritmos de redução de ruído de múltiplos quadros para obter mais detalhes.</string>
     <string name="settings_nr_level_off">Desligado</string>
