@@ -1,5 +1,0 @@
-PhotonCamera native spectral model from Spektrafilm 0.3.4
-Upstream: https://github.com/andreavolpato/spektrafilm/tree/3bb2c2d2801ff68b92019cf1dbcbb133d60832bc
-Profiles and spectral data by Andrea Volpato and attributed contributors, CC BY-SA 4.0.
-Source parameters stored as float64; shared half spectral grid stored losslessly as modular differences and byte planes.
-No film/print RGB look LUTs are distributed; the native port generates the selected stages on demand.
