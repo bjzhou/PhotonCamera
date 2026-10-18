@@ -199,7 +199,9 @@ class RealtimeStabilizationCoordinator(context: Context) {
         private const val MAX_METADATA_COUNT = 90
         private const val MAX_PENDING_GYRO_COUNT = 4096
         private const val HAL_STABILIZATION_CONFLICT_CONFIRMATION_FRAME_COUNT = 3
-        private const val HAL_OPTICAL_CORRECTION_PROBE_FRAME_COUNT = 5
+        // Wait through the seven-frame native lookahead plus a small margin for delayed HAL OIS samples.
+        private const val HAL_OPTICAL_CORRECTION_PROBE_FRAME_COUNT =
+            DEFAULT_VIDEO_STABILIZATION_LOOKAHEAD + 3
         private const val MIN_OPTICAL_CORRECTION_SAMPLES_PER_FRAME = 2
         private const val MAX_BUFFERED_STABILIZATION_IMAGES =
             STABILIZATION_LOOKAHEAD_FRAME_COUNT + 8
@@ -805,8 +807,10 @@ class RealtimeStabilizationCoordinator(context: Context) {
         val confirmationFrameCount = if (videoConflict) {
             HAL_STABILIZATION_CONFLICT_CONFIRMATION_FRAME_COUNT
         } else {
-            // Give a hidden/forced OIS implementation enough completed requests to start
-            // returning telemetry. Five frames remain below profile 7's first delayed output.
+            // OIS telemetry may arrive later than the first capture results. Do not
+            // classify forced OIS as a conflict until the full native lookahead and grace
+            // frames have elapsed, otherwise the first valid correction samples never arrive
+            // before EIS+ is shut down.
             HAL_OPTICAL_CORRECTION_PROBE_FRAME_COUNT
         }
         return consecutiveHalStabilizationConflictCount >= confirmationFrameCount
