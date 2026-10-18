@@ -26,6 +26,35 @@ internal object CanonProfile {
             load(style) { path -> context.assets.open(path).use { it.readBytes() } }
         }
 
+    private fun sharedAssetPath(style: CanonPictureStyle, name: String): String {
+        val assetStyle = when (name) {
+            "gamma_y.i32le" -> when (style) {
+                CanonPictureStyle.Landscape,
+                CanonPictureStyle.Monochrome,
+                CanonPictureStyle.Portrait -> "standard"
+                CanonPictureStyle.Neutral -> "faithful"
+                else -> style.persistedValue
+            }
+            "gamma_c.i32le" -> when (style) {
+                CanonPictureStyle.Landscape,
+                CanonPictureStyle.Monochrome -> "standard"
+                CanonPictureStyle.Neutral -> "faithful"
+                else -> style.persistedValue
+            }
+            "gamma_uv.i32le" ->
+                if (style == CanonPictureStyle.Portrait) "landscape" else style.persistedValue
+            "chroma_weights.u16le" -> when (style) {
+                CanonPictureStyle.Landscape,
+                CanonPictureStyle.Monochrome,
+                CanonPictureStyle.Portrait -> "standard"
+                CanonPictureStyle.Neutral -> "faithful"
+                else -> style.persistedValue
+            }
+            else -> style.persistedValue
+        }
+        return "$ROOT/$assetStyle/$name"
+    }
+
     internal fun load(style: CanonPictureStyle, read: (String) -> ByteArray): CanonRenderPlan {
         val pixelManifest = JsonParser.parseString(String(read("$ROOT/pixel-manifest.json"), Charsets.UTF_8)).asJsonObject
         require(pixelManifest["kernelRva"].asString == "0x1f5b20") { "Canon EOS R5 requires the native YUV kernel" }
@@ -41,7 +70,9 @@ internal object CanonProfile {
             "Canon EOS R5 requires the explicit reference recipe property 0x1000a=100"
         }
         fun verified(name: String, size: Int): ByteArray {
-            val bytes = read("$directory/$name")
+            // Several per-style tables contain identical bytes. Read a single canonical
+            // copy while still validating against the manifest for the requested style.
+            val bytes = read(sharedAssetPath(style, name))
             require(bytes.size == size) { "Invalid Canon asset length: $name" }
             val expected = manifest.getAsJsonObject("files").getAsJsonObject(name)["sha256"].asString
             val hash = MessageDigest.getInstance("SHA-256").digest(bytes)
