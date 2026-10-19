@@ -961,8 +961,14 @@ fun CameraScreen(
                     onZoomStopClick = { animateZoomStopWithPreviewTransition(it) },
                     onLensSwitch = { lensId -> switchToLensWithPreviewTransition(lensId) },
                     onFilterClick = {
-                        // Skip the LUT browser and open Edit directly.
-                        activePanel = if (activePanel == ActivePanel.EDIT) ActivePanel.NONE else ActivePanel.EDIT
+                        // In Video + Log mode this button opens the live LUT picker.
+                        // With Log disabled, preserve the existing direct Edit behavior.
+                        val targetPanel = if (isVideoMode && state.videoConfig.logProfile.isEnabled) {
+                            ActivePanel.FILTERS
+                        } else {
+                            ActivePanel.EDIT
+                        }
+                        activePanel = if (activePanel == targetPanel) ActivePanel.NONE else targetPanel
                     },
                     onFilterButtonBoundsChanged = { bounds ->
                         filterButtonBounds = bounds
@@ -1505,8 +1511,14 @@ fun CameraScreen(
                             onZoomStopClick = { animateZoomStopWithPreviewTransition(it) },
                             onLensSwitch = { lensId -> switchToLensWithPreviewTransition(lensId) },
                             onFilterClick = {
-                                // Match the horizontal layout: open Edit directly, without the LUT browser.
-                                activePanel = if (activePanel == ActivePanel.EDIT) ActivePanel.NONE else ActivePanel.EDIT
+                                // Match the horizontal layout: Log video opens the live LUT picker;
+                                // Log Off continues to open the Edit panel directly.
+                                val targetPanel = if (isVideoMode && state.videoConfig.logProfile.isEnabled) {
+                                    ActivePanel.FILTERS
+                                } else {
+                                    ActivePanel.EDIT
+                                }
+                                activePanel = if (activePanel == targetPanel) ActivePanel.NONE else targetPanel
                             },
                             onFilterButtonBoundsChanged = { bounds ->
                                 filterButtonBounds = bounds
