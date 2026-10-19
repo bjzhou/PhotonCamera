@@ -224,7 +224,7 @@ data class UserPreferences(
     val enableDevelopAnimation: Boolean = false, // 是否启用拍摄后的显影动画
     val colorPaletteEnabled: Boolean = false,
     val developAnimationStyle: DevelopAnimationStyle = DevelopAnimationStyle.FILM,
-    val backgroundImage: String = "camera_bg", // 背景图资源名或文件路径
+    val backgroundImage: String = "camera_bg_black", // Default to solid black background
     val accentColor: Int = AppAppearance.DEFAULT_ACCENT_COLOR,
     val captureButtonStyle: CaptureButtonStyle = CaptureButtonStyle.DEFAULT,
     val captureButtonColor: Int = 0xFFFFFFFF.toInt(),
@@ -856,7 +856,7 @@ class UserPreferencesRepository(private val context: Context) {
                 developAnimationStyle = DevelopAnimationStyle.entries.firstOrNull {
                     it.name == preferences[DEVELOP_ANIMATION_STYLE]
                 } ?: DevelopAnimationStyle.FILM,
-                backgroundImage = preferences[BACKGROUND_IMAGE] ?: "camera_bg",
+                backgroundImage = preferences[BACKGROUND_IMAGE] ?: "camera_bg_black",
                 captureButtonStyle = CaptureButtonStyle.fromPersistedName(
                     preferences[CAPTURE_BUTTON_STYLE]
                 ),
