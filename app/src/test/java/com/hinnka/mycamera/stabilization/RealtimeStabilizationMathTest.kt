@@ -15,6 +15,16 @@ class RealtimeStabilizationMathTest {
     }
 
     @Test
+    fun subThreeLookaheadUsesSafeEisSolverWindow() {
+        assertEquals(3, effectiveStabilizationLookahead(0))
+        assertEquals(3, effectiveStabilizationLookahead(1))
+        assertEquals(3, effectiveStabilizationLookahead(2))
+        assertEquals(3, effectiveStabilizationLookahead(3))
+        assertEquals(10, effectiveStabilizationLookahead(10))
+        assertEquals(10, effectiveStabilizationLookahead(11))
+    }
+
+    @Test
     fun identityNativeMatricesReproduceMgcTwentySixVertexStrip() {
         val matrices = FloatArray(STABILIZATION_ROW_COUNT * 9)
         repeat(STABILIZATION_ROW_COUNT) { row ->
