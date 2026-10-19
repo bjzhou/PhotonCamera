@@ -2142,12 +2142,13 @@ private fun Controls(
             Spacer(modifier = Modifier.height(CameraControlsLayoutDefaults.ModeSwitcherSpacing))
 
             CaptureModeSwitcher(
-                shootingMode = when {
-                    state.captureMode == CaptureMode.VIDEO -> CameraShootingMode.VIDEO
-                    state.useRaw && state.isRawSupported -> CameraShootingMode.PROFESSIONAL
-                    else -> CameraShootingMode.PHOTO
+                // Pro/RAW remains an internal capture option, but is no longer a
+                // separate item in the visible Photo/Video mode switcher.
+                shootingMode = if (state.captureMode == CaptureMode.VIDEO) {
+                    CameraShootingMode.VIDEO
+                } else {
+                    CameraShootingMode.PHOTO
                 },
-                professionalModeEnabled = state.isRawSupported,
                 enabled = modeSwitchEnabled &&
                     !state.videoRecordingState.isRecording &&
                     !state.videoRecordingState.isProcessing,
@@ -2474,7 +2475,6 @@ private fun rememberPhotoCaptureProgress(progress: PhotoCaptureProgress?): State
 @Composable
 private fun CaptureModeSwitcher(
     shootingMode: CameraShootingMode,
-    professionalModeEnabled: Boolean,
     enabled: Boolean,
     onModeSelected: (CameraShootingMode) -> Unit
 ) {
@@ -2491,23 +2491,17 @@ private fun CaptureModeSwitcher(
             )
             .padding(3.dp)
     ) {
-        val knobWidth = maxWidth / 3
-        val selectedIndex = when (shootingMode) {
-            CameraShootingMode.PROFESSIONAL -> 0
-            CameraShootingMode.PHOTO -> 1
-            CameraShootingMode.VIDEO -> 2
-        }
+        // The visible switcher contains only Photo and Video. Pro/RAW capture
+        // internals are preserved but are not exposed as a separate UI mode.
+        val knobWidth = maxWidth / 2
+        val selectedIndex = if (shootingMode == CameraShootingMode.VIDEO) 1 else 0
         val knobOffset by animateDpAsState(
             targetValue = knobWidth * selectedIndex,
             animationSpec = tween(durationMillis = 220),
             label = "modeSwitcher"
         )
         val selectedBackground by animateColorAsState(
-            targetValue = if (shootingMode == CameraShootingMode.PROFESSIONAL) {
-                AccentColor
-            } else {
-                Color.White
-            },
+            targetValue = Color.White,
             animationSpec = tween(durationMillis = 220),
             label = "modeSwitcherColor"
         )
@@ -2524,16 +2518,8 @@ private fun CaptureModeSwitcher(
             verticalAlignment = Alignment.CenterVertically
         ) {
             ModeSwitcherItem(
-                label = stringResource(R.string.capture_mode_professional),
-                selectedContentColor = accentContentColor(selectedBackground),
-                selected = shootingMode == CameraShootingMode.PROFESSIONAL,
-                enabled = enabled && professionalModeEnabled,
-                onClick = { onModeSelected(CameraShootingMode.PROFESSIONAL) },
-                modifier = Modifier.weight(1f)
-            )
-            ModeSwitcherItem(
                 label = stringResource(R.string.capture_mode_photo),
-                selected = shootingMode == CameraShootingMode.PHOTO,
+                selected = shootingMode != CameraShootingMode.VIDEO,
                 enabled = enabled,
                 onClick = { onModeSelected(CameraShootingMode.PHOTO) },
                 modifier = Modifier.weight(1f)
