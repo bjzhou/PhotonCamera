@@ -45,11 +45,20 @@ fun PhotonCameraTheme(
 ) {
     val context = LocalContext.current
     // Observe only appearance, without decoding camera settings or initializing camera resources.
-    val accentFlow = remember(context.applicationContext) {
-        UserPreferencesRepository(context.applicationContext).accentColor
+    val appearanceRepository = remember(context.applicationContext) {
+        UserPreferencesRepository(context.applicationContext)
+    }
+    val accentFlow = remember(appearanceRepository) { appearanceRepository.accentColor }
+    val uiStyleFlow = remember(appearanceRepository) {
+        appearanceRepository.userPreferences.map { it.uiStyle }
     }
     val accentArgb by accentFlow.collectAsState(initial = AppAppearance.DEFAULT_ACCENT_COLOR)
-    val accent = Color(accentArgb)
+    val uiStyle by uiStyleFlow.collectAsState(initial = "ORIGINAL")
+    val accent = when (uiStyle) {
+        "OPPO" -> Color(0xFFFF8A00)
+        "ONE_UI" -> Color(0xFFFFFFFF)
+        else -> Color(accentArgb)
+    }
     val baseColorScheme = when {
         dynamicColor && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S -> {
             if (darkTheme) dynamicDarkColorScheme(context) else dynamicLightColorScheme(context)
