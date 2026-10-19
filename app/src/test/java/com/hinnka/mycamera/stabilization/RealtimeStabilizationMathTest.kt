@@ -6,6 +6,15 @@ import org.junit.Test
 
 class RealtimeStabilizationMathTest {
     @Test
+    fun stabilizationLookaheadAllowsZeroAndCapsAtTen() {
+        assertEquals(0, normalizeStabilizationLookahead(0))
+        assertEquals(0, normalizeStabilizationLookahead(-1))
+        assertEquals(10, normalizeStabilizationLookahead(10))
+        assertEquals(10, normalizeStabilizationLookahead(11))
+        assertEquals(7, normalizeStabilizationLookahead(DEFAULT_VIDEO_STABILIZATION_LOOKAHEAD))
+    }
+
+    @Test
     fun identityNativeMatricesReproduceMgcTwentySixVertexStrip() {
         val matrices = FloatArray(STABILIZATION_ROW_COUNT * 9)
         repeat(STABILIZATION_ROW_COUNT) { row ->
