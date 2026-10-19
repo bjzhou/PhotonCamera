@@ -2551,6 +2551,10 @@ fun SettingsScreen(
                             modifier = Modifier.padding(vertical = 12.dp)
                         )
 
+                        UiStyleSetting(currentStyle = userPreferences.uiStyle, onStyleSelected = viewModel::setUiStyle)
+
+                        HorizontalDivider(color = Color.White.copy(alpha = 0.1f), modifier = Modifier.padding(vertical = 12.dp))
+
                         BackgroundSetting(
                             viewModel = viewModel,
                             modifier = Modifier.padding(bottom = 16.dp)
@@ -6276,6 +6280,29 @@ fun DefaultFocalLengthSetting(
 /**
  * 背景设置
  */
+@Composable
+private fun UiStyleSetting(currentStyle: String, onStyleSelected: (String) -> Unit) {
+    val options = listOf("ORIGINAL" to "Original", "OPPO" to "OPPO", "ONE_UI" to "One UI", "CUSTOM" to "Custom")
+    Column(modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp)) {
+        Text("UI Style", color = Color.White, fontSize = 18.sp, fontWeight = FontWeight.SemiBold)
+        Text("Choose the camera interface layout", color = Color.Gray, fontSize = 13.sp, modifier = Modifier.padding(top = 4.dp, bottom = 12.dp))
+        options.chunked(2).forEach { rowOptions ->
+            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                rowOptions.forEach { (style, label) ->
+                    val selected = currentStyle == style
+                    Box(modifier = Modifier.weight(1f).padding(bottom = 8.dp).clip(RoundedCornerShape(12.dp))
+                        .background(if (selected) AccentColor.copy(alpha = 0.18f) else Color.White.copy(alpha = 0.05f))
+                        .border(if (selected) 1.5.dp else 1.dp, if (selected) AccentColor else Color.White.copy(alpha = 0.12f), RoundedCornerShape(12.dp))
+                        .clickable { onStyleSelected(style) }.padding(vertical = 16.dp, horizontal = 12.dp), contentAlignment = Alignment.Center) {
+                        Text(if (selected) "✓  $label" else label, color = if (selected) AccentColor else Color.White, fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium)
+                    }
+                }
+            }
+        }
+        if (currentStyle == "CUSTOM") Text("Custom layout editor is not connected yet.", color = Color.Gray, fontSize = 12.sp)
+    }
+}
+
 @Composable
 fun BackgroundSetting(
     viewModel: CameraViewModel,
