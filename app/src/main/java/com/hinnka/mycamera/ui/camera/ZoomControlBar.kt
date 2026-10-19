@@ -66,6 +66,7 @@ enum class ZoomDisplayMode {
 
 @Composable
 fun ZoomControlBar(
+    oppoStyle: Boolean = false,
     viewModel: CameraViewModel,
     zoomRatio: Float,
     availableCameras: List<CameraInfo>,
@@ -402,13 +403,13 @@ private fun ZoomRuler(
                 val isSelected = index == selectedStopIndex && abs(stop - zoomRatio) <= 0.01f
 
                 // 显示文本
-                val text = when (displayMode) {
-                    ZoomDisplayMode.ZOOM_RATIO -> {
-                        formatZoomRatioLabel(stop)
-                    }
-
-                    ZoomDisplayMode.FOCAL_LENGTH -> {
-                        zoomRatioToFocalLength(stop, mainCamera)
+                val text = if (oppoStyle) {
+                    if (isSelected) zoomRatioToFocalLength(stop, mainCamera)
+                    else formatZoomRatioLabel(stop)
+                } else {
+                    when (displayMode) {
+                        ZoomDisplayMode.ZOOM_RATIO -> formatZoomRatioLabel(stop)
+                        ZoomDisplayMode.FOCAL_LENGTH -> zoomRatioToFocalLength(stop, mainCamera)
                     }
                 } + if (item.isCustomLensStop) "*" else ""
 
