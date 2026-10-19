@@ -1583,6 +1583,8 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     val preferredMacroCameraId: Flow<String?> = userPreferencesRepository.userPreferences.map { it.preferredMacroCameraId }
     val enableLogicalMultiCameraDiscovery: Flow<Boolean> =
         userPreferencesRepository.userPreferences.map { it.enableLogicalMultiCameraDiscovery }
+    val keepUltraWideReadyEnabled: Flow<Boolean> =
+        userPreferencesRepository.userPreferences.map { it.keepUltraWideReadyEnabled }
     val logicalCameraBindingWhitelist: Flow<List<String>> =
         userPreferencesRepository.userPreferences.map { it.logicalCameraBindingWhitelist }
     val userPreferences: StateFlow<UserPreferences> = userPreferencesRepository.userPreferences
@@ -1957,6 +1959,12 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         private set
 
     init {
+        viewModelScope.launch {
+            userPreferencesRepository.userPreferences
+                .map { it.keepUltraWideReadyEnabled }
+                .distinctUntilChanged()
+                .collect { cameraController.setKeepUltraWideReadyEnabled(it) }
+        }
         cameraController.onEnhancedStabilizationUnavailable = { fallback ->
             viewModelScope.launch(Dispatchers.Main.immediate) {
                 showEnhancedStabilizationUnavailableDialog = true
@@ -5845,6 +5853,13 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         viewModelScope.launch {
             userPreferencesRepository.saveEnableLogicalMultiCameraDiscovery(enabled)
             cameraController.refreshCameraList()
+        }
+    }
+
+    fun setKeepUltraWideReadyEnabled(enabled: Boolean) {
+        viewModelScope.launch {
+            userPreferencesRepository.saveKeepUltraWideReadyEnabled(enabled)
+            cameraController.setKeepUltraWideReadyEnabled(enabled)
         }
     }
 
