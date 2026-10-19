@@ -6841,6 +6841,15 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     /**
      * 设置背景图
      */
+    val uiStyle: StateFlow<String> = userPreferencesRepository.userPreferences
+        .map { it.uiStyle }
+        .stateIn(viewModelScope, SharingStarted.Eagerly, "ORIGINAL")
+
+    fun setUiStyle(style: String) {
+        if (style !in setOf("ORIGINAL", "OPPO", "ONE_UI", "CUSTOM")) return
+        viewModelScope.launch { userPreferencesRepository.saveUiStyle(style) }
+    }
+
     fun setBackgroundImage(image: String) {
         viewModelScope.launch {
             userPreferencesRepository.saveBackgroundImage(image)
