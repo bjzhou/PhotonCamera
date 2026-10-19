@@ -1795,7 +1795,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         .stateIn(viewModelScope, SharingStarted.Eagerly, DevelopAnimationStyle.FILM)
     val backgroundImage: StateFlow<String> = userPreferencesRepository.userPreferences
         .map { it.backgroundImage }
-        .stateIn(viewModelScope, SharingStarted.Eagerly, "camera_bg")
+        .stateIn(viewModelScope, SharingStarted.Eagerly, "camera_bg_black")
     val captureButtonStyle: StateFlow<CaptureButtonStyle> = userPreferencesRepository.userPreferences
         .map { it.captureButtonStyle }
         .stateIn(viewModelScope, SharingStarted.Eagerly, CaptureButtonStyle.DEFAULT)
