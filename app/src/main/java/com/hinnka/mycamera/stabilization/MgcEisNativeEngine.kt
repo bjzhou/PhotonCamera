@@ -14,6 +14,13 @@ import java.io.File
  * `libgcastartup.so`. Camera2 OIS shifts or API-35 dynamic intrinsics are interpolated on the same
  * rolling-shutter row timestamps and applied only to the real-camera projection.
  */
+// The reconstructed MGC method-4 pose/crop solver is only stable with a
+// three-frame minimum. Keep the UI's 0..10 range intact, but use a safe
+// internal window for 0..2 rather than feeding the solver a window that can
+// produce unusable preview warps (black viewfinder).
+internal fun effectiveStabilizationLookahead(lookahead: Int): Int =
+    normalizeStabilizationLookahead(lookahead).coerceAtLeast(3)
+
 internal class MgcEisNativeEngine(cacheDirectory: File) {
     companion object {
         private const val TAG = "MgcEisNativeEngine"
@@ -70,7 +77,14 @@ internal class MgcEisNativeEngine(cacheDirectory: File) {
             return frameWidth == width && frameHeight == height
         }
         if (width <= 0 || height <= 0) return false
-        val normalizedLookahead = normalizeStabilizationLookahead(lookaheadFrames)
+        val requestedLookahead = normalizeStabilizationLookahead(lookaheadFrames)
+        val normalizedLookahead = effectiveStabilizationLookahead(requestedLookahead)
+        if (normalizedLookahead != requestedLookahead) {
+            PLog.w(
+                TAG,
+                "EIS+ requested lookahead=$requestedLookahead; using safe internal window=$normalizedLookahead to prevent black preview",
+            )
+        }
         return try {
             val created = MgcEisNativeBridge.create(
                 width,
