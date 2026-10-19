@@ -195,8 +195,9 @@ fun ZoomControlBar(
                             change.consume()
                             lastInteractionTime = System.currentTimeMillis()
                             // 使用指数变焦公式计算新倍率
-                            // Increase continuous zoom response by 50% while keeping logarithmic scaling.
-                            val sensitivity = 0.003f
+                            // Match Oppocam's 1.35x zoom-slider sensitivity multiplier while retaining
+                            // this slider's logarithmic zoom mapping.
+                            val sensitivity = 0.0027f
                             val newZoom = (internalZoomRatio * exp(-dragAmount.toDouble() * sensitivity).toFloat()).coerceIn(minZoom, maxZoom)
                             internalZoomRatio = newZoom
                             
