@@ -316,6 +316,7 @@ fun ZoomControlBar(
                     )
                 }
                 ZoomRuler(
+                    oppoStyle = oppoStyle,
                     zoomRatio = internalZoomRatio,
                     stopItems = stopItems,
                     macroCameras = macroCameras,
@@ -355,6 +356,7 @@ private fun buildEffectiveZoomStops(
 
 @Composable
 private fun ZoomRuler(
+    oppoStyle: Boolean,
     zoomRatio: Float,
     stopItems: List<ZoomStopItem>,
     macroCameras: List<CameraInfo>,
@@ -365,7 +367,7 @@ private fun ZoomRuler(
     onLensSwitch: (String) -> Unit,
     modifier: Modifier = Modifier
 ) {
-    val activeColor = AccentColor
+    val activeColor = if (oppoStyle) Color(0xFFFF8500) else AccentColor
     val inactiveColor = Color.White
 
     val stopsState by rememberUpdatedState(stopItems)
