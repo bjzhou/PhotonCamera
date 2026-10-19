@@ -5017,17 +5017,35 @@ class Camera2Controller(private val context: Context) {
                 return
             }
 
+            val enhancedPhotoPreview = state.photoPreviewStabilizationEnabled && !isCapture
+
+            // EIS+ performs its own frame correction in Photo preview. Explicitly request
+            // Camera2 video stabilization OFF as well; preview templates on some HALs can
+            // otherwise leave vendor stabilization active, which the coordinator correctly
+            // interprets as a double-stabilization conflict and shuts EIS+ down for.
+            if (enhancedPhotoPreview &&
+                isCaptureRequestKeyAvailable(CaptureRequest.CONTROL_VIDEO_STABILIZATION_MODE.name) &&
+                availableVideoStabilizationModes.contains(
+                    CaptureRequest.CONTROL_VIDEO_STABILIZATION_MODE_OFF,
+                )
+            ) {
+                builder.set(
+                    CaptureRequest.CONTROL_VIDEO_STABILIZATION_MODE,
+                    CaptureRequest.CONTROL_VIDEO_STABILIZATION_MODE_OFF,
+                )
+            }
+
             if (availableOpticalStabilizationModes.contains(CaptureRequest.LENS_OPTICAL_STABILIZATION_MODE_ON)) {
                 builder.set(
                     CaptureRequest.LENS_OPTICAL_STABILIZATION_MODE,
-                    if (state.photoPreviewStabilizationEnabled && !isCapture) {
+                    if (enhancedPhotoPreview) {
                         CaptureRequest.LENS_OPTICAL_STABILIZATION_MODE_OFF
                     } else {
                         CaptureRequest.LENS_OPTICAL_STABILIZATION_MODE_ON
                     }
                 )
             }
-            applyOisDataMode(builder, state.photoPreviewStabilizationEnabled && !isCapture)
+            applyOisDataMode(builder, enhancedPhotoPreview)
         } catch (e: Exception) {
             PLog.e(TAG, "Failed to apply stabilization settings", e)
         }
