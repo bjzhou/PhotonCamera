@@ -2143,6 +2143,7 @@ private fun Controls(
             Spacer(modifier = Modifier.height(CameraControlsLayoutDefaults.ModeSwitcherSpacing))
 
             CaptureModeSwitcher(
+                oppoStyle = uiStyle == "OPPO",
                 // Pro/RAW remains an internal capture option, but is no longer a
                 // separate item in the visible Photo/Video mode switcher.
                 shootingMode = if (state.captureMode == CaptureMode.VIDEO) {
@@ -2475,6 +2476,7 @@ private fun rememberPhotoCaptureProgress(progress: PhotoCaptureProgress?): State
 
 @Composable
 private fun CaptureModeSwitcher(
+    oppoStyle: Boolean,
     shootingMode: CameraShootingMode,
     enabled: Boolean,
     onModeSelected: (CameraShootingMode) -> Unit
@@ -2484,10 +2486,10 @@ private fun CaptureModeSwitcher(
             .width(228.dp)
             .height(CameraControlsLayoutDefaults.ModeSwitcherHeight)
             .clip(RoundedCornerShape(18.dp))
-            .background(Color.Black.copy(alpha = 0.28f))
+            .background(if (oppoStyle) Color(0xFF202020) else Color.Black.copy(alpha = 0.28f))
             .border(
                 width = 0.5.dp,
-                color = Color.White.copy(alpha = 0.18f),
+                color = if (oppoStyle) Color(0xFF333333) else Color.White.copy(alpha = 0.18f),
                 shape = RoundedCornerShape(18.dp)
             )
             .padding(3.dp)
@@ -2502,7 +2504,7 @@ private fun CaptureModeSwitcher(
             label = "modeSwitcher"
         )
         val selectedBackground by animateColorAsState(
-            targetValue = Color.White,
+            targetValue = if (oppoStyle) Color(0xFF303030) else Color.White,
             animationSpec = tween(durationMillis = 220),
             label = "modeSwitcherColor"
         )
@@ -2519,18 +2521,22 @@ private fun CaptureModeSwitcher(
             verticalAlignment = Alignment.CenterVertically
         ) {
             ModeSwitcherItem(
-                label = stringResource(R.string.capture_mode_photo),
+                label = stringResource(R.string.capture_mode_photo) +
+                    if (oppoStyle && shootingMode != CameraShootingMode.VIDEO) " ▴" else "",
                 selected = shootingMode != CameraShootingMode.VIDEO,
                 enabled = enabled,
                 onClick = { onModeSelected(CameraShootingMode.PHOTO) },
-                modifier = Modifier.weight(1f)
+                modifier = Modifier.weight(1f),
+                selectedContentColor = if (oppoStyle) Color(0xFFFF9A32) else Color.Black
             )
             ModeSwitcherItem(
-                label = stringResource(R.string.capture_mode_video),
+                label = stringResource(R.string.capture_mode_video) +
+                    if (oppoStyle && shootingMode == CameraShootingMode.VIDEO) " ▴" else "",
                 selected = shootingMode == CameraShootingMode.VIDEO,
                 enabled = enabled,
                 onClick = { onModeSelected(CameraShootingMode.VIDEO) },
-                modifier = Modifier.weight(1f)
+                modifier = Modifier.weight(1f),
+                selectedContentColor = if (oppoStyle) Color(0xFFFF9A32) else Color.Black
             )
         }
     }
