@@ -1516,13 +1516,7 @@ fun CameraScreen(
                             .width(xpanSideWidth),
                         contentAlignment = Alignment.Center
                     ) {
-                        CameraParameterBarVerticel(
-                            state = state,
-                            selectedParameter = selectedParameter.takeIf {
-                                showParameterRuler
-                            },
-                            onParameterClick = onParameterClick,
-                        )
+                        // Manual parameter controls are intentionally hidden in the camera UI.
                     }
                 }
             }
@@ -1624,32 +1618,10 @@ fun CameraScreen(
                         zoomBar()
                     }
                 },
-                parameterRuler = {
-                    AnimatedVisibility(
-                        visible = showParameterRuler,
-                        enter = expandVertically(
-                            animationSpec = tween(220, easing = FastOutSlowInEasing),
-                            expandFrom = Alignment.Bottom
-                        ) + fadeIn(tween(160)),
-                        exit = shrinkVertically(
-                            animationSpec = tween(180, easing = FastOutSlowInEasing),
-                            shrinkTowards = Alignment.Bottom
-                        ) + fadeOut(tween(120))
-                    ) {
-                        parameterRuler(
-                            Modifier
-                                .then(if (isXpan) Modifier.width(viewfinderContentWidth) else Modifier)
-                                .onGloballyPositioned { coordinates ->
-                                    parameterRulerBounds = coordinates.boundsInRoot()
-                                }
-                        )
-                    }
-                },
-                parameterBar = {
-                    if (!isXpan) {
-                        parameterBar(selectedParameter.takeIf { showParameterRuler }, onParameterClick)
-                    }
-                },
+                // Hide the manual controls (EV/Tv/ISO/AF/AWB and their value ruler)
+                // in both Photo and Video modes without changing capture functionality.
+                parameterRuler = {},
+                parameterBar = {},
                 captureControls = {
                     controls(Modifier.fillMaxWidth())
                 }
