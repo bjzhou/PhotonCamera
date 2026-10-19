@@ -195,7 +195,8 @@ fun ZoomControlBar(
                             change.consume()
                             lastInteractionTime = System.currentTimeMillis()
                             // 使用指数变焦公式计算新倍率
-                            val sensitivity = 0.002f
+                            // Increase continuous zoom response by 50% while keeping logarithmic scaling.
+                            val sensitivity = 0.003f
                             val newZoom = (internalZoomRatio * exp(-dragAmount.toDouble() * sensitivity).toFloat()).coerceIn(minZoom, maxZoom)
                             internalZoomRatio = newZoom
                             
