@@ -349,6 +349,7 @@ fun SettingsScreen(
     val preferredMainCameraId by viewModel.preferredMainCameraId.collectAsState(initial = null)
     val preferredMacroCameraId by viewModel.preferredMacroCameraId.collectAsState(initial = null)
     val enableLogicalMultiCameraDiscovery by viewModel.enableLogicalMultiCameraDiscovery.collectAsState(initial = false)
+    val keepUltraWideReadyEnabled by viewModel.keepUltraWideReadyEnabled.collectAsState(initial = false)
     val logicalCameraBindingWhitelist by viewModel.logicalCameraBindingWhitelist.collectAsState(initial = emptyList())
     val jpgMultiFrameDenoiseFrameCount by viewModel.jpgMultiFrameDenoiseFrameCount.collectAsState()
     val jpgMultiFrameDenoiseOutputScale by viewModel.jpgMultiFrameDenoiseOutputScale.collectAsState()
@@ -1340,6 +1341,18 @@ fun SettingsScreen(
                     SettingsSection(
                         title = stringResource(R.string.settings_focus_lens_group_lens_discovery)
                     ) {
+                        SwitchSettingItem(
+                            title = "Keep Ultra-Wide Lens Ready",
+                            description = "Keeps the rear ultra-wide lens warmed in the background when concurrent camera streams are supported. Uses extra power; unsupported combinations are skipped safely.",
+                            checked = keepUltraWideReadyEnabled,
+                            onCheckedChange = { viewModel.setKeepUltraWideReadyEnabled(it) }
+                        )
+
+                        HorizontalDivider(
+                            color = Color.White.copy(alpha = 0.1f),
+                            modifier = Modifier.padding(vertical = 8.dp)
+                        )
+
                         SwitchSettingItem(
                             title = stringResource(R.string.settings_logical_multi_camera_discovery),
                             description = stringResource(R.string.settings_logical_multi_camera_discovery_description),
