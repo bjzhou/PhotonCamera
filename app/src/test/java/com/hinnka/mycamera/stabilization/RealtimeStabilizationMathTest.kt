@@ -15,13 +15,13 @@ class RealtimeStabilizationMathTest {
     }
 
     @Test
-    fun subThreeLookaheadUsesSafeEisSolverWindow() {
-        assertEquals(3, effectiveStabilizationLookahead(0))
-        assertEquals(3, effectiveStabilizationLookahead(1))
-        assertEquals(3, effectiveStabilizationLookahead(2))
-        assertEquals(3, effectiveStabilizationLookahead(3))
-        assertEquals(10, effectiveStabilizationLookahead(10))
-        assertEquals(10, effectiveStabilizationLookahead(11))
+    fun lookaheadZeroToTwoRemainsSelectedWithoutInternalFallback() {
+        assertEquals(0, normalizeStabilizationLookahead(0))
+        assertEquals(1, normalizeStabilizationLookahead(1))
+        assertEquals(2, normalizeStabilizationLookahead(2))
+        assertEquals(3, normalizeStabilizationLookahead(3))
+        assertEquals(10, normalizeStabilizationLookahead(10))
+        assertEquals(10, normalizeStabilizationLookahead(11))
     }
 
     @Test
