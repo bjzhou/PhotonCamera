@@ -227,6 +227,7 @@ fun CameraScreen(
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val state by viewModel.state.collectAsState()
+    val uiStyle by viewModel.uiStyle.collectAsState()
     val isCameraInitialized by viewModel.isInitialized.collectAsState()
     val latestPhoto by galleryViewModel.latestPhoto.collectAsState()
     val showLevelIndicator by viewModel.showLevelIndicator.collectAsState(initial = false)
@@ -952,6 +953,7 @@ fun CameraScreen(
             if (activePanel == ActivePanel.NONE && !isXpan) {
                 ZoomControlBar(
                     viewModel = viewModel,
+                    oppoStyle = uiStyle == "OPPO",
                     zoomRatio = viewModel.zoomRatioByMain,
                     availableCameras = state.availableCameras,
                     currentCameraId = state.getCurrentCameraInfo()?.cameraId ?: "0",
@@ -1527,6 +1529,7 @@ fun CameraScreen(
         val controls = @Composable { modifier: Modifier ->
             Controls(
                 state = state,
+                uiStyle = uiStyle,
                 viewModel = viewModel,
                 galleryViewModel = galleryViewModel,
                 latestPhoto = latestPhoto,
@@ -1601,6 +1604,18 @@ fun CameraScreen(
                 contentAlignment = Alignment.Center
             ) {
                 viewfinder()
+                if (uiStyle == "OPPO" && activePanel == ActivePanel.NONE && !isXpan) {
+                    Box(
+                        modifier = Modifier
+                            .align(Alignment.BottomCenter)
+                            .fillMaxWidth()
+                            .padding(bottom = 8.dp)
+                            .height(CameraControlsLayoutDefaults.ZoomBarHeight),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        zoomBar()
+                    }
+                }
             }
 
             topBar()
@@ -1611,12 +1626,16 @@ fun CameraScreen(
                 zoomBar = {
                     // Panel visibility changes the zoom content, not the space used to
                     // position the parameter row beneath it. XPAN has no horizontal bar.
-                    Box(
-                        modifier = if (isXpan) Modifier else Modifier
-                            .fillMaxWidth()
-                            .height(CameraControlsLayoutDefaults.ZoomBarHeight)
-                    ) {
-                        zoomBar()
+                    if (uiStyle != "OPPO" || isXpan) {
+                        Box(
+                            modifier = if (isXpan) Modifier else Modifier
+                                .fillMaxWidth()
+                                .height(CameraControlsLayoutDefaults.ZoomBarHeight)
+                        ) {
+                            zoomBar()
+                        }
+                    } else {
+                        Spacer(modifier = Modifier.height(0.dp))
                     }
                 },
                 // Hide the manual controls (EV/Tv/ISO/AF/AWB and their value ruler)
@@ -1957,6 +1976,7 @@ fun MultipleExposureOverlay(
 @Composable
 private fun Controls(
     state: CameraState,
+    uiStyle: String,
     viewModel: CameraViewModel,
     galleryViewModel: GalleryViewModel,
     latestPhoto: com.hinnka.mycamera.gallery.MediaData?,
@@ -2037,8 +2057,16 @@ private fun Controls(
                     multipleExposureEnabled = useMultipleExposure && state.captureMode == CaptureMode.PHOTO,
                     multipleExposureProgress = multipleExposureState.capturedCount.toFloat() /
                             multipleExposureState.targetCount.coerceAtLeast(1).toFloat(),
-                    customStyle = captureButtonStyle,
-                    customColor = captureButtonColor,
+                    customStyle = if (uiStyle == "OPPO" && state.captureMode != CaptureMode.VIDEO) {
+                        CaptureButtonStyle.COLOR
+                    } else {
+                        captureButtonStyle
+                    },
+                    customColor = if (uiStyle == "OPPO" && state.captureMode != CaptureMode.VIDEO) {
+                        0xFFFF8500.toInt()
+                    } else {
+                        captureButtonColor
+                    },
                     customImagePath = captureButtonImagePath,
                     onTap = onCaptureTap,
                     onLongPressStart = { viewModel.startContinuousCapture() },
