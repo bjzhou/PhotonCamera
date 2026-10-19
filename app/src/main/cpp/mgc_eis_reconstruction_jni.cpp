@@ -75,7 +75,7 @@ Java_com_hinnka_mycamera_stabilization_MgcEisNativeBridge_create(
     config.crop_width = width;
     config.crop_height = height;
     config.num_strips = kMgcProfileStripCount;
-    config.lookahead_frames = std::clamp(static_cast<int>(lookahead_frames), 3, 10);
+    config.lookahead_frames = std::clamp(static_cast<int>(lookahead_frames), 0, 10);
     config.stabilization_strength =
         std::clamp(static_cast<double>(strength), 0.0, 1.0);
     return toJlong(
