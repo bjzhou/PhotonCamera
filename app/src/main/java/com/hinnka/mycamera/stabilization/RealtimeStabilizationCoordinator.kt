@@ -792,28 +792,20 @@ class RealtimeStabilizationCoordinator(context: Context) {
         }
         val videoConflict = actualVideoMode != null &&
             actualVideoMode != CaptureRequest.CONTROL_VIDEO_STABILIZATION_MODE_OFF
-        val opticalStabilizationActive = if (actualOpticalMode != null) {
-            actualOpticalMode != CaptureRequest.LENS_OPTICAL_STABILIZATION_MODE_OFF
-        } else {
-            requestedOpticalMode == CaptureRequest.LENS_OPTICAL_STABILIZATION_MODE_ON
-        }
-        val opticalConflict = opticalStabilizationActive &&
-            !opticalCorrectionAccepted
-        if (!videoConflict && !opticalConflict) {
+        // OIS being active is not, by itself, a fatal EIS+ conflict. Many camera HALs
+        // keep optical stabilization enabled on the main lens even after an OFF request,
+        // and may omit OIS samples. EIS and OIS are commonly used together; shutting down
+        // EIS+ merely because optical correction telemetry is missing causes the persistent
+        // "EIS+ unavailable" loop on those devices. Only treat the HAL's *electronic/video*
+        // stabilization being active as a fatal conflict, since that would stack two EIS
+        // transforms and is the source of severe crop/jitter.
+        if (!videoConflict) {
             consecutiveHalStabilizationConflictCount = 0
             return false
         }
         consecutiveHalStabilizationConflictCount += 1
-        val confirmationFrameCount = if (videoConflict) {
+        return consecutiveHalStabilizationConflictCount >=
             HAL_STABILIZATION_CONFLICT_CONFIRMATION_FRAME_COUNT
-        } else {
-            // OIS telemetry may arrive later than the first capture results. Do not
-            // classify forced OIS as a conflict until the full native lookahead and grace
-            // frames have elapsed, otherwise the first valid correction samples never arrive
-            // before EIS+ is shut down.
-            HAL_OPTICAL_CORRECTION_PROBE_FRAME_COUNT
-        }
-        return consecutiveHalStabilizationConflictCount >= confirmationFrameCount
     }
 
     private fun disableEnhancedStabilizationLocked(
