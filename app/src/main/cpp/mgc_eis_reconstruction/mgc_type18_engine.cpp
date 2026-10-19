@@ -283,7 +283,7 @@ private:
            config_.active_array_width > 0 &&
            config_.active_array_height > 0 && config_.crop_width > 0 &&
            config_.crop_height > 0 && config_.num_strips == 12 &&
-           config_.lookahead_frames >= 3 && config_.lookahead_frames <= 10 &&
+           config_.lookahead_frames >= 0 && config_.lookahead_frames <= 10 &&
            config_.lookahead_frames == parameters_.half_window_frames &&
            config_.stabilization_strength >= 0.0 &&
            config_.stabilization_strength <= 1.0;
