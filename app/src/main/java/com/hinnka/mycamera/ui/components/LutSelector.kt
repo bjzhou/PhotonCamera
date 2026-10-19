@@ -278,17 +278,8 @@ fun LutSelector(
         }
     }
 
-    val filteredLuts = remember(selectedCategory, availableLuts) {
-        when (selectedCategory) {
-            LutCategoryTab.Favorite -> availableLuts.filter { it.isFavorite }
-            LutCategoryTab.BuiltIn -> availableLuts.filter { it.isBuiltIn }
-            LutCategoryTab.Uncategorized -> availableLuts.filter { !it.isBuiltIn && it.category.isEmpty() }
-            is LutCategoryTab.Category -> {
-                val categoryName = (selectedCategory as LutCategoryTab.Category).name
-                availableLuts.filter { it.category == categoryName }
-            }
-        }
-    }
+    // Show imported and built-in LUTs together; category tabs are intentionally removed.
+    val filteredLuts = remember(availableLuts) { availableLuts }
 
     // 在组件首次加载时滚动到当前选中的 LUT
     LaunchedEffect(activeLutId, actualMode, filteredLuts) {
@@ -487,39 +478,6 @@ fun LutSelector(
                         modifier = Modifier.fillMaxWidth(),
                         verticalArrangement = Arrangement.spacedBy(10.dp)
                     ) {
-                        // 分类使用白色文字保证取景画面上的可读性，选中项以金色区分。
-                        LazyRow(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.spacedBy(8.dp),
-                            contentPadding = PaddingValues(horizontal = 8.dp)
-                        ) {
-                            items(categoryTabs, key = { it.stableKey() }) { category ->
-                                val isSelected = selectedCategory == category
-                                val categoryName = when (category) {
-                                    LutCategoryTab.Favorite -> favoriteText
-                                    LutCategoryTab.BuiltIn -> builtInText
-                                    LutCategoryTab.Uncategorized -> uncategorizedText
-                                    is LutCategoryTab.Category -> category.name
-                                }
-
-                                Text(
-                                    text = categoryName,
-                                    color = if (isSelected) AccentColor else Color.White,
-                                    fontSize = 11.sp,
-                                    fontWeight = if (isSelected) FontWeight.SemiBold else FontWeight.Medium,
-                                    style = LocalTextStyle.current.copy(shadow = ViewfinderTextShadow),
-                                    modifier = Modifier
-                                        .clickable(
-                                            interactionSource = remember { MutableInteractionSource() },
-                                            indication = null
-                                        ) {
-                                            selectedCategory = category
-                                        }
-                                        .padding(horizontal = 9.dp, vertical = 3.dp)
-                                )
-                            }
-                        }
-
                         LazyRow(
                             modifier = Modifier.fillMaxWidth(),
                             horizontalArrangement = Arrangement.spacedBy(8.dp),
