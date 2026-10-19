@@ -235,6 +235,19 @@ class Camera2Controller(private val context: Context) {
     // Isolated Keep Ultra-Wide Ready feature: only warms a standby camera when Android
     // explicitly declares the active/standby pair concurrent. No zoom transitions are attached.
     private val backgroundUltraWideReady = BackgroundUltraWideReady(context)
+    @Volatile private var keepUltraWideReadyEnabled = false
+
+    fun setKeepUltraWideReadyEnabled(enabled: Boolean) {
+        keepUltraWideReadyEnabled = enabled
+        if (!enabled) {
+            backgroundUltraWideReady.stop()
+        } else {
+            val current = _state.value
+            if (current.isPreviewActive) {
+                backgroundUltraWideReady.update(current.availableCameras, current.currentCameraId, cameraDevice?.id)
+            }
+        }
+    }
 
     // --- 拍照状态机相关 ---
 
@@ -3812,11 +3825,15 @@ class Camera2Controller(private val context: Context) {
             }
 
             _state.value = _state.value.copy(isPreviewActive = true)
-            backgroundUltraWideReady.update(
-                cameras = _state.value.availableCameras,
-                currentCameraId = _state.value.currentCameraId,
-                activeOpenCameraId = cameraDevice?.id,
-            )
+            if (keepUltraWideReadyEnabled) {
+                backgroundUltraWideReady.update(
+                    cameras = _state.value.availableCameras,
+                    currentCameraId = _state.value.currentCameraId,
+                    activeOpenCameraId = cameraDevice?.id,
+                )
+            } else {
+                backgroundUltraWideReady.stop()
+            }
             PLog.d(TAG, "Preview started")
 
         } catch (e: CameraAccessException) {
