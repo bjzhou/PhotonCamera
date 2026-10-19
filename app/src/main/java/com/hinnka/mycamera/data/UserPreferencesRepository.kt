@@ -2258,7 +2258,7 @@ class UserPreferencesRepository(private val context: Context) {
      * 保存背景图
      */
     suspend fun saveUiStyle(style: String) {
-        dataStore.edit { preferences -> preferences[UI_STYLE] = style }
+        context.dataStore.edit { preferences -> preferences[UI_STYLE] = style }
     }
 
     suspend fun saveBackgroundImage(image: String) {
