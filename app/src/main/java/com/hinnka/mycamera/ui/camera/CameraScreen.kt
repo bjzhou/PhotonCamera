@@ -959,7 +959,8 @@ fun CameraScreen(
                     onZoomStopClick = { animateZoomStopWithPreviewTransition(it) },
                     onLensSwitch = { lensId -> switchToLensWithPreviewTransition(lensId) },
                     onFilterClick = {
-                        activePanel = if (activePanel == ActivePanel.FILTERS) ActivePanel.NONE else ActivePanel.FILTERS
+                        // Skip the LUT browser and open Edit directly.
+                        activePanel = if (activePanel == ActivePanel.EDIT) ActivePanel.NONE else ActivePanel.EDIT
                     },
                     onFilterButtonBoundsChanged = { bounds ->
                         filterButtonBounds = bounds
@@ -1502,8 +1503,8 @@ fun CameraScreen(
                             onZoomStopClick = { animateZoomStopWithPreviewTransition(it) },
                             onLensSwitch = { lensId -> switchToLensWithPreviewTransition(lensId) },
                             onFilterClick = {
-                                activePanel =
-                                    if (activePanel == ActivePanel.FILTERS) ActivePanel.NONE else ActivePanel.FILTERS
+                                // Match the horizontal layout: open Edit directly, without the LUT browser.
+                                activePanel = if (activePanel == ActivePanel.EDIT) ActivePanel.NONE else ActivePanel.EDIT
                             },
                             onFilterButtonBoundsChanged = { bounds ->
                                 filterButtonBounds = bounds
@@ -1841,7 +1842,7 @@ fun CameraScreen(
                 showEffects = true,
                 onDismiss = {
                     previewRecipeParamsOverride = null
-                    activePanel = ActivePanel.FILTERS
+                    activePanel = ActivePanel.NONE
                 }
             )
         }
