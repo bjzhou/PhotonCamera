@@ -280,6 +280,7 @@ data class UserPreferences(
     val preferredMainCameraId: String? = null, // 用户选择的主摄 ID
     val preferredMacroCameraId: String? = null, // 用户选择的微距镜头 ID
     val enableLogicalMultiCameraDiscovery: Boolean = false, // 是否自动探测逻辑多摄物理镜头绑定
+    val keepUltraWideReadyEnabled: Boolean = false,
     val logicalCameraBindingWhitelist: List<String> = emptyList(), // 强制启用的逻辑/物理镜头绑定，格式 logical/physical
     val hiddenFocalLengths: List<Float> = emptyList(), // 隐藏的焦段 (35mm等效)
     val referencePhotoUrl: String? = null,
@@ -568,6 +569,7 @@ class UserPreferencesRepository(private val context: Context) {
         private val PREFERRED_MAIN_CAMERA_ID = stringPreferencesKey("preferred_main_camera_id")
         private val PREFERRED_MACRO_CAMERA_ID = stringPreferencesKey("preferred_macro_camera_id")
         private val ENABLE_LOGICAL_MULTI_CAMERA_DISCOVERY = booleanPreferencesKey("enable_logical_multi_camera_discovery")
+        private val KEEP_ULTRA_WIDE_READY_ENABLED = booleanPreferencesKey("keep_ultra_wide_ready_enabled")
         private val LOGICAL_CAMERA_BINDING_WHITELIST = stringPreferencesKey("logical_camera_binding_whitelist")
         private val HIDDEN_FOCAL_LENGTHS = stringPreferencesKey("hidden_focal_lengths")
         private val USE_HDR_SCREEN_MODE = booleanPreferencesKey("use_hdr_screen_mode")
@@ -946,6 +948,7 @@ class UserPreferencesRepository(private val context: Context) {
                 preferredMainCameraId = preferences[PREFERRED_MAIN_CAMERA_ID]?.takeIf { it.isNotBlank() },
                 preferredMacroCameraId = preferences[PREFERRED_MACRO_CAMERA_ID]?.takeIf { it.isNotBlank() },
                 enableLogicalMultiCameraDiscovery = preferences[ENABLE_LOGICAL_MULTI_CAMERA_DISCOVERY] ?: false,
+                keepUltraWideReadyEnabled = preferences[KEEP_ULTRA_WIDE_READY_ENABLED] ?: false,
                 logicalCameraBindingWhitelist = parseLogicalCameraBindingWhitelist(
                     preferences[LOGICAL_CAMERA_BINDING_WHITELIST]
                 ),
@@ -2071,6 +2074,12 @@ class UserPreferencesRepository(private val context: Context) {
     suspend fun saveEnableLogicalMultiCameraDiscovery(enabled: Boolean) {
         context.dataStore.edit { preferences ->
             preferences[ENABLE_LOGICAL_MULTI_CAMERA_DISCOVERY] = enabled
+        }
+    }
+
+    suspend fun saveKeepUltraWideReadyEnabled(enabled: Boolean) {
+        context.dataStore.edit { preferences ->
+            preferences[KEEP_ULTRA_WIDE_READY_ENABLED] = enabled
         }
     }
 
