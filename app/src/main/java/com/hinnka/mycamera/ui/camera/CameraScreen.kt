@@ -1801,8 +1801,11 @@ fun CameraScreen(
                 // LUT 选择器 (内嵌 Presets 列表与统一控制，无多余背景遮挡)
                 LutSelector(
                     availableLuts = if (isVideoLog) {
-                        // Keep the Log-video picker focused on the six bundled looks.
-                        viewModel.selectableLutList.filter { lut ->
+                        // Prefer the six requested Log looks when they are installed.
+                        // Never hide every LUT when bundled/custom LUT IDs differ or
+                        // those assets have not been added to this build yet.
+                        val allLuts = viewModel.selectableLutList
+                        val requestedLogLuts = allLuts.filter { lut ->
                             lut.id in setOf(
                                 "romance_neutral",
                                 "romance_soft1",
@@ -1812,6 +1815,7 @@ fun CameraScreen(
                                 "weddingpack1"
                             )
                         }
+                        requestedLogLuts.ifEmpty { allLuts }
                     } else viewModel.selectableLutList,
                     currentLutId = currentLutId,
                     thumbnail = viewModel.previewThumbnail,
