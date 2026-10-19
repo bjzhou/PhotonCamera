@@ -19,6 +19,7 @@ import androidx.compose.ui.platform.LocalView
 import androidx.core.view.WindowCompat
 import com.hinnka.mycamera.data.UserPreferencesRepository
 import com.hinnka.mycamera.model.AppAppearance
+import kotlinx.coroutines.flow.map
 
 private val DarkColorScheme = darkColorScheme(
     primary = DefaultAccentColor,
