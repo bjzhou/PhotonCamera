@@ -2,12 +2,15 @@ package com.hinnka.mycamera.camera
 
 import android.annotation.SuppressLint
 import android.content.Context
+import android.graphics.Rect
 import android.graphics.SurfaceTexture
 import android.hardware.camera2.CameraCaptureSession
 import android.hardware.camera2.CameraDevice
+import android.hardware.camera2.CameraCharacteristics
 import android.hardware.camera2.CameraManager
 import android.hardware.camera2.CaptureRequest
 import android.os.Build
+import android.os.SystemClock
 import android.os.Handler
 import android.os.HandlerThread
 import android.util.Size
@@ -41,6 +44,12 @@ internal class BackgroundUltraWideReady(context: Context) {
     @Volatile private var standbySurface: Surface? = null
     @Volatile private var standbyCameraId: String? = null
     @Volatile private var activeCameraId: String? = null
+    @Volatile private var requestedVisibleZoomRatio: Float = 1f
+    private var standbyLensInfo: CameraInfo? = null
+    private var standbyCharacteristics: CameraCharacteristics? = null
+    private var standbyRequestBuilder: CaptureRequest.Builder? = null
+    private var lastStandbyZoomRatio = Float.NaN
+    private var lastStandbyZoomUpdateAtMs = 0L
     private var pendingCameraTransfer: PendingCameraTransfer? = null
     private var transferredStateCallback: CameraDevice.StateCallback? = null
     @Volatile private var transferredDevice: CameraDevice? = null
@@ -99,12 +108,23 @@ internal class BackgroundUltraWideReady(context: Context) {
         }
     }
 
+    /** Keep the warmed lens framed for the current user-visible zoom, not its default wide FOV. */
+    fun updateVisibleZoomRatio(visibleZoomRatio: Float) {
+        if (!visibleZoomRatio.isFinite() || visibleZoomRatio <= 0f) return
+        requestedVisibleZoomRatio = visibleZoomRatio.coerceIn(0.1f, 100f)
+        handler.post { applyVisibleZoomRatioLocked(requestedVisibleZoomRatio, force = false) }
+    }
+
     fun update(
         cameras: List<CameraInfo>,
         currentCameraId: String,
         activeOpenCameraId: String?,
-        requestedSize: Size? = null
+        requestedSize: Size? = null,
+        visibleZoomRatio: Float? = null
     ) {
+        if (visibleZoomRatio != null && visibleZoomRatio.isFinite() && visibleZoomRatio > 0f) {
+            requestedVisibleZoomRatio = visibleZoomRatio.coerceIn(0.1f, 100f)
+        }
         handler.post {
             // Prefer the exact selected lens. Logical cameras commonly share the same open ID,
             // so matching logicalCameraId first can select the wrong lens for standby.
@@ -147,6 +167,7 @@ internal class BackgroundUltraWideReady(context: Context) {
             if (standbyCameraId == standbyId && standbyDevice != null && standbySession != null &&
                 activeCameraId == activeId
             ) {
+                applyVisibleZoomRatioLocked(requestedVisibleZoomRatio, force = false)
                 return@post
             }
 
@@ -154,9 +175,11 @@ internal class BackgroundUltraWideReady(context: Context) {
             activeCameraId = activeId
             val token = generation.incrementAndGet()
             try {
+                val characteristics = cameraManager.getCameraCharacteristics(standbyId)
+                standbyLensInfo = standby
+                standbyCharacteristics = characteristics
                 @Suppress("DEPRECATION")
-                val map = cameraManager.getCameraCharacteristics(standbyId)
-                    .get(android.hardware.camera2.CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP)
+                val map = characteristics.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP)
                 val sizes = map?.getOutputSizes(SurfaceTexture::class.java).orEmpty()
                 val targetSize = requestedSize ?: Size(640, 480)
                 // Prefer the selected photo viewfinder/video input dimensions when the standby
@@ -196,11 +219,13 @@ internal class BackgroundUltraWideReady(context: Context) {
                                             return
                                         }
                                         try {
-                                            val request = camera.createCaptureRequest(CameraDevice.TEMPLATE_PREVIEW)
+                                            val requestBuilder = camera.createCaptureRequest(CameraDevice.TEMPLATE_PREVIEW)
                                                 .apply { addTarget(surface) }
-                                                .build()
-                                            session.setRepeatingRequest(request, null, handler)
+                                            standbyRequestBuilder = requestBuilder
                                             standbySession = session
+                                            lastStandbyZoomRatio = Float.NaN
+                                            applyVisibleZoomRatioLocked(requestedVisibleZoomRatio, force = true)
+                                            session.setRepeatingRequest(requestBuilder.build(), null, handler)
                                             PLog.i(TAG, "Ultra-wide standby stream ready: cameraId=$standbyId, size=${chosenSize.width}x${chosenSize.height}")
                                         } catch (error: Exception) {
                                             PLog.w(TAG, "Could not start standby repeating stream: ${error.message}")
@@ -296,11 +321,60 @@ internal class BackgroundUltraWideReady(context: Context) {
         releaseLocked()
     }
 
+    private fun applyVisibleZoomRatioLocked(visibleZoomRatio: Float, force: Boolean) {
+        val session = standbySession ?: return
+        val builder = standbyRequestBuilder ?: return
+        val lens = standbyLensInfo ?: return
+        val characteristics = standbyCharacteristics ?: return
+        val targetRatio = (visibleZoomRatio / lens.displayIntrinsicZoomRatio.coerceAtLeast(0.01f))
+            .coerceIn(0.1f, 100f)
+        val now = SystemClock.uptimeMillis()
+        if (!force && !lastStandbyZoomRatio.isNaN() &&
+            kotlin.math.abs(targetRatio - lastStandbyZoomRatio) < 0.015f &&
+            now - lastStandbyZoomUpdateAtMs < 40L
+        ) return
+
+        try {
+            val appliedRatio: Float
+            val zoomRange = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                characteristics.get(CameraCharacteristics.CONTROL_ZOOM_RATIO_RANGE)
+            } else null
+            if (zoomRange != null) {
+                appliedRatio = targetRatio.coerceIn(zoomRange.lower, zoomRange.upper)
+                builder.set(CaptureRequest.CONTROL_ZOOM_RATIO, appliedRatio)
+            } else {
+                val activeArray = characteristics.get(CameraCharacteristics.SENSOR_INFO_ACTIVE_ARRAY_SIZE)
+                    ?: return
+                val maxDigitalZoom = characteristics.get(CameraCharacteristics.SCALER_AVAILABLE_MAX_DIGITAL_ZOOM)
+                    ?: 1f
+                appliedRatio = targetRatio.coerceIn(1f, maxDigitalZoom.coerceAtLeast(1f))
+                val width = (activeArray.width() / appliedRatio).toInt().coerceAtLeast(1)
+                val height = (activeArray.height() / appliedRatio).toInt().coerceAtLeast(1)
+                val left = activeArray.centerX() - width / 2
+                val top = activeArray.centerY() - height / 2
+                builder.set(
+                    CaptureRequest.SCALER_CROP_REGION,
+                    Rect(left, top, left + width, top + height)
+                )
+            }
+            session.setRepeatingRequest(builder.build(), null, handler)
+            lastStandbyZoomRatio = appliedRatio
+            lastStandbyZoomUpdateAtMs = now
+        } catch (error: Exception) {
+            PLog.w(TAG, "Could not update standby zoom: " + error.message)
+        }
+    }
+
     private fun releaseStandbyOutputLocked() {
         try { standbySurface?.release() } catch (_: Exception) {}
         standbySurface = null
         try { standbyTexture?.release() } catch (_: Exception) {}
         standbyTexture = null
+        standbyRequestBuilder = null
+        standbyLensInfo = null
+        standbyCharacteristics = null
+        lastStandbyZoomRatio = Float.NaN
+        lastStandbyZoomUpdateAtMs = 0L
     }
 
     private fun releaseLocked() {
