@@ -233,8 +233,8 @@ class Camera2Controller(private val context: Context) {
 
     private val cameraDiscovery = CameraDiscovery(context)
 
-    // Isolated Keep Ultra-Wide Ready feature: only warms a standby camera when Android
-    // explicitly declares the active/standby pair concurrent. No zoom transitions are attached.
+    // Keep Ultra-Wide Ready only warms a standby camera when Android explicitly declares
+    // the active/standby pair concurrent. Lens/zoom transitions stay in the UI layer.
     private val backgroundUltraWideReady = BackgroundUltraWideReady(context)
     @Volatile private var keepUltraWideReadyEnabled = false
 
