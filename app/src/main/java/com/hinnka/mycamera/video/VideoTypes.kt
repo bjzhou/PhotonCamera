@@ -103,6 +103,7 @@ enum class VideoLogProfile(
     val colorSpace: ColorSpace
 ) {
     OFF("Off", TransferCurve.SRGB, ColorSpace.SRGB),
+    HLG10("HLG10", TransferCurve.HLG, ColorSpace.BT2020),
     APPLE_LOG2("Apple-Log2", TransferCurve.APPLE_LOG, ColorSpace.AppleLog2),
     FLOG2_BT2020("F-Log2", TransferCurve.FLOG2, ColorSpace.BT2020),
     V_LOG("V-Log", TransferCurve.VLOG, ColorSpace.VGamut),
