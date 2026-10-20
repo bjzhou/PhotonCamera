@@ -40,10 +40,19 @@ object VideoCapabilitiesResolver {
         val yuvOutputSizes = streamConfigMap?.getOutputSizes(ImageFormat.YUV_420_888)?.toList().orEmpty()
         // Dedicated recording uses a SurfaceTexture input, including full-sensor sizes
         // that may not be advertised for MediaRecorder.
-        val recordingOutputSizes = if (requestedConfig.aspectRatio == VideoAspectRatio.OPEN_GATE) {
-            previewOutputSizes
-        } else {
-            resolveRecordingOutputSizes(characteristics)
+        val advertisedRecordingSizes = resolveRecordingOutputSizes(characteristics)
+        // Some front/ultra-wide sensors expose an ~8 MP 4:3 SurfaceTexture stream
+        // but do not advertise a 3840x2160 MediaRecorder stream. The app records
+        // through its SurfaceTexture + GL renderer, so use that sensor stream as
+        // the source and let the renderer crop/scale to the selected 4K output.
+        val hasNativeUhdRecorderSize = advertisedRecordingSizes.any {
+            maxOf(it.width, it.height) >= VideoResolutionPreset.UHD_2160P.longEdge
+        }
+        val hasEightMpFourThreeSource = previewOutputSizes.any(::isEightMpFourThreeSource)
+        val recordingOutputSizes = when {
+            requestedConfig.aspectRatio == VideoAspectRatio.OPEN_GATE -> previewOutputSizes
+            !hasNativeUhdRecorderSize && hasEightMpFourThreeSource -> previewOutputSizes
+            else -> advertisedRecordingSizes
         }
         val sensorOrientation = characteristics.get(CameraCharacteristics.SENSOR_ORIENTATION) ?: 0
         val activeArray = characteristics.get(CameraCharacteristics.SENSOR_INFO_ACTIVE_ARRAY_SIZE)
@@ -206,7 +215,7 @@ object VideoCapabilitiesResolver {
                 )
             }
         }
-        return outputSizes
+        val nativeSize = outputSizes
             .filter { maxOf(it.width, it.height) >= preset.longEdge }
             .sortedWith(
                 compareBy<Size> { abs(getPortraitAspectRatio(it) - targetAspect) }
@@ -214,6 +223,27 @@ object VideoCapabilitiesResolver {
                     .thenByDescending { it.width.toLong() * it.height.toLong() }
             )
             .firstOrNull()
+        if (nativeSize != null) return nativeSize
+
+        // UHD is an encoded output preset, not a requirement that the sensor itself
+        // produce 8.3 MP. If the camera exposes a genuine ~8 MP 4:3 source, allow it
+        // and crop/scale in RealtimeVideoRenderer to the 4K 16:9 (or portrait 9:16)
+        // encoder surface. Do not offer this fallback for smaller sensors.
+        if (preset == VideoResolutionPreset.UHD_2160P) {
+            return outputSizes
+                .filter(::isEightMpFourThreeSource)
+                .maxByOrNull { it.width.toLong() * it.height.toLong() }
+        }
+        return null
+    }
+
+    private fun isEightMpFourThreeSource(size: Size): Boolean {
+        if (size.width <= 0 || size.height <= 0) return false
+        val pixels = size.width.toLong() * size.height.toLong()
+        val aspect = getPortraitAspectRatio(size)
+        return pixels >= 7_500_000L &&
+            pixels < 12_000_000L &&
+            abs(aspect - (3f / 4f)) <= 0.04f
     }
 
     private fun findFixedPreviewOutputSize(
