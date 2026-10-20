@@ -51,8 +51,7 @@ object VideoCapabilitiesResolver {
         val hasEightMpFourThreeSource = previewOutputSizes.any(::isEightMpFourThreeSource)
         val recordingOutputSizes = when {
             requestedConfig.aspectRatio == VideoAspectRatio.OPEN_GATE -> previewOutputSizes
-            requestedConfig.resolution == VideoResolutionPreset.UHD_2160P &&
-                !hasNativeUhdRecorderSize && hasEightMpFourThreeSource -> previewOutputSizes
+            !hasNativeUhdRecorderSize && hasEightMpFourThreeSource -> previewOutputSizes
             else -> advertisedRecordingSizes
         }
         val sensorOrientation = characteristics.get(CameraCharacteristics.SENSOR_ORIENTATION) ?: 0
