@@ -16,11 +16,12 @@ import com.hinnka.mycamera.utils.PLog
 import java.util.concurrent.atomic.AtomicInteger
 
 /**
- * Keeps the non-active rear lens warm using a repeating preview stream sized for the active mode.
+ * Keeps the non-active rear lens warm and transfers the opened CameraDevice to the foreground pipeline.
  *
  * This intentionally uses only Android's declared concurrent-camera combinations. It never
  * attempts to open an unsupported camera pair, which could disconnect the active viewfinder.
- * Lens transitions/animations and zoom handoff are deliberately out of scope.
+ * Zoom interpolation and UI transitions are coordinated by CameraScreen; this class owns the
+ * warm stream, stream detach, callback ownership, and safe resource release.
  */
 internal class BackgroundUltraWideReady(context: Context) {
     companion object {
