@@ -16,7 +16,7 @@ import com.hinnka.mycamera.utils.PLog
 import java.util.concurrent.atomic.AtomicInteger
 
 /**
- * Keeps the non-active rear lens warm using a low-resolution repeating preview stream.
+ * Keeps the non-active rear lens warm using a repeating preview stream sized for the active mode.
  *
  * This intentionally uses only Android's declared concurrent-camera combinations. It never
  * attempts to open an unsupported camera pair, which could disconnect the active viewfinder.
@@ -40,14 +40,75 @@ internal class BackgroundUltraWideReady(context: Context) {
     @Volatile private var standbySurface: Surface? = null
     @Volatile private var standbyCameraId: String? = null
     @Volatile private var activeCameraId: String? = null
+    private var pendingCameraTransfer: PendingCameraTransfer? = null
+    private var transferredStateCallback: CameraDevice.StateCallback? = null
+    @Volatile private var transferredDevice: CameraDevice? = null
 
-    fun update(cameras: List<CameraInfo>, currentCameraId: String, activeOpenCameraId: String?) {
-        handler.post {
-            val active = cameras.firstOrNull {
-                it.cameraId == currentCameraId ||
-                    it.logicalCameraId == activeOpenCameraId ||
-                    it.getOpenCameraId() == activeOpenCameraId
+    private data class PendingCameraTransfer(
+        val cameraId: String,
+        val session: CameraCaptureSession,
+        val stateCallback: CameraDevice.StateCallback,
+        val onReady: (CameraDevice?) -> Unit
+    )
+
+    /** True only when the standby device and its warm-up stream are both ready for hand-off. */
+    fun isReadyFor(cameraId: String): Boolean =
+        standbyCameraId == cameraId && standbyDevice != null && standbySession != null
+
+    /**
+     * Close the warm-up session, then transfer the already-open device to the controller.
+     * Returns false only when no hand-off was scheduled.
+     */
+    fun consumeReadyCamera(
+        cameraId: String,
+        stateCallback: CameraDevice.StateCallback,
+        onReady: (CameraDevice?) -> Unit
+    ): Boolean {
+        if (!isReadyFor(cameraId)) return false
+        return handler.post {
+            if (standbyCameraId != cameraId || standbyDevice == null || standbySession == null ||
+                pendingCameraTransfer != null
+            ) {
+                onReady(null)
+                return@post
             }
+            val session = standbySession ?: run {
+                onReady(null)
+                return@post
+            }
+            pendingCameraTransfer = PendingCameraTransfer(
+                cameraId = cameraId,
+                session = session,
+                stateCallback = stateCallback,
+                onReady = onReady
+            )
+            try {
+                session.stopRepeating()
+            } catch (_: Exception) {
+                // Closing the session below is the authoritative teardown operation.
+            }
+            try {
+                session.close()
+            } catch (error: Exception) {
+                pendingCameraTransfer = null
+                PLog.w(TAG, "Unable to detach warmed session for $cameraId: ${error.message}")
+                onReady(null)
+                releaseLocked()
+            }
+        }
+    }
+
+    fun update(
+        cameras: List<CameraInfo>,
+        currentCameraId: String,
+        activeOpenCameraId: String?,
+        requestedSize: Size? = null
+    ) {
+        handler.post {
+            // Prefer the exact selected lens. Logical cameras commonly share the same open ID,
+            // so matching logicalCameraId first can select the wrong lens for standby.
+            val active = cameras.firstOrNull { it.cameraId == currentCameraId }
+                ?: cameras.firstOrNull { it.getOpenCameraId() == activeOpenCameraId }
             val ultraWide = cameras.firstOrNull { it.lensType == LensType.BACK_ULTRA_WIDE }
             val main = cameras.firstOrNull { it.lensType == LensType.BACK_MAIN }
             val standby = if (active?.lensType == LensType.BACK_ULTRA_WIDE) main else ultraWide
@@ -96,8 +157,17 @@ internal class BackgroundUltraWideReady(context: Context) {
                 val map = cameraManager.getCameraCharacteristics(standbyId)
                     .get(android.hardware.camera2.CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP)
                 val sizes = map?.getOutputSizes(SurfaceTexture::class.java).orEmpty()
+                val targetSize = requestedSize ?: Size(640, 480)
+                // Prefer the selected photo viewfinder/video input dimensions when the standby
+                // camera advertises them. Camera output sizes may be returned landscape-first,
+                // so compare both orientations when choosing the closest supported size.
                 val chosenSize = sizes.minByOrNull { size ->
-                    kotlin.math.abs(size.width * size.height - 640 * 480)
+                    minOf(
+                        kotlin.math.abs(size.width - targetSize.width) +
+                            kotlin.math.abs(size.height - targetSize.height),
+                        kotlin.math.abs(size.width - targetSize.height) +
+                            kotlin.math.abs(size.height - targetSize.width)
+                    )
                 } ?: Size(640, 480)
                 val texture = SurfaceTexture(0).apply {
                     setDefaultBufferSize(chosenSize.width, chosenSize.height)
@@ -148,6 +218,25 @@ internal class BackgroundUltraWideReady(context: Context) {
 
                                     override fun onClosed(session: CameraCaptureSession) {
                                         if (standbySession === session) standbySession = null
+                                        val pending = pendingCameraTransfer ?: return
+                                        if (pending.session !== session || pending.cameraId != standbyCameraId) return
+                                        val device = standbyDevice ?: run {
+                                            pendingCameraTransfer = null
+                                            pending.onReady(null)
+                                            return
+                                        }
+
+                                        // Detach the warm-up outputs before configuring the real
+                                        // viewfinder/encoder/capture outputs on this same device.
+                                        pendingCameraTransfer = null
+                                        standbyDevice = null
+                                        standbyCameraId = null
+                                        activeCameraId = null
+                                        releaseStandbyOutputLocked()
+                                        transferredDevice = device
+                                        transferredStateCallback = pending.stateCallback
+                                        PLog.i(TAG, "Handing warmed camera $standbyId to the active camera pipeline")
+                                        pending.onReady(device)
                                     }
                                 },
                                 handler
@@ -160,15 +249,34 @@ internal class BackgroundUltraWideReady(context: Context) {
                     }
 
                     override fun onDisconnected(camera: CameraDevice) {
+                        if (transferredDevice === camera) {
+                            transferredStateCallback?.onDisconnected(camera)
+                            return
+                        }
                         camera.close()
                         releaseResourcesForToken(token)
                         PLog.w(TAG, "Standby camera disconnected: $standbyId")
                     }
 
                     override fun onError(camera: CameraDevice, error: Int) {
+                        if (transferredDevice === camera) {
+                            transferredStateCallback?.onError(camera, error)
+                            return
+                        }
                         camera.close()
                         releaseResourcesForToken(token)
                         PLog.w(TAG, "Standby camera error: id=$standbyId, code=$error")
+                    }
+
+                    override fun onClosed(camera: CameraDevice) {
+                        if (transferredDevice === camera) {
+                            val owner = transferredStateCallback
+                            transferredDevice = null
+                            transferredStateCallback = null
+                            owner?.onClosed(camera)
+                        } else {
+                            releaseResourcesForToken(token)
+                        }
                     }
                 }, handler)
             } catch (error: Exception) {
@@ -187,18 +295,25 @@ internal class BackgroundUltraWideReady(context: Context) {
         releaseLocked()
     }
 
+    private fun releaseStandbyOutputLocked() {
+        try { standbySurface?.release() } catch (_: Exception) {}
+        standbySurface = null
+        try { standbyTexture?.release() } catch (_: Exception) {}
+        standbyTexture = null
+    }
+
     private fun releaseLocked() {
         generation.incrementAndGet()
+        val pending = pendingCameraTransfer
+        pendingCameraTransfer = null
         try { standbySession?.stopRepeating() } catch (_: Exception) {}
         try { standbySession?.close() } catch (_: Exception) {}
         standbySession = null
         try { standbyDevice?.close() } catch (_: Exception) {}
         standbyDevice = null
-        try { standbySurface?.release() } catch (_: Exception) {}
-        standbySurface = null
-        try { standbyTexture?.release() } catch (_: Exception) {}
-        standbyTexture = null
+        releaseStandbyOutputLocked()
         standbyCameraId = null
         activeCameraId = null
+        pending?.onReady?.invoke(null)
     }
 }
