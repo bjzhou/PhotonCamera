@@ -8,6 +8,7 @@ import android.graphics.Rect
 import android.graphics.SurfaceTexture
 import android.hardware.camera2.*
 import android.hardware.camera2.params.ColorSpaceTransform
+import android.hardware.camera2.params.DynamicRangeProfiles
 import android.hardware.camera2.params.MeteringRectangle
 import android.hardware.camera2.params.OutputConfiguration
 import android.hardware.camera2.params.RggbChannelVector
@@ -387,6 +388,7 @@ class Camera2Controller(private val context: Context) {
         }
     }
 
+    @Volatile private var videoCameraHlg10InputActive: Boolean = false
     private var videoRecordingStartElapsedMs: Long = 0L
     private var videoRecordingPausedMs: Long = 0L
     private var videoRecordingPauseStartElapsedMs: Long = 0L
@@ -3201,7 +3203,10 @@ class Camera2Controller(private val context: Context) {
                             add(createOutputConfiguration(eisSurface))
                         }
                         videoSurface?.let { encoderSurface ->
-                            add(createOutputConfiguration(encoderSurface))
+                            add(createOutputConfiguration(
+                                encoderSurface,
+                                useHlg10 = videoCameraHlg10InputActive
+                            ))
                         }
                     },
                     Executor { handler.post(it) },
@@ -3227,6 +3232,7 @@ class Camera2Controller(private val context: Context) {
                             }
                             PLog.e(TAG, "Video session configuration failed")
                             safeCloseCaptureSession(session, "video configure failure")
+                            if (retryVideoSessionWithoutCameraHlg(openGeneration)) return
                             if (vendorSessionParametersApplied &&
                                 retryPreviewSessionWithoutVendorSessionParameters(
                                     reason = "video configure failed",
@@ -3327,6 +3333,7 @@ class Camera2Controller(private val context: Context) {
             device.createCaptureSession(sessionConfig)
         } catch (e: IllegalStateException) {
             PLog.w(TAG, "Failed to create preview session", e)
+            if (retryVideoSessionWithoutCameraHlg(openGeneration)) return
             if (vendorSessionParametersApplied &&
                 retryPreviewSessionWithoutVendorSessionParameters(
                     reason = "create session illegal state: ${e.message}",
@@ -3345,6 +3352,7 @@ class Camera2Controller(private val context: Context) {
             handlePreviewSessionFailure("create session illegal state", openGeneration, e)
         } catch (e: Exception) {
             PLog.w(TAG, "Failed to create preview session", e)
+            if (retryVideoSessionWithoutCameraHlg(openGeneration)) return
             if (vendorSessionParametersApplied &&
                 retryPreviewSessionWithoutVendorSessionParameters(
                     reason = "create session exception: ${e.message}",
@@ -3599,8 +3607,44 @@ class Camera2Controller(private val context: Context) {
         return true
     }
 
-    private fun createOutputConfiguration(surface: Surface): OutputConfiguration {
+    private fun supportsCameraHlg10Input(): Boolean {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) return false
+        val characteristics = getActiveOpenCameraCharacteristics() ?: return false
+        val profiles = try {
+            characteristics.get(CameraCharacteristics.REQUEST_AVAILABLE_DYNAMIC_RANGE_PROFILES)
+        } catch (_: Exception) {
+            null
+        } ?: return false
+        if (!profiles.supportedProfiles.contains(DynamicRangeProfiles.HLG10)) return false
+
+        // HLG video must coexist with the ordinary SDR viewfinder output in this session.
+        val requiredProfiles = runCatching {
+            profiles.getProfileCaptureRequestConstraints(DynamicRangeProfiles.HLG10)
+        }.getOrNull() ?: return false
+        return requiredProfiles.isEmpty() || requiredProfiles.contains(DynamicRangeProfiles.STANDARD)
+    }
+
+    private fun retryVideoSessionWithoutCameraHlg(openGeneration: Long): Boolean {
+        if (!videoCameraHlg10InputActive) return false
+        PLog.w(
+            TAG,
+            "Camera HAL rejected HLG10 output; retrying with SDR camera input and software HLG encoding"
+        )
+        videoCameraHlg10InputActive = false
+        videoRecorder.setCameraInputHlg10Source(false)
+        createPreviewSession(openGeneration = openGeneration)
+        return true
+    }
+
+    private fun createOutputConfiguration(
+        surface: Surface,
+        useHlg10: Boolean = false
+    ): OutputConfiguration {
         return OutputConfiguration(surface).apply {
+            if (useHlg10) {
+                check(Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU)
+                setDynamicRangeProfile(DynamicRangeProfiles.HLG10)
+            }
             activeOutputPhysicalCameraId?.let { physicalCameraId ->
                 setPhysicalCameraId(physicalCameraId)
                 PLog.i(
@@ -7205,10 +7249,16 @@ class Camera2Controller(private val context: Context) {
                 add(VideoColorEffectLayer(recordingLut, recordingRecipe))
             }
         }
+        val cameraInputIsHlg10 = logProfile == VideoLogProfile.HLG10 &&
+            !useEnhancedStabilization &&
+            colorLayers.isEmpty() &&
+            supportsCameraHlg10Input()
+        videoCameraHlg10InputActive = cameraInputIsHlg10
         PLog.d(
             TAG,
             "Video color output: log=${logProfile.name}, mode=${_state.value.videoConfig.logLutMode}, " +
-                "monitorLut=${creativeLutConfig?.title}, recordingLut=${recordingLut?.title}"
+                "monitorLut=${creativeLutConfig?.title}, recordingLut=${recordingLut?.title}, " +
+                "cameraInputHlg10=${cameraInputIsHlg10}"
         )
         val started = videoRecorder.startRecording(
             size = outputSize,
@@ -7220,6 +7270,7 @@ class Camera2Controller(private val context: Context) {
                 logProfile = logProfile,
                 hasActiveLut = recordingLut != null && (recordingRecipe?.lutIntensity ?: 1f) > 0f
             ),
+            cameraInputIsHlg10 = cameraInputIsHlg10,
             colorLayers = colorLayers,
             cameraTimestampSource = getActiveOpenCameraCharacteristics()
                 ?.get(CameraCharacteristics.SENSOR_INFO_TIMESTAMP_SOURCE)
@@ -7251,6 +7302,7 @@ class Camera2Controller(private val context: Context) {
             cameraHandler?.post(completeRecording) ?: completeRecording.run()
         }
         if (!started) {
+            videoCameraHlg10InputActive = false
             return
         }
         _state.value = _state.value.copy(
@@ -7374,6 +7426,7 @@ class Camera2Controller(private val context: Context) {
                 updatePreview()
             }
         }
+        videoCameraHlg10InputActive = false
         videoRecorder.stopRecording()
         if (pendingVendorSessionParameterRestart && cameraDevice != null && previewSurface != null) {
             PLog.d(TAG, "Restarting preview session after recording for pending vendor session parameter change")

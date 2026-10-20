@@ -50,6 +50,7 @@ class RealtimeVideoRenderer(
     private val enhancedStabilizationEnabled: Boolean,
     private val enhancedStabilizationStrength: Float,
     private val enhancedStabilizationLookahead: Int = DEFAULT_VIDEO_STABILIZATION_LOOKAHEAD,
+    cameraInputIsHlg10: Boolean = false,
 ) {
     companion object {
         private const val TAG = "RealtimeVideoRenderer"
@@ -65,6 +66,7 @@ class RealtimeVideoRenderer(
     )
 
     private val appContext = context.applicationContext
+    @Volatile private var cameraInputAlreadyHlg10 = cameraInputIsHlg10
     private val layers = colorLayers
         .map { layer ->
             LayerResources(
@@ -89,7 +91,8 @@ class RealtimeVideoRenderer(
         get() = layers.lastOrNull { it.params.filmGrain > 0.001f }?.params?.filmGrain ?: 0f
     private val finalFilmGrainEnabled: Boolean
         get() = filmGrainAmount > 0.001f &&
-            encoderColorConfig.pipeline != VideoEncodedColorPipeline.CUSTOM_LOG
+            encoderColorConfig.pipeline != VideoEncodedColorPipeline.CUSTOM_LOG &&
+            encoderColorConfig.pipeline != VideoEncodedColorPipeline.HLG10
     private val identityMatrix = FloatArray(16).also { Matrix.setIdentityM(it, 0) }
     private val firstPassMvpMatrix = FloatArray(16).also {
         Matrix.setIdentityM(it, 0)
@@ -131,6 +134,10 @@ class RealtimeVideoRenderer(
 
     val inputSurface: Surface?
         get() = cameraSurface
+
+    fun setCameraInputHlg10Source(enabled: Boolean) {
+        cameraInputAlreadyHlg10 = enabled
+    }
 
     fun initialize(
         encoderSurface: Surface,
@@ -192,6 +199,7 @@ class RealtimeVideoRenderer(
                 "encoder=${encoderOutputSize.width}x${encoderOutputSize.height}, " +
                 "sensorOrientation=$sensorOrientationDegrees, " +
                 "layers=${layers.size}, log=${videoLogProfile.name}, " +
+                "cameraInputHlg10=$cameraInputAlreadyHlg10, " +
                 "enhancedStabilization=$enhancedStabilizationEnabled, " +
                 "stabilizationStrength=$enhancedStabilizationStrength, " +
                 "mirrorH=$mirrorHorizontally, mirrorV=$mirrorVertically, " +
@@ -258,7 +266,7 @@ class RealtimeVideoRenderer(
             sourceStMatrix = sourceStMatrix,
             cropRect = sourceCropRect,
             mvpMatrix = firstPassMvpMatrix,
-            enableVideoLog = videoLogProfile.isEnabled,
+            enableVideoLog = videoLogProfile.isEnabled && !cameraInputAlreadyHlg10,
             presentationTimeNs = timestampNs,
         )
 
@@ -597,8 +605,10 @@ class RealtimeVideoRenderer(
                 chooseConfig(red = 10, green = 10, blue = 10, alpha = 2)
                     ?.let { add("RGB10_A2" to it) }
             }
-            chooseConfig(red = 8, green = 8, blue = 8, alpha = 8)
-                ?.let { add("RGBA8888" to it) }
+            if (!encoderColorConfig.require10BitInputSurface) {
+                chooseConfig(red = 8, green = 8, blue = 8, alpha = 8)
+                    ?.let { add("RGBA8888" to it) }
+            }
         }
         check(candidates.isNotEmpty()) { "Cannot choose recordable EGL config" }
 

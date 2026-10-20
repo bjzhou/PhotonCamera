@@ -306,10 +306,15 @@ internal object PreviewColorShaderModules {
                 return mix(mix(vec3(0.0), 47.28711236 * pow(l + 0.05641088, vec3(2.0)), step(-0.05641088, l)), 0.08550479 * (log(l + 0.00964052) / log(2.0)) + 0.69336945, step(0.01, l));
             }
             if (curveType == 7) {
+                // ARIB STD-B67 / BT.2100 HLG OETF. Bound linear input and both
+                // branches to avoid invalid log/sqrt evaluations at the gamut edges.
+                vec3 x = clamp(l, vec3(0.0), vec3(1.0));
                 float ha = 0.17883277;
                 float hb = 1.0 - 4.0 * ha;
                 float hc = 0.5 - ha * log(4.0 * ha);
-                return mix(sqrt(3.0 * l), ha * log(12.0 * l - hb) + hc, step(1.0 / 12.0, l));
+                vec3 low = sqrt(max(3.0 * x, vec3(0.0)));
+                vec3 high = ha * log(max(12.0 * x - hb, vec3(1e-6))) + hc;
+                return mix(low, high, step(vec3(1.0 / 12.0), x));
             }
             if (curveType == 8) {
                 return mix(10.540237 * l + 0.072905536, 0.18955931 * log10(max(l, vec3(1e-6))) + 0.5547945, step(0.0078125, l));

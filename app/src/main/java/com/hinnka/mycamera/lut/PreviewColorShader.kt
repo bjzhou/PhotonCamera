@@ -314,7 +314,11 @@ internal object PreviewColorShader {
                 ${if (variant.includeVideoLog) """
                 if (uVideoLogEnabled) {
                     vec3 linearColor = srgbToLinear(max(color.rgb, vec3(0.0)));
-                    linearColor = prepareLogLinearInput(linearColor);
+                    // HLG is a display-referred HDR transfer (BT.2100), not a camera Log
+                    // curve. Do not apply the ACR3 normalization used by the custom Log modes.
+                    if (uVideoLogCurve != 7) {
+                        linearColor = prepareLogLinearInput(linearColor);
+                    }
                     vec3 outputColorSpace = applyLutColorSpace(linearColor, uVideoColorSpace);
                     color.rgb = sanitizeColor(applyLutCurve(outputColorSpace, uVideoLogCurve));
                 }
