@@ -13,7 +13,7 @@ enum class VideoEncodedColorPipeline {
 data class VideoEncoderColorRequest(
     val logProfile: VideoLogProfile = VideoLogProfile.OFF,
     val hasActiveLut: Boolean = false,
-    /** Retry HLG output as an 8-bit stream after a 10-bit encoder/surface setup failure. */
+    /** Force 8-bit HLG when there is no end-to-end 10-bit camera source, or after setup retry. */
     val force8BitHlg: Boolean = false
 )
 
