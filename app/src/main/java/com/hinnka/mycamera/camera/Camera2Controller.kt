@@ -3621,7 +3621,7 @@ class Camera2Controller(private val context: Context) {
         val requiredProfiles = runCatching {
             profiles.getProfileCaptureRequestConstraints(DynamicRangeProfiles.HLG10)
         }.getOrNull() ?: return false
-        return requiredProfiles.contains(DynamicRangeProfiles.STANDARD)
+        return requiredProfiles.isEmpty() || requiredProfiles.contains(DynamicRangeProfiles.STANDARD)
     }
 
     private fun retryVideoSessionWithoutCameraHlg(openGeneration: Long): Boolean {
