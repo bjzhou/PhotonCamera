@@ -7,7 +7,9 @@ import com.hinnka.mycamera.raw.ColorSpace
 import com.hinnka.mycamera.utils.PLog
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
+import java.io.IOException
 import kotlin.math.abs
+import kotlin.math.pow
 
 /**
  * Oplus GR 影调轴的 Low Key / High Key 两个端点 LUT。
@@ -61,15 +63,58 @@ internal object BasicToneLut {
     }
 
     private fun loadFromAssets(context: Context, endpoint: Endpoint): LutConfig {
-        val raw = context.assets.open(endpoint.assetPath).use { it.readBytes() }
+        val data = try {
+            val raw = context.assets.open(endpoint.assetPath).use { it.readBytes() }
+            parsePlanarFloat32(raw, SIZE, endpoint.title)
+        } catch (error: IOException) {
+            // The source checkout currently does not contain the optional binary endpoint LUTs.
+            // Keep tonality responsive instead of silently binding a missing GL texture.
+            PLog.w(
+                "BasicToneLut",
+                "Cannot open ${endpoint.assetPath}; using generated tone curve (${error.message})",
+            )
+            createFallbackData(SIZE, endpoint)
+        }
         return LutConfig(
             size = SIZE,
-            data = parsePlanarFloat32(raw, SIZE, endpoint.title),
+            data = data,
             title = endpoint.title,
             configDataType = LutConfig.CONFIG_DATA_TYPE_UINT16,
             curve = TransferCurve.SRGB,
             colorSpace = ColorSpace.SRGB,
         )
+    }
+
+    /**
+     * Monotonic fallback for installations without the optional source LUT assets.
+     * It keeps neutral values neutral and changes midtones in the selected direction.
+     * Packaged endpoint LUTs always take precedence when available.
+     */
+    internal fun createFallbackData(size: Int, endpoint: Endpoint): FloatArray {
+        require(size >= 2) { "Tone LUT size must be at least 2" }
+        val exponent = when (endpoint) {
+            Endpoint.LOW_KEY -> 1.22f
+            Endpoint.HIGH_KEY -> 0.82f
+        }
+        val data = FloatArray(size * size * size * CHANNEL_COUNT)
+        for (blueIndex in 0 until size) {
+            val blue = blueIndex / (size - 1f)
+            for (greenIndex in 0 until size) {
+                val green = greenIndex / (size - 1f)
+                for (redIndex in 0 until size) {
+                    val red = redIndex / (size - 1f)
+                    val luma = 0.2126f * red + 0.7152f * green + 0.0722f * blue
+                    val adjustedLuma = luma.pow(exponent)
+                    val gain = if (luma > 0.00001f) adjustedLuma / luma else 0f
+                    val outputIndex =
+                        ((blueIndex * size + greenIndex) * size + redIndex) * CHANNEL_COUNT
+                    data[outputIndex] = (red * gain).coerceIn(0f, 1f)
+                    data[outputIndex + 1] = (green * gain).coerceIn(0f, 1f)
+                    data[outputIndex + 2] = (blue * gain).coerceIn(0f, 1f)
+                }
+            }
+        }
+        return data
     }
 
     internal fun parsePlanarFloat32(

@@ -143,6 +143,8 @@ private class VideoLutShaderProgram(
             uniform int uCurveEnabled;
             
             uniform float uChromaticAberration; // 0.0 ~ 1.0
+            uniform float uClarity; // -1.0 ~ 1.0
+            uniform float uSoftLight; // 0.0 ~ 1.0
             uniform float uSharpening;
             uniform vec2 uTexelSize;
             
@@ -650,6 +652,50 @@ private class VideoLutShaderProgram(
                     }
                 }
 
+                // Clarity is a luminance-detail adjustment. Apply the local detail signal to
+                // the already colour-corrected frame, preserving the selected look's hue.
+                if (abs(uClarity) > 0.001) {
+                    vec3 detailSource = texture(uImageTexture, uvCoord).rgb;
+                    vec2 clarityOffset = uTexelSize * 2.0;
+                    float sourceLuma = getLuma(max(detailSource, vec3(0.0)));
+                    float neighborLuma = (
+                        getLuma(max(texture(uImageTexture, uvCoord + vec2(-clarityOffset.x, 0.0)).rgb, vec3(0.0))) +
+                        getLuma(max(texture(uImageTexture, uvCoord + vec2( clarityOffset.x, 0.0)).rgb, vec3(0.0))) +
+                        getLuma(max(texture(uImageTexture, uvCoord + vec2(0.0, -clarityOffset.y)).rgb, vec3(0.0))) +
+                        getLuma(max(texture(uImageTexture, uvCoord + vec2(0.0,  clarityOffset.y)).rgb, vec3(0.0)))
+                    ) * 0.25;
+                    float detail = sourceLuma - neighborLuma;
+                    float gain = uClarity * (uClarity > 0.0 ? 1.8 : 1.1);
+                    float adjustedLuma = max(sourceLuma + detail * gain, 0.0);
+                    float factor = sourceLuma > 0.00002
+                        ? clamp(adjustedLuma / sourceLuma, 0.25, 4.0)
+                        : 1.0;
+                    color.rgb = sanitizeColor(color.rgb * factor);
+                }
+
+                // Soft Light uses a small Gaussian-like source neighbourhood to give video
+                // the same lifted, low-contrast glow as the editor's still-image adjustment.
+                if (uSoftLight > 0.001) {
+                    vec2 softOffset = uTexelSize * 10.0;
+                    vec3 softBlur = texture(uImageTexture, uvCoord).rgb * 4.0;
+                    softBlur += texture(uImageTexture, uvCoord + vec2(-softOffset.x, 0.0)).rgb * 2.0;
+                    softBlur += texture(uImageTexture, uvCoord + vec2( softOffset.x, 0.0)).rgb * 2.0;
+                    softBlur += texture(uImageTexture, uvCoord + vec2(0.0, -softOffset.y)).rgb * 2.0;
+                    softBlur += texture(uImageTexture, uvCoord + vec2(0.0,  softOffset.y)).rgb * 2.0;
+                    softBlur += texture(uImageTexture, uvCoord + vec2(-softOffset.x, -softOffset.y)).rgb;
+                    softBlur += texture(uImageTexture, uvCoord + vec2( softOffset.x, -softOffset.y)).rgb;
+                    softBlur += texture(uImageTexture, uvCoord + vec2(-softOffset.x,  softOffset.y)).rgb;
+                    softBlur += texture(uImageTexture, uvCoord + vec2( softOffset.x,  softOffset.y)).rgb;
+                    softBlur /= 16.0;
+                    vec3 screenColor = vec3(1.0) - (vec3(1.0) - color.rgb) * (vec3(1.0) - softBlur);
+                    vec3 softGlow = mix(color.rgb, screenColor, 0.42);
+                    color.rgb = mix(color.rgb, softGlow, uSoftLight * 0.75);
+                    float softLuma = getLuma(softBlur);
+                    color.rgb += vec3(softLuma) * (uSoftLight * 0.025);
+                    color.rgb = (color.rgb - 0.5) * (1.0 - uSoftLight * 0.05) + 0.5;
+                    color.rgb = sanitizeColor(color.rgb);
+                }
+
                 if (abs(uSharpening) > 0.0001) {
                     vec3 inputColor = texture(uImageTexture, uvCoord).rgb;
                     float inputLuma = getLuma(inputColor);
@@ -974,7 +1020,23 @@ private class VideoLutShaderProgram(
         }
 
         GLES30.glUniform1i(GLES30.glGetUniformLocation(programId, "uInputColorSpace"), 0) // 默认 sRGB
-        GLES30.glUniform1f(GLES30.glGetUniformLocation(programId, "uChromaticAberration"), 0f)
+        GLES30.glUniform1f(
+            GLES30.glGetUniformLocation(programId, "uChromaticAberration"),
+            currentRecipeParams?.chromaticAberration?.coerceIn(0f, 1f) ?: 0f,
+        )
+        GLES30.glUniform1f(
+            GLES30.glGetUniformLocation(programId, "uClarity"),
+            currentRecipeParams?.clarity?.coerceIn(-1f, 1f) ?: 0f,
+        )
+        GLES30.glUniform1f(
+            GLES30.glGetUniformLocation(programId, "uSoftLight"),
+            currentRecipeParams?.softLight?.coerceIn(0f, 1f) ?: 0f,
+        )
+        GLES30.glUniform2f(
+            GLES30.glGetUniformLocation(programId, "uTexelSize"),
+            1f / inputWidth.coerceAtLeast(1).toFloat(),
+            1f / inputHeight.coerceAtLeast(1).toFloat(),
+        )
         GLES30.glUniform1f(
             GLES30.glGetUniformLocation(programId, "uSharpening"),
             currentRecipeParams?.sharpness?.coerceIn(-1f, 1f) ?: 0f,
