@@ -645,7 +645,13 @@ fun CameraScreen(
                                 // Additional physical stops (for example UW -> Main -> Tele)
                                 // each get their own real camera hand-off, not just a UI zoom.
                                 lensSwitchTransition.switchLens(camera.cameraId, targetZoom) {
-                                    viewModel.switchToLensAndSetZoomRatio(camera.cameraId, boundaryZoom)
+                                    // This queued switch may run after the zoom timeline has advanced
+                                    // past the boundary while the previous camera was reopening.
+                                    // Preserve the live user-visible zoom instead of snapping back.
+                                    viewModel.switchToLensAndSetZoomRatio(
+                                        camera.cameraId,
+                                        viewModel.zoomRatioByMain
+                                    )
                                 }
                             }
                             requestedCameraId = camera.cameraId
