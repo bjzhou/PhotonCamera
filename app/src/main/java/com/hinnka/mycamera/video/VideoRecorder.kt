@@ -123,6 +123,7 @@ class VideoRecorder(
     private var requestedRecordingTreeUri: String? = null
     private var preferredAudioInputId: String = VIDEO_AUDIO_INPUT_AUTO
     private var requestedColorConfig: VideoEncoderColorRequest = VideoEncoderColorRequest()
+    @Volatile private var requestedCameraInputIsHlg10: Boolean = false
     private var preparedEncoderColorConfig: VideoEncoderColorConfig? = null
     private var requestedOutputSize = Size(1080, 1920)
     private var requestedCameraInputSize = Size(1920, 1080)
@@ -191,6 +192,7 @@ class VideoRecorder(
         bitrateMbps: Int,
         codecMime: String,
         colorConfig: VideoEncoderColorRequest = VideoEncoderColorRequest(),
+        cameraInputIsHlg10: Boolean = false,
         colorLayers: List<VideoColorEffectLayer> = emptyList(),
         cameraTimestampSource: Int = CameraCharacteristics.SENSOR_INFO_TIMESTAMP_SOURCE_UNKNOWN,
         sensorOrientationDegrees: Int = 0,
@@ -220,6 +222,7 @@ class VideoRecorder(
         preferredEncoderCodecName = hlg10Encoder?.first?.name
         requestedCodecMime = hlg10Encoder?.second ?: codecMime
         requestedColorConfig = colorConfig
+        requestedCameraInputIsHlg10 = cameraInputIsHlg10
         if (hlg10Encoder != null) {
             PLog.i(
                 TAG,
@@ -392,6 +395,11 @@ class VideoRecorder(
         PLog.d(TAG, "Video recording resumed")
     }
 
+    fun setCameraInputHlg10Source(enabled: Boolean) {
+        requestedCameraInputIsHlg10 = enabled
+        renderer?.setCameraInputHlg10Source(enabled)
+    }
+
     fun isRecording(): Boolean = isRecording && !stopRequested
 
     fun setPreferredAudioInputId(audioInputId: String) {
@@ -408,6 +416,7 @@ class VideoRecorder(
             sensorOrientationDegrees = requestedSensorOrientationDegrees,
             colorLayers = requestedColorLayers,
             videoLogProfile = requestedColorConfig.logProfile,
+            cameraInputIsHlg10 = requestedCameraInputIsHlg10,
             mirrorHorizontally =
                 requestedFlipEncodedFrame && requestedOrientationHintDegrees % 180 == 0,
             mirrorVertically =
