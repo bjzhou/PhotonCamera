@@ -89,7 +89,8 @@ class RealtimeVideoRenderer(
         get() = layers.lastOrNull { it.params.filmGrain > 0.001f }?.params?.filmGrain ?: 0f
     private val finalFilmGrainEnabled: Boolean
         get() = filmGrainAmount > 0.001f &&
-            encoderColorConfig.pipeline != VideoEncodedColorPipeline.CUSTOM_LOG
+            encoderColorConfig.pipeline != VideoEncodedColorPipeline.CUSTOM_LOG &&
+            encoderColorConfig.pipeline != VideoEncodedColorPipeline.HLG10
     private val identityMatrix = FloatArray(16).also { Matrix.setIdentityM(it, 0) }
     private val firstPassMvpMatrix = FloatArray(16).also {
         Matrix.setIdentityM(it, 0)
@@ -597,8 +598,10 @@ class RealtimeVideoRenderer(
                 chooseConfig(red = 10, green = 10, blue = 10, alpha = 2)
                     ?.let { add("RGB10_A2" to it) }
             }
-            chooseConfig(red = 8, green = 8, blue = 8, alpha = 8)
-                ?.let { add("RGBA8888" to it) }
+            if (!encoderColorConfig.require10BitInputSurface) {
+                chooseConfig(red = 8, green = 8, blue = 8, alpha = 8)
+                    ?.let { add("RGBA8888" to it) }
+            }
         }
         check(candidates.isNotEmpty()) { "Cannot choose recordable EGL config" }
 
