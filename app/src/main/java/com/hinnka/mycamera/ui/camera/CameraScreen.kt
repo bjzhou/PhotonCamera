@@ -576,7 +576,10 @@ fun CameraScreen(
                     stop <= startZoom + 0.005f && stop > targetZoom + 0.01f
                 }
             }
-            .map { if (ascending) it else it - 0.01f }
+            // findOptimalLens allows a 0.01x tie tolerance. On zoom-out the boundary
+            // must sit at least 0.02x below the old optical stop, otherwise the old lens
+            // remains eligible and the switch is postponed until the final preset endpoint.
+            .map { if (ascending) it else it - 0.02f }
             .filter { if (ascending) it <= targetZoom + 0.005f else it >= targetZoom - 0.005f }
             .sortedWith(if (ascending) compareBy<Float> { it } else compareByDescending<Float> { it })
 
