@@ -75,8 +75,9 @@ internal class LensSwitchTransitionState(
 
     fun switchLens(cameraId: String, targetZoom: Float, onSwitch: () -> Unit) {
         require(targetZoom.isFinite() && targetZoom > 0f)
-        // Coalesce gestures while the screenshot is being prepared. Once a switch has
-        // started, replace its waiter but keep the frozen frame across subsequent switches.
+        // Keep the newest request queued while the currently active hand-off waits for its
+        // first real target frame. A continuous zoom can cross UW -> Main -> Tele before the
+        // first camera's new preview arrives; dropping that second request leaves the UI stale.
         pendingRequest = Request(cameraId, targetZoom, onSwitch)
         if (switchPending && job?.isActive == true) return
         job?.cancel()
@@ -97,52 +98,68 @@ internal class LensSwitchTransitionState(
                 // Let Compose submit the overlay before the camera can release its surface.
                 withFrameNanos { }
                 withFrameNanos { }
-                val request = pendingRequest
-                pendingRequest = null
-                switchPending = false
-                if (request != null) {
-                    previousTimestamp = viewModel.state.value.previewFirstFrameTimestampNs
+
+                while (true) {
+                    val request = pendingRequest ?: break
+                    pendingRequest = null
+                    val timestampBeforeSwitch = viewModel.state.value.previewFirstFrameTimestampNs
+                    previousTimestamp = timestampBeforeSwitch
                     awaitedCameraId = request.cameraId
                     request.onSwitch()
-                }
-                if (awaitedCameraId == null) {
-                    clearSnapshot()
-                    isActive = false
-                    return@launch
-                }
-                coroutineScope {
-                    val animation = launch {
-                        animateSnapshotTo(request?.targetZoom ?: viewModel.zoomRatioByMain)
-                    }
-                    val readyState = viewModel.state.first {
-                        it.currentCameraId == awaitedCameraId && it.isPreviewActive &&
-                            it.previewFirstFrameTimestampNs != null &&
-                            it.previewFirstFrameTimestampNs != previousTimestamp
-                    }
-                    // Follow the current SurfaceView if preview dimensions change.
-                    val rendered = CompletableDeferred<Unit>()
-                    val waiter = launch {
-                        snapshotFlow { viewModel.glSurfaceView }.collectLatest { preview ->
-                            if (preview != null) {
-                                preview.awaitPreviewFrame(readyState.previewFirstFrameTimestampNs!!)
-                                rendered.complete(Unit)
+
+                    coroutineScope {
+                        val animation = launch {
+                            animateSnapshotTo(request.targetZoom)
+                        }
+                        val readyState = viewModel.state.first {
+                            it.currentCameraId == request.cameraId && it.isPreviewActive &&
+                                it.previewFirstFrameTimestampNs != null &&
+                                it.previewFirstFrameTimestampNs != timestampBeforeSwitch
+                        }
+                        // Follow the current SurfaceView if preview dimensions change.
+                        val rendered = CompletableDeferred<Unit>()
+                        val waiter = launch {
+                            snapshotFlow { viewModel.glSurfaceView }.collectLatest { preview ->
+                                if (preview != null) {
+                                    preview.awaitPreviewFrame(readyState.previewFirstFrameTimestampNs!!)
+                                    rendered.complete(Unit)
+                                }
                             }
                         }
+                        try {
+                            rendered.await()
+                        } finally {
+                            waiter.cancel()
+                        }
+                        animation.join()
                     }
-                    try {
-                        rendered.await()
-                    } finally {
-                        waiter.cancel()
+                    awaitedCameraId = null
+
+                    // Keep the same frozen frame across queued optical stops. It will only be
+                    // removed once no later lens/zoom request arrived while the camera reopened.
+                    if (pendingRequest != null) continue
+
+                    // Renderer callbacks run before GLSurfaceView swaps buffers.
+                    withFrameNanos { }
+                    withFrameNanos { }
+                    opacity.animateTo(0f, tween(160))
+                    if (pendingRequest != null) {
+                        opacity.snapTo(1f)
+                        continue
                     }
-                    animation.join()
+
+                    clearSnapshot()
+                    isActive = false
+                    switchPending = false
+                    break
                 }
-                // Renderer callbacks run before GLSurfaceView swaps buffers.
-                withFrameNanos { }
-                withFrameNanos { }
-                opacity.animateTo(0f, tween(160))
-                clearSnapshot()
-                isActive = false
-                awaitedCameraId = null
+
+                if (pendingRequest == null) {
+                    awaitedCameraId = null
+                    clearSnapshot()
+                    isActive = false
+                    switchPending = false
+                }
             } catch (error: CancellationException) {
                 throw error
             } catch (error: Exception) {
