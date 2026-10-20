@@ -10,6 +10,7 @@ import android.media.AudioRecord
 import android.media.AudioTimestamp
 import android.media.MediaCodec
 import android.media.MediaCodecInfo
+import android.media.MediaCodecList
 import android.media.MediaFormat
 import android.media.MediaMuxer
 import android.media.MediaRecorder
@@ -115,6 +116,7 @@ class VideoRecorder(
     private var renderer: RealtimeVideoRenderer? = null
     private var requestedBitrateMbps: Int = 30
     private var requestedCodecMime: String = MediaFormat.MIMETYPE_VIDEO_AVC
+    private var preferredEncoderCodecName: String? = null
     private var requestedOrientationHintDegrees: Int = 0
     private var requestedFlipEncodedFrame: Boolean = false
     private var requestedRecordingPath: VideoRecordingPath = VideoRecordingPath.DCIM_PHOTON
@@ -212,8 +214,19 @@ class VideoRecorder(
         requestedSize = requestedOutputSize
         requestedFps = fps
         requestedBitrateMbps = bitrateMbps
-        requestedCodecMime = codecMime
+        val hlg10Encoder = if (
+            colorConfig.logProfile == VideoLogProfile.HLG10 && !colorConfig.force8BitHlg
+        ) findHlg10Encoder() else null
+        preferredEncoderCodecName = hlg10Encoder?.first?.name
+        requestedCodecMime = hlg10Encoder?.second ?: codecMime
         requestedColorConfig = colorConfig
+        if (hlg10Encoder != null) {
+            PLog.i(
+                TAG,
+                "HLG10 selected ${hlg10Encoder.first.name} (${hlg10Encoder.second}); " +
+                    "using a Main10-capable encoder"
+            )
+        }
         requestedColorLayers = colorLayers.toList()
         requestedCameraTimestampSource = cameraTimestampSource
         requestedSensorOrientationDegrees = sensorOrientationDegrees
@@ -239,19 +252,52 @@ class VideoRecorder(
         statsRenderTimeMaxMs = 0L
         stopRequested = false
         cameraInputStarted = false
+        var rendererInitialized = false
         try {
             prepareVideoEncoder()
             runBlocking(renderDispatcher) {
                 initializeRealtimeRenderer()
             }
+            rendererInitialized = true
             createMuxer()
             audioEnabled = initAudioEncoder(startLoop = false)
             startDrains()
         } catch (e: Exception) {
+            val retryAs8BitHlg = !rendererInitialized &&
+                requestedColorConfig.logProfile == VideoLogProfile.HLG10 &&
+                !requestedColorConfig.force8BitHlg &&
+                preparedEncoderColorConfig?.prefer10BitInputSurface == true
             PLog.e(TAG, "Failed to prepare video recording before start", e)
             cleanupPreparedStart()
-            errorCallback?.invoke("Failed to prepare video recording: ${e.localizedMessage ?: "Unknown error"}")
-            return false
+            if (!retryAs8BitHlg) {
+                errorCallback?.invoke("Failed to prepare video recording: ${e.localizedMessage ?: "Unknown error"}")
+                return false
+            }
+
+            // A codec can advertise Main10 but reject it at configuration time, or the
+            // device may not expose a recordable RGB10_A2 EGL surface. Recreate the
+            // encoder and renderer together as 8-bit HLG instead of leaving a nominal
+            // Main10 stream carrying 8-bit source pixels.
+            PLog.w(TAG, "HLG10 10-bit setup failed; automatically retrying with 8-bit HLG")
+            requestedColorConfig = colorConfig.copy(force8BitHlg = true)
+            requestedCodecMime = codecMime
+            preferredEncoderCodecName = null
+            try {
+                prepareVideoEncoder()
+                runBlocking(renderDispatcher) {
+                    initializeRealtimeRenderer()
+                }
+                createMuxer()
+                audioEnabled = initAudioEncoder(startLoop = false)
+                startDrains()
+            } catch (fallbackError: Exception) {
+                PLog.e(TAG, "Failed to prepare 8-bit HLG fallback recording", fallbackError)
+                cleanupPreparedStart()
+                errorCallback?.invoke(
+                    "Failed to prepare HLG recording: ${fallbackError.localizedMessage ?: "Unknown error"}"
+                )
+                return false
+            }
         }
         isRecording = true
         PLog.d(
@@ -406,13 +452,45 @@ class VideoRecorder(
         }
     }
 
+    private fun findHlg10Encoder(): Pair<MediaCodecInfo, String>? {
+        val codecInfos = runCatching {
+            MediaCodecList(MediaCodecList.REGULAR_CODECS).codecInfos
+        }.getOrNull() ?: return null
+
+        val candidates = codecInfos.flatMap { info ->
+            if (!info.isEncoder) return@flatMap emptyList()
+            val possibleProfiles = listOf(
+                MediaFormat.MIMETYPE_VIDEO_HEVC to MediaCodecInfo.CodecProfileLevel.HEVCProfileMain10,
+                MediaFormat.MIMETYPE_VIDEO_AVC to MediaCodecInfo.CodecProfileLevel.AVCProfileHigh10
+            )
+            possibleProfiles.mapNotNull { (mime, profile) ->
+                if (info.supportedTypes.none { it.equals(mime, ignoreCase = true) }) {
+                    return@mapNotNull null
+                }
+                val profiles = runCatching {
+                    info.getCapabilitiesForType(mime).profileLevels.map { it.profile }.toSet()
+                }.getOrNull() ?: emptySet()
+                if (profile in profiles) info to mime else null
+            }
+        }
+        // Prefer hardware encode, then HEVC Main10; AVC High10 is a valid fallback
+        // when it is the only genuine 10-bit encoder exposed by the device.
+        return candidates.sortedWith(
+            compareByDescending<Pair<MediaCodecInfo, String>> { it.first.isHardwareAccelerated }
+                .thenBy { if (it.second == MediaFormat.MIMETYPE_VIDEO_HEVC) 0 else 1 }
+        ).firstOrNull()
+    }
+
     private fun prepareVideoEncoder() {
         if (videoEncoder != null && inputSurface != null) return
         val width = requestedSize.width
         val height = requestedSize.height
         val videoBitrate = (requestedBitrateMbps * 1_000_000).coerceIn(2_000_000, 300_000_000)
 
-        videoEncoder = MediaCodec.createEncoderByType(requestedCodecMime).apply {
+        videoEncoder = preferredEncoderCodecName?.let { codecName ->
+            runCatching { MediaCodec.createByCodecName(codecName) }.getOrNull()
+        } ?: MediaCodec.createEncoderByType(requestedCodecMime)
+        videoEncoder?.apply {
             val capabilities = codecInfo.getCapabilitiesForType(requestedCodecMime)
             val isCbrSupported = capabilities.encoderCapabilities?.isBitrateModeSupported(MediaCodecInfo.EncoderCapabilities.BITRATE_MODE_CBR) == true
             val bitrateMode = if (isCbrSupported) {
