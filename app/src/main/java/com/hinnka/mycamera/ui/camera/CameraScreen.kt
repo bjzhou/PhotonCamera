@@ -534,6 +534,128 @@ fun CameraScreen(
         }
     }
 
+    /**
+     * Oppo-style zoom hand-off: animate the real Camera2 zoom value for one 400 ms
+     * timeline and switch optical lenses only when their visible zoom stop is crossed.
+     * The frozen preview overlay protects the short Camera2 session reconfiguration;
+     * it does not replace the live zoom commands sent to the active camera.
+     */
+    fun animateZoomAcrossLensStops(targetZoom: Float, finalCameraHint: CameraInfo? = null) {
+        cancelZoomStopAnimation()
+        val currentCamera = state.getCurrentCameraInfo()
+        val startZoom = viewModel.zoomRatioByMain
+        if (currentCamera == null || !targetZoom.isFinite() || targetZoom <= 0f ||
+            abs(startZoom - targetZoom) <= ZoomStopAnimationCompletionThreshold
+        ) {
+            if (finalCameraHint != null && finalCameraHint.cameraId != currentCamera?.cameraId) {
+                lensSwitchTransition.switchLens(finalCameraHint.cameraId, targetZoom) {
+                    viewModel.switchToLensAndSetZoomRatio(finalCameraHint.cameraId, targetZoom)
+                }
+            } else {
+                animateCurrentLensToZoomStop(targetZoom)
+            }
+            return
+        }
+
+        val cameras = state.availableCameras.filter {
+            it.lensFacing == currentCamera.lensFacing &&
+                it.displayIntrinsicZoomRatio.isFinite() &&
+                it.displayIntrinsicZoomRatio > 0f
+        }
+        val ascending = targetZoom > startZoom
+        val candidateStops = cameras
+            .map { it.displayIntrinsicZoomRatio }
+            .distinctBy { (it * 100f).roundToInt() }
+            .filter { stop ->
+                if (ascending) {
+                    stop > startZoom + 0.005f && stop <= targetZoom + 0.005f
+                } else {
+                    // Switch just below an optical stop when zooming out, preserving the
+                    // same field of view on the outgoing and incoming sensors.
+                    stop <= startZoom + 0.005f && stop > targetZoom + 0.01f
+                }
+            }
+            .map { if (ascending) it else it - 0.01f }
+            .filter { if (ascending) it <= targetZoom + 0.005f else it >= targetZoom - 0.005f }
+            .sortedWith(if (ascending) compareBy<Float> { it } else compareByDescending<Float> { it })
+
+        val steps = mutableListOf<Pair<Float, CameraInfo>>()
+        var plannedCameraId = currentCamera.cameraId
+        for (stopZoom in candidateStops) {
+            val candidate = viewModel.findOptimalLens(stopZoom, cameras, plannedCameraId) ?: continue
+            if (candidate.cameraId != plannedCameraId) {
+                steps += stopZoom to candidate
+                plannedCameraId = candidate.cameraId
+            }
+        }
+        val finalCamera = finalCameraHint ?: viewModel.findOptimalLens(
+            targetZoom,
+            state.availableCameras,
+            plannedCameraId
+        )
+        if (finalCamera != null && finalCamera.cameraId != plannedCameraId) {
+            steps += targetZoom to finalCamera
+        }
+        if (steps.isEmpty()) {
+            if (finalCamera != null && finalCamera.cameraId != currentCamera.cameraId) {
+                lensSwitchTransition.switchLens(finalCamera.cameraId, targetZoom) {
+                    viewModel.switchToLensAndSetZoomRatio(finalCamera.cameraId, targetZoom)
+                }
+            } else {
+                animateCurrentLensToZoomStop(targetZoom)
+            }
+            return
+        }
+
+        val firstStep = steps.first()
+        lensSwitchTransition.switchLens(firstStep.second.cameraId, targetZoom) {
+            zoomStopAnimationJob = scope.launch {
+                val progress = Animatable(0f)
+                var nextStepIndex = 0
+                var requestedCameraId = currentCamera.cameraId
+                progress.animateTo(
+                    targetValue = 1f,
+                    animationSpec = tween(
+                        durationMillis = 400,
+                        easing = FastOutSlowInEasing
+                    )
+                ) {
+                    val ratio = interpolateZoomRatio(startZoom, targetZoom, value)
+                    // Apply real zoom to the live camera before evaluating each lens boundary.
+                    viewModel.setZoomRatio(ratio)
+                    while (nextStepIndex < steps.size) {
+                        val (boundaryZoom, camera) = steps[nextStepIndex]
+                        val crossed = if (ascending) {
+                            ratio >= boundaryZoom - 0.005f
+                        } else {
+                            ratio <= boundaryZoom + 0.005f
+                        }
+                        if (!crossed) break
+
+                        if (camera.cameraId != requestedCameraId) {
+                            if (nextStepIndex == 0) {
+                                // The first transition is already displaying the frozen outgoing
+                                // frame and waiting for this camera; only hand over the device here.
+                                viewModel.switchToLensAndSetZoomRatio(camera.cameraId, boundaryZoom)
+                            } else {
+                                // Additional physical stops (for example UW -> Main -> Tele)
+                                // each get their own real camera hand-off, not just a UI zoom.
+                                lensSwitchTransition.switchLens(camera.cameraId, targetZoom) {
+                                    viewModel.switchToLensAndSetZoomRatio(camera.cameraId, boundaryZoom)
+                                }
+                            }
+                            requestedCameraId = camera.cameraId
+                        }
+                        nextStepIndex++
+                    }
+                    // Reapply the interpolated value after any stop-triggered camera selection.
+                    viewModel.setZoomRatio(ratio)
+                }
+                viewModel.setZoomRatio(targetZoom)
+            }
+        }
+    }
+
     fun runPreviewTransition(onSwitch: () -> Unit) {
         cancelZoomStopAnimation()
         lensSwitchTransition.cancel()
@@ -582,11 +704,9 @@ fun CameraScreen(
             currentCameraId
         )
         if (camera != null && camera.cameraId != currentCamera?.cameraId) {
-            lensSwitchTransition.switchLens(camera.cameraId, targetZoom) {
-                viewModel.switchToLensAndSetZoomRatio(camera.cameraId, targetZoom)
-            }
+            animateZoomAcrossLensStops(targetZoom, camera)
         } else {
-            viewModel.setZoomRatio(targetZoom)
+            animateCurrentLensToZoomStop(targetZoom)
         }
     }
 
@@ -607,9 +727,7 @@ fun CameraScreen(
             currentCameraId
         )
         if (camera != null && camera.cameraId != currentCamera?.cameraId) {
-            lensSwitchTransition.switchLens(camera.cameraId, targetZoom) {
-                viewModel.switchToLensAndSetZoomRatio(camera.cameraId, targetZoom)
-            }
+            animateZoomAcrossLensStops(targetZoom, camera)
         } else {
             animateCurrentLensToZoomStop(targetZoom)
         }
