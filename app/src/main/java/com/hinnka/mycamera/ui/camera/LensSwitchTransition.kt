@@ -67,6 +67,7 @@ internal class LensSwitchTransitionState(
         private set
     private var snapshotZoom = 1f
     private var job: Job? = null
+    private var snapshotAnimationJob: Job? = null
     private var switchPending = false
     private data class Request(val cameraId: String, val targetZoom: Float, val onSwitch: () -> Unit)
     private var pendingRequest: Request? = null
@@ -79,7 +80,12 @@ internal class LensSwitchTransitionState(
         // first real target frame. A continuous zoom can cross UW -> Main -> Tele before the
         // first camera's new preview arrives; dropping that second request leaves the UI stale.
         pendingRequest = Request(cameraId, targetZoom, onSwitch)
-        if (switchPending && job?.isActive == true) return
+        if (switchPending && job?.isActive == true) {
+            // Retarget the frozen frame as soon as the active camera has produced its incoming
+            // frame; do not make a second optical stop wait for the full 400 ms overlay animation.
+            snapshotAnimationJob?.cancel()
+            return
+        }
         job?.cancel()
         isActive = true
         switchPending = true
@@ -111,6 +117,7 @@ internal class LensSwitchTransitionState(
                         val animation = launch {
                             animateSnapshotTo(request.targetZoom)
                         }
+                        snapshotAnimationJob = animation
                         val readyState = viewModel.state.first {
                             it.currentCameraId == request.cameraId && it.isPreviewActive &&
                                 it.previewFirstFrameTimestampNs != null &&
@@ -131,7 +138,9 @@ internal class LensSwitchTransitionState(
                         } finally {
                             waiter.cancel()
                         }
+                        if (pendingRequest != null) animation.cancel()
                         animation.join()
+                        if (snapshotAnimationJob === animation) snapshotAnimationJob = null
                     }
                     awaitedCameraId = null
 
@@ -176,6 +185,7 @@ internal class LensSwitchTransitionState(
     fun cancel() {
         job?.cancel()
         job = null
+        snapshotAnimationJob = null
         clearSnapshot()
         isActive = false
         switchPending = false
