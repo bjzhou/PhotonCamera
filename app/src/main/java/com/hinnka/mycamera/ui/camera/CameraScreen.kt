@@ -1783,7 +1783,8 @@ fun CameraScreen(
         val filterPanelBottom = requestedFilterPanelBottom.coerceIn(filterPanelTop, maxHeight)
 
         AnimatedVisibility(
-            activePanel == ActivePanel.FILTERS,
+            activePanel == ActivePanel.FILTERS ||
+                (activePanel == ActivePanel.EDIT && isVideoMode && !state.videoConfig.logProfile.isEnabled),
             enter = if (isXpan) {slideInVertically(initialOffsetY = { it })} else fadeIn(),
             exit = if (isXpan) {slideOutVertically(targetOffsetY = { it })} else fadeOut()
         ) {
