@@ -337,10 +337,12 @@ internal class BackgroundUltraWideReady(context: Context) {
         val targetRatio = (visibleZoomRatio / lens.displayIntrinsicZoomRatio.coerceAtLeast(0.01f))
             .coerceIn(0.1f, 100f)
         val now = SystemClock.uptimeMillis()
-        if (!force && !lastStandbyZoomRatio.isNaN() &&
-            kotlin.math.abs(targetRatio - lastStandbyZoomRatio) < 0.015f &&
-            now - lastStandbyZoomUpdateAtMs < 40L
-        ) return
+        if (!force && !lastStandbyZoomRatio.isNaN()) {
+            val zoomDelta = kotlin.math.abs(targetRatio - lastStandbyZoomRatio)
+            if (zoomDelta < 0.015f) return
+            // Avoid flooding Camera2's request queue during fast touch/gesture updates.
+            if (now - lastStandbyZoomUpdateAtMs < 35L && zoomDelta < 0.06f) return
+        }
 
         try {
             val appliedRatio: Float
