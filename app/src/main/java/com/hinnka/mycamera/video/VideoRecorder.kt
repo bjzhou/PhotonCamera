@@ -185,6 +185,23 @@ class VideoRecorder(
             isRecording && !stopRequested
         }
 
+    /**
+     * Second independent Camera2 input feeding the same encoder. It is only used for ordinary
+     * video sessions; enhanced-stabilization recording keeps the legacy single-input path.
+     */
+    val standbyCameraInputSurface: Surface?
+        get() = renderer?.standbyInputSurface.takeIf {
+            isRecording && !stopRequested && !requestedEnhancedStabilization
+        }
+
+    val isStandbyCameraInputReady: Boolean
+        get() = standbyCameraInputSurface != null
+
+    fun setActiveCameraInput(useStandby: Boolean): Boolean {
+        if (useStandby && requestedEnhancedStabilization) return false
+        return renderer?.setActiveCameraInput(useStandby) ?: false
+    }
+
     fun startRecording(
         size: Size,
         cameraInputSize: Size = size,
