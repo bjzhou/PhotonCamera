@@ -476,9 +476,16 @@ class VideoRecorder(
                 if (info.supportedTypes.none { it.equals(mime, ignoreCase = true) }) {
                     return@mapNotNull null
                 }
-                val profiles = runCatching {
-                    info.getCapabilitiesForType(mime).profileLevels.map { it.profile }.toSet()
-                }.getOrNull() ?: emptySet()
+                val capabilities = runCatching {
+                    info.getCapabilitiesForType(mime)
+                }.getOrNull() ?: return@mapNotNull null
+                if (!capabilities.colorFormats.contains(
+                        MediaCodecInfo.CodecCapabilities.COLOR_FormatSurface
+                    )
+                ) {
+                    return@mapNotNull null
+                }
+                val profiles = capabilities.profileLevels.map { it.profile }.toSet()
                 if (profile in profiles) info to mime else null
             }
         }
