@@ -6,12 +6,15 @@ import com.hinnka.mycamera.raw.ColorSpace
 
 enum class VideoEncodedColorPipeline {
     SDR_DISPLAY,
-    CUSTOM_LOG
+    CUSTOM_LOG,
+    HLG10
 }
 
 data class VideoEncoderColorRequest(
     val logProfile: VideoLogProfile = VideoLogProfile.OFF,
-    val hasActiveLut: Boolean = false
+    val hasActiveLut: Boolean = false,
+    /** Retry HLG output as an 8-bit stream after a 10-bit encoder/surface setup failure. */
+    val force8BitHlg: Boolean = false
 )
 
 data class VideoEncoderColorConfig(
@@ -21,7 +24,9 @@ data class VideoEncoderColorConfig(
     val colorRange: Int = MediaFormat.COLOR_RANGE_LIMITED,
     val codecProfile: Int? = null,
     val prefer10BitInputSurface: Boolean = false,
-    val debugName: String
+    val debugName: String,
+    /** HLG10 must not silently feed an 8-bit EGL surface into a Main10 encoder. */
+    val require10BitInputSurface: Boolean = false
 ) {
     fun applyTo(format: MediaFormat) {
         colorStandard?.let { format.setInteger(MediaFormat.KEY_COLOR_STANDARD, it) }
@@ -50,6 +55,23 @@ fun resolveVideoEncoderColorConfig(
     codecMime: String,
     request: VideoEncoderColorRequest
 ): VideoEncoderColorConfig {
+    // HLG is an HDR output transfer, not a camera Log curve. Keep the transfer
+    // function and Rec.2020 primaries even when a compatible creative LUT is active.
+    if (request.logProfile == VideoLogProfile.HLG10) {
+        val codecProfile = if (request.force8BitHlg) null else resolve10BitProfile(codecInfo, codecMime)
+        val is10Bit = codecProfile != null
+        return VideoEncoderColorConfig(
+            pipeline = VideoEncodedColorPipeline.HLG10,
+            colorStandard = MediaFormat.COLOR_STANDARD_BT2020,
+            colorTransfer = MediaFormat.COLOR_TRANSFER_HLG,
+            colorRange = MediaFormat.COLOR_RANGE_LIMITED,
+            codecProfile = codecProfile,
+            prefer10BitInputSurface = is10Bit,
+            debugName = if (is10Bit) "hlg10-main10" else "hlg-8bit-fallback",
+            require10BitInputSurface = is10Bit
+        )
+    }
+
     val customLogRequested = request.logProfile.isEnabled && !request.hasActiveLut
     if (!customLogRequested) {
         val debugName = if (request.logProfile.isEnabled && request.hasActiveLut) {
