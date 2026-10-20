@@ -224,7 +224,11 @@ internal class BackgroundUltraWideReady(context: Context) {
                                             standbyRequestBuilder = requestBuilder
                                             standbySession = session
                                             lastStandbyZoomRatio = Float.NaN
-                                            applyVisibleZoomRatioLocked(requestedVisibleZoomRatio, force = true)
+                                            applyVisibleZoomRatioLocked(
+                                                requestedVisibleZoomRatio,
+                                                force = true,
+                                                submitToSession = false
+                                            )
                                             session.setRepeatingRequest(requestBuilder.build(), null, handler)
                                             PLog.i(TAG, "Ultra-wide standby stream ready: cameraId=$standbyId, size=${chosenSize.width}x${chosenSize.height}")
                                         } catch (error: Exception) {
@@ -321,7 +325,11 @@ internal class BackgroundUltraWideReady(context: Context) {
         releaseLocked()
     }
 
-    private fun applyVisibleZoomRatioLocked(visibleZoomRatio: Float, force: Boolean) {
+    private fun applyVisibleZoomRatioLocked(
+        visibleZoomRatio: Float,
+        force: Boolean,
+        submitToSession: Boolean = true
+    ) {
         val session = standbySession ?: return
         val builder = standbyRequestBuilder ?: return
         val lens = standbyLensInfo ?: return
@@ -357,8 +365,8 @@ internal class BackgroundUltraWideReady(context: Context) {
                     Rect(left, top, left + width, top + height)
                 )
             }
-            session.setRepeatingRequest(builder.build(), null, handler)
-            lastStandbyZoomRatio = appliedRatio
+            if (submitToSession) session.setRepeatingRequest(builder.build(), null, handler)
+            lastStandbyZoomRatio = targetRatio
             lastStandbyZoomUpdateAtMs = now
         } catch (error: Exception) {
             PLog.w(TAG, "Could not update standby zoom: " + error.message)
