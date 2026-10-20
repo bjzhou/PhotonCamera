@@ -248,6 +248,17 @@ class Camera2Controller(private val context: Context) {
             ?: state.currentPreviewSize
     }
 
+    fun setStandbyVisibleZoomRatio(visibleZoomRatio: Float) {
+        if (!keepUltraWideReadyEnabled || !visibleZoomRatio.isFinite() || visibleZoomRatio <= 0f) return
+        backgroundUltraWideReady.updateVisibleZoomRatio(visibleZoomRatio)
+    }
+
+    private fun resolveVisibleZoomRatio(state: CameraState): Float {
+        val camera = state.getCurrentCameraInfo()
+        return (state.zoomRatio * (camera?.displayIntrinsicZoomRatio ?: 1f))
+            .takeIf { it.isFinite() && it > 0f } ?: 1f
+    }
+
     fun setKeepUltraWideReadyEnabled(enabled: Boolean) {
         keepUltraWideReadyEnabled = enabled
         if (!enabled) {
@@ -259,7 +270,8 @@ class Camera2Controller(private val context: Context) {
                     cameras = current.availableCameras,
                     currentCameraId = current.currentCameraId,
                     activeOpenCameraId = cameraDevice?.id,
-                    requestedSize = resolveStandbyWarmupSize(current)
+                    requestedSize = resolveStandbyWarmupSize(current),
+                    visibleZoomRatio = resolveVisibleZoomRatio(current)
                 )
             }
         }
@@ -3976,7 +3988,8 @@ class Camera2Controller(private val context: Context) {
                     cameras = currentState.availableCameras,
                     currentCameraId = currentState.currentCameraId,
                     activeOpenCameraId = cameraDevice?.id,
-                    requestedSize = resolveStandbyWarmupSize(currentState)
+                    requestedSize = resolveStandbyWarmupSize(currentState),
+                    visibleZoomRatio = resolveVisibleZoomRatio(currentState)
                 )
             } else {
                 backgroundUltraWideReady.stop()
