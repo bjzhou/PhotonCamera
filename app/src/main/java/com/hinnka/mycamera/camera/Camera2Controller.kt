@@ -7268,7 +7268,8 @@ class Camera2Controller(private val context: Context) {
             codecMime = _state.value.videoConfig.codec.mimeType,
             colorConfig = VideoEncoderColorRequest(
                 logProfile = logProfile,
-                hasActiveLut = recordingLut != null && (recordingRecipe?.lutIntensity ?: 1f) > 0f
+                hasActiveLut = recordingLut != null && (recordingRecipe?.lutIntensity ?: 1f) > 0f,
+                force8BitHlg = logProfile == VideoLogProfile.HLG10 && !cameraInputIsHlg10
             ),
             cameraInputIsHlg10 = cameraInputIsHlg10,
             colorLayers = colorLayers,
