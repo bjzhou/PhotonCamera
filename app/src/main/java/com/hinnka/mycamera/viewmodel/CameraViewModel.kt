@@ -1500,13 +1500,13 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         .stateIn(viewModelScope, SharingStarted.Eagerly, AspectRatio.entries)
     val nrLevel: StateFlow<Int> = userPreferencesRepository.userPreferences
         .map { it.nrLevel }
-        .stateIn(viewModelScope, SharingStarted.Eagerly, NoiseReductionLevel.DEFAULT)
+        .stateIn(viewModelScope, SharingStarted.Eagerly, NoiseReductionLevel.OFF)
     val useRaw: StateFlow<Boolean> = userPreferencesRepository.userPreferences
         .map { it.useRaw }
         .stateIn(viewModelScope, SharingStarted.Eagerly, false)
     val edgeLevel: StateFlow<Int> = userPreferencesRepository.userPreferences
         .map { it.edgeLevel }
-        .stateIn(viewModelScope, SharingStarted.Eagerly, 1)
+        .stateIn(viewModelScope, SharingStarted.Eagerly, 0)
     val vendorCaptureSettingsByLens: StateFlow<VendorCaptureSettingsByLens> =
         userPreferencesRepository.userPreferences
             .map { it.vendorCaptureSettingsByLens }

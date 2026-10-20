@@ -215,8 +215,9 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
     private val stMatrix = FloatArray(16).apply { Matrix.setIdentityM(this, 0) }
     private val mgcEisPresentationTransform = MgcEisPresentationTransform()
 
-    // MVP 变换矩阵（用于 center crop）
+    // MVP 变换矩阵（用于 center crop）；EIS 输出可能使用不同于 OES 预览的输入尺寸。
     private val mvpMatrix = FloatArray(16)
+    private val stabilizationMvpMatrix = FloatArray(16)
 
     // 相机 SurfaceTexture
     private var surfaceTexture: SurfaceTexture? = null
@@ -1090,6 +1091,7 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
                 fboId = fboId,
                 width = currentWidth,
                 height = currentHeight,
+                targetMvpMatrix = currentPreviewMvpMatrix(),
                 preferBaselineLayer = hasDualLayer,
                 suppressBaselineLayer = suppressBaselineLayerForVideoLog
             )
@@ -1262,6 +1264,7 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
                 fboId = 0,
                 width = viewportWidth,
                 height = viewportHeight,
+                targetMvpMatrix = currentPreviewMvpMatrix(),
                 suppressBaselineLayer = suppressBaselineLayerForVideoLog
             )
             capturePendingPreviewFrames(
@@ -1278,6 +1281,22 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
         if (currentFrameTimestampNs > 0L) {
             onPreviewFrameRendered?.invoke(currentFrameTimestampNs)
         }
+    }
+
+    private fun currentPreviewMvpMatrix(
+        targetWidth: Int = viewportWidth,
+        targetHeight: Int = viewportHeight,
+    ): FloatArray {
+        val stabilized = currentCameraTextureSource == PreviewColorTextureSource.TEXTURE_2D
+        if (targetWidth == viewportWidth && targetHeight == viewportHeight) {
+            return if (stabilized) stabilizationMvpMatrix else mvpMatrix
+        }
+        return buildMvpMatrix(
+            targetWidth = targetWidth,
+            targetHeight = targetHeight,
+            sourceWidth = if (stabilized) stabilizationInputWidth else previewWidth,
+            sourceHeight = if (stabilized) stabilizationInputHeight else previewHeight,
+        )
     }
 
     private fun useCurrentOesFrame() {
@@ -2357,6 +2376,7 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
         }
         stabilizationInputWidth = width
         stabilizationInputHeight = height
+        updateMVPMatrix()
         if (previewStabilizationUseCase != null) {
             mgcEisHardwareBufferRenderer.release()
             mgcEisYuvRenderer.release()
@@ -2531,8 +2551,21 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
      * 当预览尺寸与显示区域比例不匹配时，放大画面并裁切超出部分
      */
     private fun updateMVPMatrix() {
-        val computedMatrix = buildMvpMatrix(viewportWidth, viewportHeight)
+        val computedMatrix = buildMvpMatrix(
+            viewportWidth,
+            viewportHeight,
+            previewWidth,
+            previewHeight,
+        )
         System.arraycopy(computedMatrix, 0, mvpMatrix, 0, mvpMatrix.size)
+
+        val stabilizedMatrix = buildMvpMatrix(
+            viewportWidth,
+            viewportHeight,
+            stabilizationInputWidth,
+            stabilizationInputHeight,
+        )
+        System.arraycopy(stabilizedMatrix, 0, stabilizationMvpMatrix, 0, stabilizationMvpMatrix.size)
 
 //        PLog.d(
 //            TAG,
@@ -2540,7 +2573,12 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
 //        )
     }
 
-    private fun buildMvpMatrix(targetWidth: Int, targetHeight: Int): FloatArray {
+    private fun buildMvpMatrix(
+        targetWidth: Int,
+        targetHeight: Int,
+        sourceWidth: Int = previewWidth,
+        sourceHeight: Int = previewHeight,
+    ): FloatArray {
         val matrix = FloatArray(16)
         Matrix.setIdentityM(matrix, 0)
         if (targetWidth <= 0 || targetHeight <= 0) {
@@ -2551,9 +2589,9 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
         val cropWidth = (cropRect[2] - cropRect[0]).coerceAtLeast(0.05f)
         val cropHeight = (cropRect[3] - cropRect[1]).coerceAtLeast(0.05f)
         val previewAspect = if (isSwapped) {
-            (previewHeight.toFloat() * cropHeight) / (previewWidth.toFloat() * cropWidth)
+            (sourceHeight.toFloat() * cropHeight) / (sourceWidth.toFloat() * cropWidth)
         } else {
-            (previewWidth.toFloat() * cropWidth) / (previewHeight.toFloat() * cropHeight)
+            (sourceWidth.toFloat() * cropWidth) / (sourceHeight.toFloat() * cropHeight)
         }
         val viewAspect = targetWidth.toFloat() / targetHeight.toFloat()
 
@@ -2714,7 +2752,7 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
                     fboId = captureFboId,
                     width = targetWidth,
                     height = targetHeight,
-                    targetMvpMatrix = buildMvpMatrix(targetWidth, targetHeight),
+                    targetMvpMatrix = currentPreviewMvpMatrix(targetWidth, targetHeight),
                     suppressBaselineLayer = suppressColorLayers,
                     suppressCreativeLayer = suppressColorLayers,
                     suppressCameraEngine = suppressColorLayers,
@@ -2829,7 +2867,7 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
                     fboId = meteringFboId,
                     width = METERING_SIZE,
                     height = METERING_SIZE,
-                    targetMvpMatrix = buildMvpMatrix(METERING_SIZE, METERING_SIZE),
+                    targetMvpMatrix = currentPreviewMvpMatrix(METERING_SIZE, METERING_SIZE),
                     suppressBaselineLayer = true,
                     suppressCreativeLayer = true,
                     suppressCameraEngine = true,

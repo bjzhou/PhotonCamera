@@ -366,7 +366,7 @@ data class CameraState(
     val gridStyle: GridStyle = GridStyle.THIRDS,
 
     // 降噪等级 (0=Off, 1=Fast, 2=High Quality, 3=ZSL, 4=Minimal)
-    val nrLevel: Int = NoiseReductionLevel.DEFAULT,
+    val nrLevel: Int = NoiseReductionLevel.OFF,
     val availableNrModes: IntArray = intArrayOf(),
     val vendorCaptureSettingsByLens: VendorCaptureSettingsByLens = VendorCaptureSettingsByLens.Empty,
     val customVendorKeySettings: CustomVendorKeySettings = CustomVendorKeySettings.Empty,

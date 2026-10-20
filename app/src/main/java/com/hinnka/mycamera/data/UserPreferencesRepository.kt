@@ -181,10 +181,10 @@ data class UserPreferences(
     val autoSaveAfterCapture: Boolean = true,  // 自动保存
     val photoSavePath: PhotoSavePath = PhotoSavePath.DCIM_PHOTON,
     val photoSaveTreeUri: String? = null,
-    val nrLevel: Int = NoiseReductionLevel.DEFAULT,  // 降噪等级：0=Off, 1=Fast, 2=High Quality, 3=ZSL, 4=Minimal
-    val edgeLevel: Int = 1, // 锐化等级：0=Off, 1=Fast, 2=High Quality, 3=Real-time
-    val videoNrLevel: Int = NoiseReductionLevel.DEFAULT,
-    val videoEdgeLevel: Int = 1,
+    val nrLevel: Int = NoiseReductionLevel.OFF,  // 降噪等级：0=Off, 1=Fast, 2=High Quality, 3=ZSL, 4=Minimal
+    val edgeLevel: Int = 0, // 锐化等级：0=Off, 1=Fast, 2=High Quality, 3=Real-time
+    val videoNrLevel: Int = NoiseReductionLevel.OFF,
+    val videoEdgeLevel: Int = 0,
     val vendorCaptureSettingsByLens: VendorCaptureSettingsByLens = VendorCaptureSettingsByLens.Empty,
     val customVendorKeySettings: CustomVendorKeySettings = CustomVendorKeySettings.Empty,
     val useRaw: Boolean = false,                // 使用 RAW 格式拍摄
@@ -767,13 +767,13 @@ class UserPreferencesRepository(private val context: Context) {
                 photoSavePath = PhotoSavePath.fromPersistedName(preferences[PHOTO_SAVE_PATH]),
                 photoSaveTreeUri = preferences[PHOTO_SAVE_TREE_URI]?.takeIf { it.isNotBlank() },
                 nrLevel = NoiseReductionLevel.normalize(
-                    preferences[NR_LEVEL] ?: NoiseReductionLevel.DEFAULT
+                    preferences[NR_LEVEL] ?: NoiseReductionLevel.OFF
                 ),
-                edgeLevel = preferences[EDGE_LEVEL] ?: 1,
+                edgeLevel = preferences[EDGE_LEVEL] ?: 0,
                 videoNrLevel = NoiseReductionLevel.normalize(
-                    preferences[VIDEO_NR_LEVEL] ?: NoiseReductionLevel.DEFAULT
+                    preferences[VIDEO_NR_LEVEL] ?: NoiseReductionLevel.OFF
                 ),
-                videoEdgeLevel = preferences[VIDEO_EDGE_LEVEL] ?: 1,
+                videoEdgeLevel = preferences[VIDEO_EDGE_LEVEL] ?: 0,
                 vendorCaptureSettingsByLens = VendorCaptureSettingsByLens.deserialize(
                     preferences[VENDOR_CAPTURE_SETTINGS]
                 ),
