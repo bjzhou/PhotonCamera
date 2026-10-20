@@ -683,7 +683,7 @@ fun CameraScreen(
             return
         }
         cancelZoomStopAnimation()
-        lensSwitchTransition.switchLens(cameraId, targetZoom) { viewModel.switchToLens(cameraId) }
+        animateZoomAcrossLensStops(targetZoom, targetCamera)
     }
 
     fun setZoomWithPreviewTransition(targetZoom: Float) {
@@ -705,9 +705,11 @@ fun CameraScreen(
             currentCameraId
         )
         if (camera != null && camera.cameraId != currentCamera?.cameraId) {
-            animateZoomAcrossLensStops(targetZoom, camera)
+            lensSwitchTransition.switchLens(camera.cameraId, targetZoom) {
+                viewModel.switchToLensAndSetZoomRatio(camera.cameraId, targetZoom)
+            }
         } else {
-            animateCurrentLensToZoomStop(targetZoom)
+            viewModel.setZoomRatio(targetZoom)
         }
     }
 
