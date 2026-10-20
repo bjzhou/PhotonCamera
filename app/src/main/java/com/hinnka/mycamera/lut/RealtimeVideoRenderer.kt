@@ -50,6 +50,7 @@ class RealtimeVideoRenderer(
     private val enhancedStabilizationEnabled: Boolean,
     private val enhancedStabilizationStrength: Float,
     private val enhancedStabilizationLookahead: Int = DEFAULT_VIDEO_STABILIZATION_LOOKAHEAD,
+    cameraInputIsHlg10: Boolean = false,
 ) {
     companion object {
         private const val TAG = "RealtimeVideoRenderer"
@@ -65,6 +66,7 @@ class RealtimeVideoRenderer(
     )
 
     private val appContext = context.applicationContext
+    @Volatile private var cameraInputAlreadyHlg10 = cameraInputIsHlg10
     private val layers = colorLayers
         .map { layer ->
             LayerResources(
@@ -133,6 +135,10 @@ class RealtimeVideoRenderer(
     val inputSurface: Surface?
         get() = cameraSurface
 
+    fun setCameraInputHlg10Source(enabled: Boolean) {
+        cameraInputAlreadyHlg10 = enabled
+    }
+
     fun initialize(
         encoderSurface: Surface,
         onFrameAvailable: () -> Unit,
@@ -193,6 +199,7 @@ class RealtimeVideoRenderer(
                 "encoder=${encoderOutputSize.width}x${encoderOutputSize.height}, " +
                 "sensorOrientation=$sensorOrientationDegrees, " +
                 "layers=${layers.size}, log=${videoLogProfile.name}, " +
+                "cameraInputHlg10=$cameraInputAlreadyHlg10, " +
                 "enhancedStabilization=$enhancedStabilizationEnabled, " +
                 "stabilizationStrength=$enhancedStabilizationStrength, " +
                 "mirrorH=$mirrorHorizontally, mirrorV=$mirrorVertically, " +
@@ -259,7 +266,7 @@ class RealtimeVideoRenderer(
             sourceStMatrix = sourceStMatrix,
             cropRect = sourceCropRect,
             mvpMatrix = firstPassMvpMatrix,
-            enableVideoLog = videoLogProfile.isEnabled,
+            enableVideoLog = videoLogProfile.isEnabled && !cameraInputAlreadyHlg10,
             presentationTimeNs = timestampNs,
         )
 
