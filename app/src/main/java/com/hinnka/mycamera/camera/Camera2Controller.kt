@@ -238,6 +238,16 @@ class Camera2Controller(private val context: Context) {
     private val backgroundUltraWideReady = BackgroundUltraWideReady(context)
     @Volatile private var keepUltraWideReadyEnabled = false
 
+    private fun resolveStandbyWarmupSize(state: CameraState): Size {
+        if (state.captureMode == CaptureMode.PHOTO) return state.currentPreviewSize
+
+        // The encoded video size is not necessarily the sensor input stream size.
+        // Match the active mode's supported camera input to avoid reconfiguring the
+        // warmed camera with an unsupported stream at the hand-off boundary.
+        return state.videoCapabilities.cameraInputSizesByResolution[state.videoConfig.resolution]
+            ?: state.currentPreviewSize
+    }
+
     fun setKeepUltraWideReadyEnabled(enabled: Boolean) {
         keepUltraWideReadyEnabled = enabled
         if (!enabled) {
@@ -245,7 +255,12 @@ class Camera2Controller(private val context: Context) {
         } else {
             val current = _state.value
             if (current.isPreviewActive) {
-                backgroundUltraWideReady.update(current.availableCameras, current.currentCameraId, cameraDevice?.id)
+                backgroundUltraWideReady.update(
+                    cameras = current.availableCameras,
+                    currentCameraId = current.currentCameraId,
+                    activeOpenCameraId = cameraDevice?.id,
+                    requestedSize = resolveStandbyWarmupSize(current)
+                )
             }
         }
     }
@@ -2896,7 +2911,7 @@ class Camera2Controller(private val context: Context) {
 
             PLog.d(TAG, "Opening camera: open=$openCameraId, selected=$cameraId")
 
-            cameraManager.openCamera(openCameraId, object : CameraDevice.StateCallback() {
+            val cameraOpenCallback = object : CameraDevice.StateCallback() {
                 override fun onOpened(camera: CameraDevice) {
                     if (
                         openGeneration != cameraOpenGeneration ||
@@ -2984,7 +2999,93 @@ class Camera2Controller(private val context: Context) {
                 override fun onClosed(camera: CameraDevice) {
                     handleCameraDeviceClosed(camera)
                 }
-            }, cameraHandler)
+            }
+
+            // A warmed standby device was opened by BackgroundUltraWideReady's own thread.
+            // Marshal ownership callbacks back onto the serialized controller camera thread.
+            fun dispatchCameraCallback(action: () -> Unit) {
+                val handler = cameraHandler
+                if (handler == null || !handler.post { action() }) action()
+            }
+            val transferredDeviceCallback = object : CameraDevice.StateCallback() {
+                override fun onOpened(camera: CameraDevice) =
+                    dispatchCameraCallback { cameraOpenCallback.onOpened(camera) }
+
+                override fun onDisconnected(camera: CameraDevice) =
+                    dispatchCameraCallback {
+                        if (openGeneration == cameraOpenGeneration) {
+                            cameraOpenCallback.onDisconnected(camera)
+                        } else {
+                            camera.close()
+                        }
+                    }
+
+                override fun onError(camera: CameraDevice, error: Int) =
+                    dispatchCameraCallback {
+                        if (openGeneration == cameraOpenGeneration) {
+                            cameraOpenCallback.onError(camera, error)
+                        } else {
+                            camera.close()
+                        }
+                    }
+
+                override fun onClosed(camera: CameraDevice) =
+                    dispatchCameraCallback {
+                        if (openGeneration == cameraOpenGeneration ||
+                            camera === cameraDevice ||
+                            cameraDeviceLifecycle == CameraDeviceLifecycle.CLOSING
+                        ) {
+                            cameraOpenCallback.onClosed(camera)
+                        } else {
+                            PLog.d(TAG, "Ignoring stale handed-off camera close: ${camera.id}")
+                        }
+                    }
+            }
+
+            val cameraHandlerForOpen = cameraHandler
+            val standbyReady = keepUltraWideReadyEnabled &&
+                backgroundUltraWideReady.isReadyFor(openCameraId)
+            if (standbyReady && cameraHandlerForOpen != null) {
+                val accepted = backgroundUltraWideReady.consumeReadyCamera(
+                    cameraId = openCameraId,
+                    stateCallback = transferredDeviceCallback
+                ) { warmedCamera ->
+                    val handler = cameraHandler
+                    if (handler == null) {
+                        warmedCamera?.close()
+                        return@consumeReadyCamera
+                    }
+                    val posted = handler.post {
+                        if (openGeneration != cameraOpenGeneration ||
+                            cameraDeviceLifecycle != CameraDeviceLifecycle.OPENING
+                        ) {
+                            warmedCamera?.close()
+                            return@post
+                        }
+                        if (warmedCamera != null) {
+                            PLog.i(TAG, "Reusing warmed CameraDevice for lens switch: $openCameraId")
+                            cameraOpenCallback.onOpened(warmedCamera)
+                        } else {
+                            try {
+                                cameraManager.openCamera(openCameraId, cameraOpenCallback, handler)
+                            } catch (error: Exception) {
+                                handleCameraOpenFailure(
+                                    cameraId = openCameraId,
+                                    errorCode = ERROR_CAMERA_OPEN_FAILED,
+                                    message = "Camera open failed after standby hand-off",
+                                    error = error
+                                )
+                            }
+                        }
+                    }
+                    if (!posted) warmedCamera?.close()
+                }
+                if (!accepted) {
+                    cameraManager.openCamera(openCameraId, cameraOpenCallback, cameraHandlerForOpen)
+                }
+            } else {
+                cameraManager.openCamera(openCameraId, cameraOpenCallback, cameraHandler)
+            }
 
         } catch (e: Exception) {
             handleCameraOpenFailure(
@@ -3870,10 +3971,12 @@ class Camera2Controller(private val context: Context) {
 
             _state.value = _state.value.copy(isPreviewActive = true)
             if (keepUltraWideReadyEnabled) {
+                val currentState = _state.value
                 backgroundUltraWideReady.update(
-                    cameras = _state.value.availableCameras,
-                    currentCameraId = _state.value.currentCameraId,
+                    cameras = currentState.availableCameras,
+                    currentCameraId = currentState.currentCameraId,
                     activeOpenCameraId = cameraDevice?.id,
+                    requestedSize = resolveStandbyWarmupSize(currentState)
                 )
             } else {
                 backgroundUltraWideReady.stop()
@@ -8796,7 +8899,11 @@ class Camera2Controller(private val context: Context) {
                 PLog.d(TAG, "Closing camera while video recording is finalizing")
             }
 
-            backgroundUltraWideReady.stop()
+            if (!keepUltraWideReadyEnabled || clearPendingOpen || pendingCameraOpenRequest == null) {
+                backgroundUltraWideReady.stop()
+            } else {
+                PLog.d(TAG, "Preserving warmed standby camera for the pending lens switch")
+            }
             clearCameraSessionState("closeCamera")
             val deviceToClose = cameraDevice
             cameraDevice = null
