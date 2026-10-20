@@ -3904,12 +3904,14 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
      */
     fun setZoomRatio(ratio: Float) {
         zoomRatioByMain = ratio
+        cameraController.setStandbyVisibleZoomRatio(ratio)
         val cameraInfo = state.value.getCurrentCameraInfo()
         setCameraControllerZoomRatio(ratio, cameraInfo)
     }
 
     private fun setZoomRatioForCamera(ratio: Float, cameraId: String) {
         zoomRatioByMain = ratio
+        cameraController.setStandbyVisibleZoomRatio(ratio)
         val cameraInfo = state.value.availableCameras.find { it.cameraId == cameraId }
         setCameraControllerZoomRatio(ratio, cameraInfo)
     }
