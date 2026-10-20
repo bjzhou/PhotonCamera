@@ -71,8 +71,6 @@ internal class LensSwitchTransitionState(
     private var switchPending = false
     private data class Request(val cameraId: String, val targetZoom: Float, val onSwitch: () -> Unit)
     private var pendingRequest: Request? = null
-    private var awaitedCameraId: String? = null
-    private var previousTimestamp: Long? = null
 
     fun switchLens(cameraId: String, targetZoom: Float, onSwitch: () -> Unit) {
         require(targetZoom.isFinite() && targetZoom > 0f)
@@ -109,8 +107,6 @@ internal class LensSwitchTransitionState(
                     val request = pendingRequest ?: break
                     pendingRequest = null
                     val timestampBeforeSwitch = viewModel.state.value.previewFirstFrameTimestampNs
-                    previousTimestamp = timestampBeforeSwitch
-                    awaitedCameraId = request.cameraId
                     request.onSwitch()
 
                     coroutineScope {
@@ -142,7 +138,6 @@ internal class LensSwitchTransitionState(
                         animation.join()
                         if (snapshotAnimationJob === animation) snapshotAnimationJob = null
                     }
-                    awaitedCameraId = null
 
                     // Keep the same frozen frame across queued optical stops. It will only be
                     // removed once no later lens/zoom request arrived while the camera reopened.
@@ -164,7 +159,6 @@ internal class LensSwitchTransitionState(
                 }
 
                 if (pendingRequest == null) {
-                    awaitedCameraId = null
                     clearSnapshot()
                     isActive = false
                     switchPending = false
@@ -176,7 +170,7 @@ internal class LensSwitchTransitionState(
                 clearSnapshot()
                 isActive = false
                 switchPending = false
-                awaitedCameraId = null
+                snapshotAnimationJob = null
                 pendingRequest = null
             }
         }
@@ -190,7 +184,6 @@ internal class LensSwitchTransitionState(
         isActive = false
         switchPending = false
         pendingRequest = null
-        awaitedCameraId = null
     }
 
     fun cancelPendingSwitch() {
