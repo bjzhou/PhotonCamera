@@ -545,7 +545,15 @@ class VideoRecorder(
                     "codecProfile=${resolvedColorConfig.codecProfile}, prefer10BitSurface=${resolvedColorConfig.prefer10BitInputSurface}, " +
                     "request=${requestedColorConfig.logProfile.name}, hasLut=${requestedColorConfig.hasActiveLut}"
             )
-            if (requestedColorConfig.logProfile.isEnabled && resolvedColorConfig.codecProfile == null) {
+            if (requestedColorConfig.logProfile == VideoLogProfile.HLG10 &&
+                !resolvedColorConfig.prefer10BitInputSurface
+            ) {
+                PLog.w(TAG, "No end-to-end HLG10 path available; recording with 8-bit HLG")
+            } else if (
+                requestedColorConfig.logProfile.isEnabled &&
+                requestedColorConfig.logProfile != VideoLogProfile.HLG10 &&
+                resolvedColorConfig.codecProfile == null
+            ) {
                 PLog.w(
                     TAG,
                     "Selected codec does not expose a 10-bit profile for ${requestedColorConfig.logProfile.name}. " +
