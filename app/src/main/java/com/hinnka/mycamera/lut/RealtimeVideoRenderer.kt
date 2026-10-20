@@ -118,6 +118,14 @@ class RealtimeVideoRenderer(
     private var cameraTextureId = 0
     private var cameraSurfaceTexture: SurfaceTexture? = null
     private var cameraSurface: Surface? = null
+    // A second OES input stays attached to the same GL/encoder pipeline. Camera2 can keep
+    // the other rear lens streaming into it while the active input changes without resetting
+    // MediaCodec, EGL, the muxer, audio capture, or presentation-time mapping.
+    private var standbyCameraTextureId = 0
+    private var standbyCameraSurfaceTexture: SurfaceTexture? = null
+    private var standbyCameraSurface: Surface? = null
+    @Volatile private var activeCameraInputIndex = 0
+    private var requestFrameAvailable: (() -> Unit)? = null
     private var intermediateTextureId = 0
     private var intermediateFboId = 0
     private var finalColorTextureId = 0
@@ -135,6 +143,29 @@ class RealtimeVideoRenderer(
     val inputSurface: Surface?
         get() = cameraSurface
 
+    /** Independent Camera2 output used by the pre-warmed second lens during ordinary video. */
+    val standbyInputSurface: Surface?
+        get() = standbyCameraSurface?.takeIf { it.isValid && initialized }
+
+    val isStandbyInputReady: Boolean
+        get() = standbyInputSurface != null
+
+    /**
+     * Selects which already-running camera stream feeds the existing encoder pipeline.
+     * Enhanced stabilization uses a single synchronized source, so it intentionally rejects
+     * dual-input switching and lets the caller use the safe legacy handoff instead.
+     */
+    fun setActiveCameraInput(useStandby: Boolean): Boolean {
+        if (useStandby && enhancedStabilizationEnabled) return false
+        val next = if (useStandby) 1 else 0
+        if (activeCameraInputIndex == next) return true
+        if (next == 1 && standbyInputSurface == null) return false
+        activeCameraInputIndex = next
+        cameraFramePending.set(true)
+        requestFrameAvailable?.invoke()
+        return true
+    }
+
     fun setCameraInputHlg10Source(enabled: Boolean) {
         cameraInputAlreadyHlg10 = enabled
     }
@@ -144,6 +175,7 @@ class RealtimeVideoRenderer(
         onFrameAvailable: () -> Unit,
     ) {
         check(!initialized) { "Realtime video renderer is already initialized" }
+        requestFrameAvailable = onFrameAvailable
         initializeEgl(encoderSurface)
         check(makeCurrent()) { "Cannot make realtime video EGL context current" }
         initializeGeometry()
@@ -174,6 +206,23 @@ class RealtimeVideoRenderer(
             }
         }
         cameraSurface = Surface(cameraSurfaceTexture)
+
+        // The standby input deliberately uses the same EGL context, transform pipeline and
+        // encoder target. The camera sessions own their own stream timing; only the selected
+        // source is advanced by renderLatestFrame().
+        standbyCameraTextureId = GlUtils.createOESTexture()
+        check(standbyCameraTextureId != 0) { "Cannot create standby camera OES texture" }
+        standbyCameraSurfaceTexture = SurfaceTexture(standbyCameraTextureId).apply {
+            setDefaultBufferSize(cameraInputSize.width, cameraInputSize.height)
+            setOnFrameAvailableListener {
+                cameraFramePending.set(true)
+                if (activeCameraInputIndex == 1 && !enhancedStabilizationEnabled) {
+                    onFrameAvailable()
+                }
+            }
+        }
+        standbyCameraSurface = Surface(standbyCameraSurfaceTexture)
+
         if (enhancedStabilizationEnabled) {
             check(
                 mgcEisPresentationTransform.captureFromSensorOrientation(
@@ -218,7 +267,15 @@ class RealtimeVideoRenderer(
         mapPresentationTimeNs: (cameraTimestampNs: Long) -> Long,
     ): Long? {
         if (!initialized || !makeCurrent()) return null
-        val surfaceTexture = cameraSurfaceTexture ?: return null
+        val sourceIndex = activeCameraInputIndex
+        val surfaceTexture = if (sourceIndex == 1) {
+            standbyCameraSurfaceTexture
+        } else {
+            cameraSurfaceTexture
+        } ?: return null
+        // When the lens source changes, consume the newest frame from that source immediately.
+        // No encoder/muxer restart is involved, and the existing timestamp mapper keeps the output
+        // timeline monotonic across the two independent sensor clock domains.
         val cameraFrameUpdated = cameraFramePending.getAndSet(false) &&
             acquireLatestCameraFrame(surfaceTexture)
         val cameraTimestampNs = surfaceTexture.timestamp
@@ -875,6 +932,7 @@ class RealtimeVideoRenderer(
         stabilizationSession?.stop()
         stabilizationSession = null
         stabilizationSessionStarted = false
+        requestFrameAvailable = null
         if (eglDisplay != EGL14.EGL_NO_DISPLAY &&
             eglContext != EGL14.EGL_NO_CONTEXT &&
             encoderEglSurface != EGL14.EGL_NO_SURFACE
@@ -886,6 +944,12 @@ class RealtimeVideoRenderer(
         cameraSurface = null
         cameraSurfaceTexture?.release()
         cameraSurfaceTexture = null
+        standbyCameraSurfaceTexture?.setOnFrameAvailableListener(null)
+        standbyCameraSurface?.release()
+        standbyCameraSurface = null
+        standbyCameraSurfaceTexture?.release()
+        standbyCameraSurfaceTexture = null
+        activeCameraInputIndex = 0
 
         layers.forEach { layer ->
             if (layer.lutTextureId != 0) {
@@ -900,6 +964,10 @@ class RealtimeVideoRenderer(
         if (cameraTextureId != 0) {
             GLES30.glDeleteTextures(1, intArrayOf(cameraTextureId), 0)
             cameraTextureId = 0
+        }
+        if (standbyCameraTextureId != 0) {
+            GLES30.glDeleteTextures(1, intArrayOf(standbyCameraTextureId), 0)
+            standbyCameraTextureId = 0
         }
         if (intermediateTextureId != 0) {
             GLES30.glDeleteTextures(1, intArrayOf(intermediateTextureId), 0)
