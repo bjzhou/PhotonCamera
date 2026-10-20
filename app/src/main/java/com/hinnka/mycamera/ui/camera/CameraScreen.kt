@@ -66,6 +66,7 @@ import com.hinnka.mycamera.ui.theme.accentContentColor
 import com.hinnka.mycamera.MyCameraApplication
 import com.hinnka.mycamera.R
 import com.hinnka.mycamera.camera.AspectRatio
+import com.hinnka.mycamera.camera.CameraInfo
 import com.hinnka.mycamera.camera.CameraState
 import com.hinnka.mycamera.camera.FocusPointSource
 import com.hinnka.mycamera.camera.PhotoCaptureProgress
@@ -621,8 +622,8 @@ fun CameraScreen(
                     )
                 ) {
                     val ratio = interpolateZoomRatio(startZoom, targetZoom, value)
-                    // Apply real zoom to the live camera before evaluating each lens boundary.
-                    viewModel.setZoomRatio(ratio)
+                    // Keep the zoom continuous on the live sensor and process any optical
+                    // boundary crossed by this frame before committing this frame's ratio.
                     while (nextStepIndex < steps.size) {
                         val (boundaryZoom, camera) = steps[nextStepIndex]
                         val crossed = if (ascending) {
