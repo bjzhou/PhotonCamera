@@ -67,21 +67,29 @@ internal class LensSwitchTransitionState(
         private set
     private var snapshotZoom = 1f
     private var job: Job? = null
-    private var switchPending = false
+    private var snapshotAnimationJob: Job? = null
+    // 为 true 时，正在进行的切换仍接受排队请求；进入淡出阶段后关闭，新请求重新开始一次过渡。
+    private var acceptsQueuedRequest = false
     private data class Request(val cameraId: String, val targetZoom: Float, val onSwitch: () -> Unit)
     private var pendingRequest: Request? = null
-    private var awaitedCameraId: String? = null
-    private var previousTimestamp: Long? = null
 
     fun switchLens(cameraId: String, targetZoom: Float, onSwitch: () -> Unit) {
         require(targetZoom.isFinite() && targetZoom > 0f)
-        // Coalesce gestures while the screenshot is being prepared. Once a switch has
-        // started, replace its waiter but keep the frozen frame across subsequent switches.
+        // 只保留最新请求。当前切换等待目标镜头首帧期间，新请求排队并沿用同一冻结帧，
+        // 待当前镜头真正出帧后再发起，避免连续跨越多个焦段时相机重开请求互相覆盖。
         pendingRequest = Request(cameraId, targetZoom, onSwitch)
-        if (switchPending && job?.isActive == true) return
+        if (acceptsQueuedRequest && job?.isActive == true) {
+            // 当前目标镜头出帧后无需等完整快照动画，直接衔接下一次切换。
+            snapshotAnimationJob?.cancel()
+            return
+        }
         job?.cancel()
+        if (job != null) {
+            // 淡出中的冻结帧已不是当前镜头画面，重新截取。
+            clearSnapshot()
+        }
         isActive = true
-        switchPending = true
+        acceptsQueuedRequest = true
         job = scope.launch {
             try {
                 opacity.snapTo(1f)
@@ -97,60 +105,62 @@ internal class LensSwitchTransitionState(
                 // Let Compose submit the overlay before the camera can release its surface.
                 withFrameNanos { }
                 withFrameNanos { }
-                val request = pendingRequest
-                pendingRequest = null
-                switchPending = false
-                if (request != null) {
-                    previousTimestamp = viewModel.state.value.previewFirstFrameTimestampNs
-                    awaitedCameraId = request.cameraId
+                while (true) {
+                    val request = pendingRequest ?: break
+                    pendingRequest = null
+                    val stateBeforeSwitch = viewModel.state.value
+                    if (stateBeforeSwitch.currentCameraId == request.cameraId &&
+                        stateBeforeSwitch.isPreviewActive
+                    ) {
+                        // 排队期间目标镜头已处于工作状态，不会产生新的首帧，直接应用请求。
+                        request.onSwitch()
+                        continue
+                    }
+                    val timestampBeforeSwitch = stateBeforeSwitch.previewFirstFrameTimestampNs
                     request.onSwitch()
-                }
-                if (awaitedCameraId == null) {
-                    clearSnapshot()
-                    isActive = false
-                    return@launch
-                }
-                coroutineScope {
-                    val animation = launch {
-                        animateSnapshotTo(request?.targetZoom ?: viewModel.zoomRatioByMain)
-                    }
-                    val readyState = viewModel.state.first {
-                        it.currentCameraId == awaitedCameraId && it.isPreviewActive &&
-                            it.previewFirstFrameTimestampNs != null &&
-                            it.previewFirstFrameTimestampNs != previousTimestamp
-                    }
-                    // Follow the current SurfaceView if preview dimensions change.
-                    val rendered = CompletableDeferred<Unit>()
-                    val waiter = launch {
-                        snapshotFlow { viewModel.glSurfaceView }.collectLatest { preview ->
-                            if (preview != null) {
-                                preview.awaitPreviewFrame(readyState.previewFirstFrameTimestampNs!!)
-                                rendered.complete(Unit)
+                    coroutineScope {
+                        val animation = launch { animateSnapshotTo(request.targetZoom) }
+                        snapshotAnimationJob = animation
+                        val readyState = viewModel.state.first {
+                            it.currentCameraId == request.cameraId && it.isPreviewActive &&
+                                it.previewFirstFrameTimestampNs != null &&
+                                it.previewFirstFrameTimestampNs != timestampBeforeSwitch
+                        }
+                        // Follow the current SurfaceView if preview dimensions change.
+                        val rendered = CompletableDeferred<Unit>()
+                        val waiter = launch {
+                            snapshotFlow { viewModel.glSurfaceView }.collectLatest { preview ->
+                                if (preview != null) {
+                                    preview.awaitPreviewFrame(readyState.previewFirstFrameTimestampNs!!)
+                                    rendered.complete(Unit)
+                                }
                             }
                         }
+                        try {
+                            rendered.await()
+                        } finally {
+                            waiter.cancel()
+                        }
+                        if (pendingRequest != null) animation.cancel()
+                        animation.join()
+                        snapshotAnimationJob = null
                     }
-                    try {
-                        rendered.await()
-                    } finally {
-                        waiter.cancel()
-                    }
-                    animation.join()
                 }
+                acceptsQueuedRequest = false
                 // Renderer callbacks run before GLSurfaceView swaps buffers.
                 withFrameNanos { }
                 withFrameNanos { }
                 opacity.animateTo(0f, tween(160))
                 clearSnapshot()
                 isActive = false
-                awaitedCameraId = null
             } catch (error: CancellationException) {
                 throw error
             } catch (error: Exception) {
                 PLog.e("LensSwitchTransition", "Lens preview transition failed", error)
                 clearSnapshot()
                 isActive = false
-                switchPending = false
-                awaitedCameraId = null
+                acceptsQueuedRequest = false
+                snapshotAnimationJob = null
                 pendingRequest = null
             }
         }
@@ -159,11 +169,11 @@ internal class LensSwitchTransitionState(
     fun cancel() {
         job?.cancel()
         job = null
+        snapshotAnimationJob = null
         clearSnapshot()
         isActive = false
-        switchPending = false
+        acceptsQueuedRequest = false
         pendingRequest = null
-        awaitedCameraId = null
     }
 
     fun cancelPendingSwitch() {

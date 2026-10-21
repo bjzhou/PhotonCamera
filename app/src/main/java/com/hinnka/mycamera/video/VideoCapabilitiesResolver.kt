@@ -17,6 +17,9 @@ object VideoCapabilitiesResolver {
     private const val TAG = "VideoCapabilitiesResolver"
     private const val VIDEO_PREVIEW_SHORT_EDGE = 1080
     private const val VIDEO_PREVIEW_ASPECT_TOLERANCE = 0.01f
+    private const val EIGHT_MP_SOURCE_MIN_PIXELS = 7_500_000L
+    private const val EIGHT_MP_SOURCE_MAX_PIXELS = 12_000_000L
+    private const val EIGHT_MP_SOURCE_ASPECT_TOLERANCE = 0.04f
 
     fun resolve(
         characteristics: CameraCharacteristics,
@@ -40,10 +43,16 @@ object VideoCapabilitiesResolver {
         val yuvOutputSizes = streamConfigMap?.getOutputSizes(ImageFormat.YUV_420_888)?.toList().orEmpty()
         // Dedicated recording uses a SurfaceTexture input, including full-sensor sizes
         // that may not be advertised for MediaRecorder.
-        val recordingOutputSizes = if (requestedConfig.aspectRatio == VideoAspectRatio.OPEN_GATE) {
-            previewOutputSizes
-        } else {
-            resolveRecordingOutputSizes(characteristics)
+        // 无原生 4K 录制流但存在 8MP 级 4:3 源时，同样以 SurfaceTexture 流作为录制门控。
+        val advertisedRecordingSizes = resolveRecordingOutputSizes(characteristics)
+        val hasNativeUhdRecordingSize = advertisedRecordingSizes.any {
+            maxOf(it.width, it.height) >= VideoResolutionPreset.UHD_2160P.longEdge
+        }
+        val recordingOutputSizes = when {
+            requestedConfig.aspectRatio == VideoAspectRatio.OPEN_GATE -> previewOutputSizes
+            !hasNativeUhdRecordingSize && previewOutputSizes.any(::isEightMpFourThreeSource) ->
+                previewOutputSizes
+            else -> advertisedRecordingSizes
         }
         val sensorOrientation = characteristics.get(CameraCharacteristics.SENSOR_ORIENTATION) ?: 0
         val activeArray = characteristics.get(CameraCharacteristics.SENSOR_INFO_ACTIVE_ARRAY_SIZE)
@@ -220,7 +229,7 @@ object VideoCapabilitiesResolver {
                 )
             }
         }
-        return outputSizes
+        val coveringSize = outputSizes
             .filter { maxOf(it.width, it.height) >= preset.longEdge }
             .sortedWith(
                 compareBy<Size> { abs(getPortraitAspectRatio(it) - targetAspect) }
@@ -228,6 +237,18 @@ object VideoCapabilitiesResolver {
                     .thenByDescending { it.width.toLong() * it.height.toLong() }
             )
             .firstOrNull()
+        if (coveringSize != null || preset != VideoResolutionPreset.UHD_2160P) return coveringSize
+        // 8MP 级 4:3 传感器（常见于前摄/超广角）没有长边 ≥3840 的流，但像素量与 4K 相当；
+        // 录制经 GL 渲染裁切缩放到编码尺寸，因此允许以该流作为 4K 输入源。
+        return outputSizes
+            .filter(::isEightMpFourThreeSource)
+            .maxByOrNull { it.width.toLong() * it.height.toLong() }
+    }
+
+    private fun isEightMpFourThreeSource(size: Size): Boolean {
+        val pixels = size.width.toLong() * size.height.toLong()
+        return pixels in EIGHT_MP_SOURCE_MIN_PIXELS until EIGHT_MP_SOURCE_MAX_PIXELS &&
+            abs(getPortraitAspectRatio(size) - 3f / 4f) <= EIGHT_MP_SOURCE_ASPECT_TOLERANCE
     }
 
     private fun findFixedPreviewOutputSize(

@@ -5017,17 +5017,29 @@ class Camera2Controller(private val context: Context) {
                 return
             }
 
+            val enhancedPhotoPreview = state.photoPreviewStabilizationEnabled && !isCapture
+            // 部分 HAL 的预览模板默认开启厂商 EIS，EIS+ 预览需与视频分支一致显式关闭。
+            if (enhancedPhotoPreview &&
+                availableVideoStabilizationModes.contains(
+                    CaptureRequest.CONTROL_VIDEO_STABILIZATION_MODE_OFF
+                )
+            ) {
+                builder.set(
+                    CaptureRequest.CONTROL_VIDEO_STABILIZATION_MODE,
+                    CaptureRequest.CONTROL_VIDEO_STABILIZATION_MODE_OFF
+                )
+            }
             if (availableOpticalStabilizationModes.contains(CaptureRequest.LENS_OPTICAL_STABILIZATION_MODE_ON)) {
                 builder.set(
                     CaptureRequest.LENS_OPTICAL_STABILIZATION_MODE,
-                    if (state.photoPreviewStabilizationEnabled && !isCapture) {
+                    if (enhancedPhotoPreview) {
                         CaptureRequest.LENS_OPTICAL_STABILIZATION_MODE_OFF
                     } else {
                         CaptureRequest.LENS_OPTICAL_STABILIZATION_MODE_ON
                     }
                 )
             }
-            applyOisDataMode(builder, state.photoPreviewStabilizationEnabled && !isCapture)
+            applyOisDataMode(builder, enhancedPhotoPreview)
         } catch (e: Exception) {
             PLog.e(TAG, "Failed to apply stabilization settings", e)
         }

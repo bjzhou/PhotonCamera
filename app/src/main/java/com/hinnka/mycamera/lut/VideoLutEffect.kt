@@ -708,7 +708,7 @@ private class VideoLutShaderProgram(
     private var curveTextureId = 0
     private val basicToneTextures = BasicToneGlTextures()
     private val logInput = LogInputGl()
-    private val highlightDiffusion = VideoHighlightDiffusionGl(TAG)
+    private val spatialEffects = VideoSpatialEffectsGl(TAG)
     private var lastLutConfig: LutConfig? = null
     private var lastRecipeParams: ColorRecipeParams? = null
 
@@ -757,12 +757,16 @@ private class VideoLutShaderProgram(
             throw VideoFrameProcessingException("LUT input does not match source Log profile ${effect.sourceLogProfile}", presentationTimeUs)
         }
         val currentRecipeParams = effect.recipeParams
+        val softLight = currentRecipeParams?.softLight ?: 0f
         val bloom = currentRecipeParams?.bloom ?: 0f
         val halation = currentRecipeParams?.redHalation ?: 0f
-        val diffusionEnabled = bloom > 0.001f || halation > 0.001f
+        val spatialEffectsEnabled = softLight > 0.001f || bloom > 0.001f || halation > 0.001f
         // Media3 1.10 defaults to display-encoded SDR, but uses linear RGB for HDR output.
-        if (diffusionEnabled && useHdr) {
-            throw VideoFrameProcessingException("Bloom and Halation require an SDR video working space", presentationTimeUs)
+        if (spatialEffectsEnabled && useHdr) {
+            throw VideoFrameProcessingException(
+                "Soft Light, Bloom and Halation require an SDR video working space",
+                presentationTimeUs,
+            )
         }
         val previousVao = IntArray(1)
         if (isGles3Context) {
@@ -770,9 +774,9 @@ private class VideoLutShaderProgram(
             GLES30.glBindVertexArray(0)
         }
         try {
-            if (diffusionEnabled) {
-                highlightDiffusion.drawFrame(
-                    inputWidth, inputHeight, bloom, halation,
+            if (spatialEffectsEnabled) {
+                spatialEffects.drawFrame(
+                    inputWidth, inputHeight, softLight, bloom, halation,
                     currentRecipeParams?.filmGrain ?: 0f, presentationTimeUs, ::drawQuad,
                 ) {
                     drawColorFrame(inputTexId, presentationTimeUs, currentLutConfig, currentRecipeParams, deferFilmGrain = true)
@@ -974,7 +978,10 @@ private class VideoLutShaderProgram(
         }
 
         GLES30.glUniform1i(GLES30.glGetUniformLocation(programId, "uInputColorSpace"), 0) // 默认 sRGB
-        GLES30.glUniform1f(GLES30.glGetUniformLocation(programId, "uChromaticAberration"), 0f)
+        GLES30.glUniform1f(
+            GLES30.glGetUniformLocation(programId, "uChromaticAberration"),
+            currentRecipeParams?.chromaticAberration ?: 0f,
+        )
         GLES30.glUniform1f(
             GLES30.glGetUniformLocation(programId, "uSharpening"),
             currentRecipeParams?.sharpness?.coerceIn(-1f, 1f) ?: 0f,
@@ -1111,7 +1118,7 @@ private class VideoLutShaderProgram(
         deleteCurveTexture()
         basicToneTextures.release()
         logInput.release()
-        highlightDiffusion.release()
+        spatialEffects.release()
         if (positionVbo != 0) {
             GLES30.glDeleteBuffers(1, intArrayOf(positionVbo), 0)
             positionVbo = 0

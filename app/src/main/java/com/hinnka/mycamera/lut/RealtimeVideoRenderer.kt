@@ -90,6 +90,22 @@ class RealtimeVideoRenderer(
     private val finalFilmGrainEnabled: Boolean
         get() = filmGrainAmount > 0.001f &&
             encoderColorConfig.pipeline != VideoEncodedColorPipeline.CUSTOM_LOG
+    // Log 录制保留后期空间：柔光与高光扩散只作用于监看画面，不烘焙进编码。
+    private val spatialEffectsAllowed = !videoLogProfile.isEnabled
+    private val softLightAmount = spatialEffectAmount { it.softLight }
+    private val bloomAmount = spatialEffectAmount { it.bloom }
+    private val redHalationAmount = spatialEffectAmount { it.redHalation }
+    private val softLightEnabled = softLightAmount > 0.001f
+    private val highlightDiffusionEnabled = bloomAmount > 0.001f || redHalationAmount > 0.001f
+    private val postProcessEnabled: Boolean
+        get() = softLightEnabled || highlightDiffusionEnabled || finalFilmGrainEnabled
+    private val softLightGl = SoftLightGl(TAG)
+    private val highlightDiffusionGl = HighlightDiffusionGl(TAG)
+
+    private fun spatialEffectAmount(select: (ColorRecipeParams) -> Float): Float {
+        if (!spatialEffectsAllowed) return 0f
+        return layers.lastOrNull { select(it.params) > 0.001f }?.params?.let(select) ?: 0f
+    }
     private val identityMatrix = FloatArray(16).also { Matrix.setIdentityM(it, 0) }
     private val firstPassMvpMatrix = FloatArray(16).also {
         Matrix.setIdentityM(it, 0)
@@ -141,16 +157,22 @@ class RealtimeVideoRenderer(
         check(makeCurrent()) { "Cannot make realtime video EGL context current" }
         initializeGeometry()
         initializeLayerTextures()
-        if (layers.size > 1 || finalFilmGrainEnabled) {
+        if (layers.size > 1 || postProcessEnabled) {
             initializeIntermediateFramebuffer()
         }
-        if (layers.size > 1 && finalFilmGrainEnabled) {
+        if (layers.size > 1 && postProcessEnabled) {
             val finalTarget = createColorFramebuffer("final color")
             finalColorTextureId = finalTarget.first
             finalColorFboId = finalTarget.second
         }
         if (finalFilmGrainEnabled) {
             check(filmGrainGl.prepare()) { "Cannot create realtime video film grain program" }
+        }
+        if (softLightEnabled) {
+            check(softLightGl.prepare()) { "Cannot create realtime video soft light programs" }
+        }
+        if (highlightDiffusionEnabled) {
+            check(highlightDiffusionGl.prepare()) { "Cannot create realtime video highlight diffusion programs" }
         }
 
         cameraTextureId = GlUtils.createOESTexture()
@@ -247,8 +269,8 @@ class RealtimeVideoRenderer(
         if (presentationTimeNs <= 0L) return null
 
         val firstLayer = layers.first()
-        val grainEnabled = finalFilmGrainEnabled
-        val firstTargetFbo = if (layers.size > 1 || grainEnabled) intermediateFboId else 0
+        val postProcess = postProcessEnabled
+        val firstTargetFbo = if (layers.size > 1 || postProcess) intermediateFboId else 0
         drawLayer(
             layer = firstLayer,
             targetFboId = firstTargetFbo,
@@ -268,7 +290,7 @@ class RealtimeVideoRenderer(
                 drawLayer(
                     layer = layer,
                     targetFboId = if (isLast) {
-                        if (grainEnabled) finalColorFboId else 0
+                        if (postProcess) finalColorFboId else 0
                     } else {
                         intermediateFboId
                     },
@@ -284,21 +306,12 @@ class RealtimeVideoRenderer(
             }
         }
 
-        if (grainEnabled) {
-            val sourceTextureId = if (layers.size > 1) finalColorTextureId else intermediateTextureId
-            check(
-                filmGrainGl.drawToFramebuffer(
-                    targetFramebufferId = 0,
-                    sourceTextureId = sourceTextureId,
-                    width = encoderOutputSize.width,
-                    height = encoderOutputSize.height,
-                    amount = filmGrainAmount,
-                    frameSeed = FilmGrainShaders.frameSeed(timestampNs),
-                    drawQuad = ::drawSimpleQuad,
-                )
-            ) {
-                "Realtime video film grain pass failed"
-            }
+        if (postProcess) {
+            drawPostProcess(
+                colorTextureId = if (layers.size > 1) finalColorTextureId else intermediateTextureId,
+                colorFramebufferId = if (layers.size > 1) finalColorFboId else intermediateFboId,
+                timestampNs = timestampNs,
+            )
         }
 
         EGLExt.eglPresentationTimeANDROID(eglDisplay, encoderEglSurface, presentationTimeNs)
@@ -308,6 +321,55 @@ class RealtimeVideoRenderer(
             )
         }
         return presentationTimeNs
+    }
+
+    /** 与预览一致的顺序：色彩 -> 柔光 -> Halation -> Bloom -> 颗粒，最后写入编码器 Surface。 */
+    private fun drawPostProcess(colorTextureId: Int, colorFramebufferId: Int, timestampNs: Long) {
+        val width = encoderOutputSize.width
+        val height = encoderOutputSize.height
+        var textureId = colorTextureId
+        var framebufferId = colorFramebufferId
+        if (softLightEnabled) {
+            val output = checkNotNull(
+                softLightGl.renderToTexture(textureId, width, height, softLightAmount, ::drawSimpleQuad)
+            ) { "Realtime video soft light pass failed" }
+            textureId = output.textureId
+            framebufferId = output.framebufferId
+        }
+        if (highlightDiffusionEnabled) {
+            val output = checkNotNull(
+                highlightDiffusionGl.renderToTexture(
+                    textureId, width, height, bloomAmount, redHalationAmount, ::drawSimpleQuad,
+                )
+            ) { "Realtime video highlight diffusion pass failed" }
+            textureId = output.textureId
+            framebufferId = output.framebufferId
+        }
+        if (finalFilmGrainEnabled) {
+            check(
+                filmGrainGl.drawToFramebuffer(
+                    targetFramebufferId = 0,
+                    sourceTextureId = textureId,
+                    width = width,
+                    height = height,
+                    amount = filmGrainAmount,
+                    frameSeed = FilmGrainShaders.frameSeed(timestampNs),
+                    drawQuad = ::drawSimpleQuad,
+                )
+            ) {
+                "Realtime video film grain pass failed"
+            }
+            return
+        }
+        GLES30.glBindFramebuffer(GLES30.GL_READ_FRAMEBUFFER, framebufferId)
+        GLES30.glBindFramebuffer(GLES30.GL_DRAW_FRAMEBUFFER, 0)
+        GLES30.glBlitFramebuffer(
+            0, 0, width, height, 0, 0, width, height,
+            GLES30.GL_COLOR_BUFFER_BIT, GLES30.GL_NEAREST,
+        )
+        val error = GLES30.glGetError()
+        GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, 0)
+        check(error == GLES30.GL_NO_ERROR) { "Realtime video post-process output glError=$error" }
     }
 
     private fun acquireLatestCameraFrame(surfaceTexture: SurfaceTexture): Boolean {
@@ -835,18 +897,23 @@ class RealtimeVideoRenderer(
         positions.position(0)
         textureCoordinates.position(0)
         indices.position(0)
-        GLES30.glEnableVertexAttribArray(positionLocation)
-        GLES30.glVertexAttribPointer(positionLocation, 2, GLES30.GL_FLOAT, false, 0, positions)
-        GLES30.glEnableVertexAttribArray(textureLocation)
-        GLES30.glVertexAttribPointer(textureLocation, 2, GLES30.GL_FLOAT, false, 0, textureCoordinates)
+        // gl_FragCoord-based passes (diffusion reduce/normalize) let the linker drop aTexCoord.
+        if (positionLocation >= 0) {
+            GLES30.glEnableVertexAttribArray(positionLocation)
+            GLES30.glVertexAttribPointer(positionLocation, 2, GLES30.GL_FLOAT, false, 0, positions)
+        }
+        if (textureLocation >= 0) {
+            GLES30.glEnableVertexAttribArray(textureLocation)
+            GLES30.glVertexAttribPointer(textureLocation, 2, GLES30.GL_FLOAT, false, 0, textureCoordinates)
+        }
         GLES30.glDrawElements(
             GLES30.GL_TRIANGLES,
             Shaders.DRAW_ORDER.size,
             GLES30.GL_UNSIGNED_SHORT,
             indices,
         )
-        GLES30.glDisableVertexAttribArray(positionLocation)
-        GLES30.glDisableVertexAttribArray(textureLocation)
+        if (positionLocation >= 0) GLES30.glDisableVertexAttribArray(positionLocation)
+        if (textureLocation >= 0) GLES30.glDisableVertexAttribArray(textureLocation)
     }
 
     @Synchronized
@@ -908,6 +975,8 @@ class RealtimeVideoRenderer(
             finalColorFboId = 0
         }
         filmGrainGl.release()
+        softLightGl.release()
+        highlightDiffusionGl.release()
         mgcEisHardwareBufferRenderer.release()
         mgcEisYuvRenderer.release()
         colorProgramCache.release()

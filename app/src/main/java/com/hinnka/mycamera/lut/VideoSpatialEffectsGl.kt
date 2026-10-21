@@ -2,8 +2,9 @@ package com.hinnka.mycamera.lut
 
 import android.opengl.GLES30
 
-/** Adapts display-encoded diffusion passes to Media3's caller-owned output framebuffer. */
-internal class VideoHighlightDiffusionGl(logTag: String) {
+/** Adapts display-encoded Soft Light and diffusion passes to Media3's caller-owned output framebuffer. */
+internal class VideoSpatialEffectsGl(logTag: String) {
+    private val softLightGl = SoftLightGl(logTag)
     private val diffusion = HighlightDiffusionGl(logTag)
     private val grain = FilmGrainGl(logTag)
     private var colorTexture = 0
@@ -14,10 +15,11 @@ internal class VideoHighlightDiffusionGl(logTag: String) {
     private val readFramebuffer = IntArray(1)
     private val viewport = IntArray(4)
 
-    /** Called only when Bloom or Halation is enabled. [drawColor] must defer film grain. */
+    /** Called only when Soft Light, Bloom or Halation is enabled. [drawColor] must defer film grain. */
     fun drawFrame(
         width: Int,
         height: Int,
+        softLight: Float,
         bloom: Float,
         halation: Float,
         filmGrain: Float,
@@ -35,9 +37,18 @@ internal class VideoHighlightDiffusionGl(logTag: String) {
             GLES30.glDisable(GLES30.GL_BLEND)
             drawColor()
             checkGl("video color pass")
-            val output = checkNotNull(
-                diffusion.renderToTexture(colorTexture, width, height, bloom, halation, drawQuad)
-            ) { "Video highlight diffusion produced no output" }
+            // 与预览一致的顺序：柔光 -> Halation -> Bloom -> 颗粒。
+            var output = HighlightDiffusionOutput(colorTexture, colorFramebuffer)
+            if (softLight > 0.001f) {
+                output = checkNotNull(
+                    softLightGl.renderToTexture(output.textureId, width, height, softLight, drawQuad)
+                ) { "Video soft light produced no output" }
+            }
+            if (bloom > 0.001f || halation > 0.001f) {
+                output = checkNotNull(
+                    diffusion.renderToTexture(output.textureId, width, height, bloom, halation, drawQuad)
+                ) { "Video highlight diffusion produced no output" }
+            }
             if (filmGrain > 0.001f) {
                 check(grain.drawToFramebuffer(
                     targetFramebufferId = drawFramebuffer[0],
@@ -55,7 +66,7 @@ internal class VideoHighlightDiffusionGl(logTag: String) {
                     0, 0, width, height, 0, 0, width, height,
                     GLES30.GL_COLOR_BUFFER_BIT, GLES30.GL_NEAREST,
                 )
-                checkGl("video diffusion output")
+                checkGl("video spatial effects output")
             }
         } finally {
             // Media3 owns this framebuffer, including its lifetime and downstream texture consumers.
@@ -116,6 +127,7 @@ internal class VideoHighlightDiffusionGl(logTag: String) {
     }
 
     fun release() {
+        softLightGl.release()
         diffusion.release()
         grain.release()
         releaseColorTarget()

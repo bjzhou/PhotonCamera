@@ -69,6 +69,14 @@ internal class HighlightDiffusionGl(private val logTag: String) {
     private val halationEffect = Effect(true, 512, 5.0)
     private val bloomEffect = Effect(false, 256, 17.5)
 
+    fun prepare(): Boolean = try {
+        ensurePrograms()
+        true
+    } catch (failure: IllegalStateException) {
+        PLog.e(logTag, "Highlight diffusion programs unavailable: ${failure.message}")
+        false
+    }
+
     fun renderToTexture(
         sourceTextureId: Int,
         width: Int,
