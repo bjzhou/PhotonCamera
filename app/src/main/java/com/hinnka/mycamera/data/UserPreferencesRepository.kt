@@ -33,6 +33,7 @@ import com.hinnka.mycamera.raw.HncsRenderIntent
 import com.hinnka.mycamera.raw.HncsProfileManager
 import com.hinnka.mycamera.raw.LumixPhotoStyle
 import com.hinnka.mycamera.raw.CanonPictureStyle
+import com.hinnka.mycamera.raw.OmSystemPictureMode
 import com.hinnka.mycamera.raw.RawRenderingEngine
 import com.hinnka.mycamera.raw.RawAdaptiveExposureMode
 import com.hinnka.mycamera.raw.RawProcessingPreferences
@@ -404,6 +405,8 @@ class UserPreferencesRepository(private val context: Context) {
         private val RAW_HNCS_COLOR_MATCHING_KEY = booleanPreferencesKey("raw_hncs_color_matching_enabled")
         private val RAW_CANON_USE_R5_COLOR_MATRIX_KEY = booleanPreferencesKey("raw_canon_use_r5_color_matrix")
         private val RAW_LEICA_USE_M9_COLOR_MATRIX_KEY = booleanPreferencesKey("raw_leica_use_m9_color_matrix")
+        private val RAW_OM_SYSTEM_PICTURE_MODE_KEY = stringPreferencesKey("raw_om_system_picture_mode")
+        private val RAW_OM_SYSTEM_USE_OM1_COLOR_MATRIX_KEY = booleanPreferencesKey("raw_om_system_use_om1_color_matrix")
         private val RAW_PHOTON_HDR_KEY = booleanPreferencesKey("raw_photon_hdr")
         private val LEGACY_RAW_PHOTON_PGTM_TONE_MAP_KEY =
             booleanPreferencesKey("raw_photon_pgtm_tone_map")
@@ -717,6 +720,8 @@ class UserPreferencesRepository(private val context: Context) {
                     hncsColorMatchingEnabled = preferences[RAW_HNCS_COLOR_MATCHING_KEY] ?: true,
                     canonUseR5ColorMatrix = preferences[RAW_CANON_USE_R5_COLOR_MATRIX_KEY] ?: false,
                     leicaUseM9ColorMatrix = preferences[RAW_LEICA_USE_M9_COLOR_MATRIX_KEY] ?: false,
+                    omSystemPictureMode = OmSystemPictureMode.fromPersistedValue(preferences[RAW_OM_SYSTEM_PICTURE_MODE_KEY]),
+                    omSystemUseOm1ColorMatrix = preferences[RAW_OM_SYSTEM_USE_OM1_COLOR_MATRIX_KEY] ?: false,
                     usePhotonHdr = true
                 ).normalized(),
                 rawExposureCompensation = preferences[RAW_EXPOSURE_COMPENSATION_KEY] ?: 0f,
@@ -1353,6 +1358,8 @@ class UserPreferencesRepository(private val context: Context) {
             preferences[RAW_HNCS_COLOR_MATCHING_KEY] = normalized.hncsColorMatchingEnabled
             preferences[RAW_CANON_USE_R5_COLOR_MATRIX_KEY] = normalized.canonUseR5ColorMatrix
             preferences[RAW_LEICA_USE_M9_COLOR_MATRIX_KEY] = normalized.leicaUseM9ColorMatrix
+            preferences[RAW_OM_SYSTEM_PICTURE_MODE_KEY] = normalized.omSystemPictureMode.persistedValue
+            preferences[RAW_OM_SYSTEM_USE_OM1_COLOR_MATRIX_KEY] = normalized.omSystemUseOm1ColorMatrix
             preferences[RAW_PHOTON_HDR_KEY] = normalized.usePhotonHdr
             preferences[LEGACY_RAW_PHOTON_PGTM_TONE_MAP_KEY] = false
             preferences[RAW_AUTO_EXPOSURE_KEY] = false
@@ -2717,6 +2724,8 @@ class UserPreferencesRepository(private val context: Context) {
                 preferences[RAW_HNCS_COLOR_MATCHING_KEY] = normalized.hncsColorMatchingEnabled
                 preferences[RAW_CANON_USE_R5_COLOR_MATRIX_KEY] = normalized.canonUseR5ColorMatrix
                 preferences[RAW_LEICA_USE_M9_COLOR_MATRIX_KEY] = normalized.leicaUseM9ColorMatrix
+                preferences[RAW_OM_SYSTEM_PICTURE_MODE_KEY] = normalized.omSystemPictureMode.persistedValue
+                preferences[RAW_OM_SYSTEM_USE_OM1_COLOR_MATRIX_KEY] = normalized.omSystemUseOm1ColorMatrix
                 preferences[RAW_PHOTON_HDR_KEY] = normalized.usePhotonHdr
                 preferences[LEGACY_RAW_PHOTON_PGTM_TONE_MAP_KEY] = false
                 preferences[RAW_AUTO_EXPOSURE_KEY] = false

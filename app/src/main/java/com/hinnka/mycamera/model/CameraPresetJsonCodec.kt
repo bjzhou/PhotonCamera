@@ -9,6 +9,7 @@ import com.hinnka.mycamera.raw.HncsRenderIntent
 import com.hinnka.mycamera.raw.HncsProfileManager
 import com.hinnka.mycamera.raw.LumixPhotoStyle
 import com.hinnka.mycamera.raw.CanonPictureStyle
+import com.hinnka.mycamera.raw.OmSystemPictureMode
 import com.hinnka.mycamera.raw.RawRenderingEngine
 import com.hinnka.mycamera.raw.RawDenoiseDefaults
 import com.hinnka.mycamera.raw.RawSharpeningDefaults
@@ -95,6 +96,8 @@ internal object CameraPresetJsonCodec {
             rawHncsColorMatchingEnabled = obj.boolean("rawHncsColorMatchingEnabled", true),
             rawCanonUseR5ColorMatrix = obj.boolean("rawCanonUseR5ColorMatrix", false),
             rawLeicaUseM9ColorMatrix = obj.boolean("rawLeicaUseM9ColorMatrix", false),
+            rawOmSystemPictureMode = OmSystemPictureMode.fromPersistedValue(obj.stringOrNull("rawOmSystemPictureMode")).persistedValue,
+            rawOmSystemUseOm1ColorMatrix = obj.boolean("rawOmSystemUseOm1ColorMatrix", false),
             rawAgxBlackRelativeExposure = obj.float(
                 "rawAgxBlackRelativeExposure",
                 RawToneMappingParameters.AGX_BLACK_RELATIVE_EXPOSURE_DEFAULT,

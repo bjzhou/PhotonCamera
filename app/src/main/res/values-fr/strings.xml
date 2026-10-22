@@ -488,4 +488,14 @@
     <string name="fotufilm_value_minutes">%1$s min</string>
     <string name="fotufilm_value_years">%1$s ans</string>
     <!-- /Fotufilm controls -->
+    <string name="settings_raw_color_engine_om_system_description">Couleurs et tonalités des modes d’image de l’OM-1 Mark II (TruePic X).</string>
+    <string name="settings_raw_om_system_picture_mode">Mode d’image</string>
+    <string name="settings_raw_om_system_picture_mode_description">Choisissez un mode d’image OM SYSTEM. Naturel est le mode par défaut.</string>
+    <string name="settings_raw_om_system_mode_vivid">Éclatant</string>
+    <string name="settings_raw_om_system_mode_natural">Naturel</string>
+    <string name="settings_raw_om_system_mode_muted">Sourdine</string>
+    <string name="settings_raw_om_system_mode_portrait">Portrait</string>
+    <string name="settings_raw_om_system_color_matrix">Matrice de couleur</string>
+    <string name="settings_raw_om_system_color_matrix_description">Choisissez la matrice de couleur de votre appareil ou de l’OM-1 Mark II pour calibrer les couleurs RAW.</string>
+    <string name="settings_raw_om_system_color_matrix_device">Par défaut</string>
 </resources>

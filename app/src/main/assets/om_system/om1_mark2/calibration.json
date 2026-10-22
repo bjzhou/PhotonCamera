@@ -1,0 +1,31 @@
+{
+  "schemaVersion": 1,
+  "cameraModel": "OM Digital Solutions OM-1 Mark II",
+  "sourceFile": "OM Digital Solutions OM-1 Mark II Adobe Standard.dcp",
+  "sourceSha256": "8cf4cc85333b9eb9ea5c94a24d885f06c6e4aa2bb03e2009f842aec8bdd54376",
+  "purpose": "sensor_color_matrix_only",
+  "colorMatrix1": [
+    1.0602,
+    -0.5977,
+    0.0574,
+    -0.3109,
+    1.1296,
+    0.2063,
+    0.0002,
+    0.0521,
+    0.6609
+  ],
+  "colorMatrix2": [
+    0.909,
+    -0.3591,
+    -0.0756,
+    -0.3252,
+    1.1396,
+    0.2109,
+    -0.0318,
+    0.1059,
+    0.5606
+  ],
+  "calibrationIlluminant1": 17,
+  "calibrationIlluminant2": 21
+}

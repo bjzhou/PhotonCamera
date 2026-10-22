@@ -19,6 +19,7 @@ import com.hinnka.mycamera.raw.HncsRenderIntent
 import com.hinnka.mycamera.raw.HncsProfileManager
 import com.hinnka.mycamera.raw.LumixPhotoStyle
 import com.hinnka.mycamera.raw.CanonPictureStyle
+import com.hinnka.mycamera.raw.OmSystemPictureMode
 import com.hinnka.mycamera.raw.RawRenderingEngine
 import com.hinnka.mycamera.raw.RawToneMappingParameters
 import com.hinnka.mycamera.raw.RawOutputUpscaleMode
@@ -407,6 +408,8 @@ data class MediaMetadata(
                         hncsColorMatchingEnabled = obj.optBoolean("rawHncsColorMatchingEnabled", true),
                         canonUseR5ColorMatrix = obj.optBoolean("rawCanonUseR5ColorMatrix", false),
                         leicaUseM9ColorMatrix = obj.optBoolean("rawLeicaUseM9ColorMatrix", false),
+                        omSystemPictureMode = OmSystemPictureMode.fromPersistedValue(obj.optString("rawOmSystemPictureMode")),
+                        omSystemUseOm1ColorMatrix = obj.optBoolean("rawOmSystemUseOm1ColorMatrix", false),
                         useOppoMasterToneMap = obj.optBoolean("rawOppoMasterToneMap", false),
                         usePhotonHdr =
                             obj.optBoolean("rawPhotonHdr", false) ||

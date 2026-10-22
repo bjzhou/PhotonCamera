@@ -489,4 +489,14 @@
     <string name="fotufilm_value_minutes">%1$s분</string>
     <string name="fotufilm_value_years">%1$s년</string>
     <!-- /Fotufilm controls -->
+    <string name="settings_raw_color_engine_om_system_description">OM-1 Mark II(TruePic X) 픽처 모드의 색상과 계조.</string>
+    <string name="settings_raw_om_system_picture_mode">픽처 모드</string>
+    <string name="settings_raw_om_system_picture_mode_description">OM SYSTEM 픽처 모드를 선택합니다. 기본값은 내추럴입니다.</string>
+    <string name="settings_raw_om_system_mode_vivid">비비드</string>
+    <string name="settings_raw_om_system_mode_natural">내추럴</string>
+    <string name="settings_raw_om_system_mode_muted">뮤트</string>
+    <string name="settings_raw_om_system_mode_portrait">인물</string>
+    <string name="settings_raw_om_system_color_matrix">색상 행렬</string>
+    <string name="settings_raw_om_system_color_matrix_description">RAW 색상 보정에 촬영 기기 또는 OM-1 Mark II의 색상 행렬을 사용합니다.</string>
+    <string name="settings_raw_om_system_color_matrix_device">기본값</string>
 </resources>

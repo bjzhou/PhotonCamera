@@ -1431,4 +1431,16 @@
     <string name="fotufilm_value_minutes">%1$s 分鐘</string>
     <string name="fotufilm_value_years">%1$s 年</string>
     <!-- /Fotufilm controls -->
+    <string name="settings_raw_color_engine_om_system">OM SYSTEM OM-1 Mark II</string>
+    <string name="settings_raw_color_engine_om_system_description">OM-1 Mark II（TruePic X）相片模式的色彩與色調。</string>
+    <string name="settings_raw_om_system_picture_mode">相片模式</string>
+    <string name="settings_raw_om_system_picture_mode_description">選擇 OM SYSTEM 相片模式，預設為自然。</string>
+    <string name="settings_raw_om_system_mode_vivid">鮮豔</string>
+    <string name="settings_raw_om_system_mode_natural">自然</string>
+    <string name="settings_raw_om_system_mode_muted">柔和</string>
+    <string name="settings_raw_om_system_mode_portrait">人像</string>
+    <string name="settings_raw_om_system_color_matrix">色彩矩陣</string>
+    <string name="settings_raw_om_system_color_matrix_description">選擇使用拍攝裝置或 OM-1 Mark II 的色彩矩陣校準 RAW 色彩。</string>
+    <string name="settings_raw_om_system_color_matrix_device">預設</string>
+    <string name="settings_raw_om_system_color_matrix_om1">OM-1 Mark II</string>
 </resources>

@@ -488,4 +488,14 @@
     <string name="fotufilm_value_minutes">%1$s mnt</string>
     <string name="fotufilm_value_years">%1$s thn</string>
     <!-- /Fotufilm controls -->
+    <string name="settings_raw_color_engine_om_system_description">Warna dan tonal mode gambar OM-1 Mark II (TruePic X).</string>
+    <string name="settings_raw_om_system_picture_mode">Mode Gambar</string>
+    <string name="settings_raw_om_system_picture_mode_description">Pilih mode gambar OM SYSTEM. Natural adalah default.</string>
+    <string name="settings_raw_om_system_mode_vivid">Vivid</string>
+    <string name="settings_raw_om_system_mode_natural">Natural</string>
+    <string name="settings_raw_om_system_mode_muted">Muted</string>
+    <string name="settings_raw_om_system_mode_portrait">Potret</string>
+    <string name="settings_raw_om_system_color_matrix">Matriks warna</string>
+    <string name="settings_raw_om_system_color_matrix_description">Pilih matriks warna perangkat pengambilan gambar atau OM-1 Mark II untuk kalibrasi warna RAW.</string>
+    <string name="settings_raw_om_system_color_matrix_device">Default</string>
 </resources>

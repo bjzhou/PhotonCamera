@@ -1312,4 +1312,14 @@
     <string name="fotufilm_value_minutes">%1$s 分</string>
     <string name="fotufilm_value_years">%1$s 年</string>
     <!-- /Fotufilm controls -->
+    <string name="settings_raw_color_engine_om_system_description">OM-1 Mark II（TruePic X）のピクチャーモードの色と階調。</string>
+    <string name="settings_raw_om_system_picture_mode">ピクチャーモード</string>
+    <string name="settings_raw_om_system_picture_mode_description">OM SYSTEM のピクチャーモードを選択します。初期設定は Natural です。</string>
+    <string name="settings_raw_om_system_mode_vivid">Vivid</string>
+    <string name="settings_raw_om_system_mode_natural">Natural</string>
+    <string name="settings_raw_om_system_mode_muted">Muted</string>
+    <string name="settings_raw_om_system_mode_portrait">Portrait</string>
+    <string name="settings_raw_om_system_color_matrix">カラーマトリクス</string>
+    <string name="settings_raw_om_system_color_matrix_description">RAW の色補正に撮影機器または OM-1 Mark II のカラーマトリクスを使用します。</string>
+    <string name="settings_raw_om_system_color_matrix_device">デフォルト</string>
 </resources>

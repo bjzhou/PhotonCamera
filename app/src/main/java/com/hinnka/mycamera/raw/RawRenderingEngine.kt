@@ -47,6 +47,13 @@ enum class RawRenderingEngine(
         defaultExposureCompensationEv = 0f,
         exposureCompensationDomain = RawExposureCompensationDomain.Linear
     ),
+    OmSystem(
+        shaderId = 12,
+        // Output/adjustment space; the NEP1 YC1 stage consumes WB OM-1 Mark II camera RGB.
+        workingColorSpace = ColorSpace.SRGB,
+        defaultExposureCompensationEv = 0f,
+        exposureCompensationDomain = RawExposureCompensationDomain.Linear
+    ),
     AgX(
         shaderId = 1,
         workingColorSpace = ColorSpace.BT2020,
@@ -98,8 +105,11 @@ enum class RawRenderingEngine(
     val isLeica: Boolean
         get() = this == Leica
 
+    val isOmSystem: Boolean
+        get() = this == OmSystem
+
     val usesCameraInputDomain: Boolean
-        get() = isLumix || isHncs || isCanon || isLeica
+        get() = isLumix || isHncs || isCanon || isLeica || isOmSystem
 
     companion object {
         fun fromPersistedName(

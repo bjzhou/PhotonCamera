@@ -35,6 +35,7 @@ import com.hinnka.mycamera.raw.HncsFilmCurveMode
 import com.hinnka.mycamera.raw.RawProfileToneMapMode
 import com.hinnka.mycamera.raw.LumixPhotoStyle
 import com.hinnka.mycamera.raw.CanonPictureStyle
+import com.hinnka.mycamera.raw.OmSystemPictureMode
 import com.hinnka.mycamera.raw.RawToneMappingParameters
 import com.hinnka.mycamera.raw.RawRenderingEngine
 import com.hinnka.mycamera.raw.RawDenoiseDefaults
@@ -47,6 +48,7 @@ import com.hinnka.mycamera.ui.components.FrameSelector
 import com.hinnka.mycamera.ui.components.RawBaselineColorCorrectionSelector
 import com.hinnka.mycamera.ui.components.LumixPhotoStyleSelector
 import com.hinnka.mycamera.ui.components.CanonPictureStyleSelector
+import com.hinnka.mycamera.ui.components.OmSystemPictureModeSelector
 import com.hinnka.mycamera.ui.components.CanonExposureCompensationSetting
 import com.hinnka.mycamera.ui.components.RawDcpSelector
 import com.hinnka.mycamera.ui.components.RawEngineToneCurveControls
@@ -164,6 +166,12 @@ fun PresetEditorScreen(
     var rawLeicaUseM9ColorMatrix by remember {
         mutableStateOf(sourcePreset?.rawLeicaUseM9ColorMatrix ?: false)
     }
+    var rawOmSystemPictureMode by remember {
+        mutableStateOf(OmSystemPictureMode.fromPersistedValue(sourcePreset?.rawOmSystemPictureMode))
+    }
+    var rawOmSystemUseOm1ColorMatrix by remember {
+        mutableStateOf(sourcePreset?.rawOmSystemUseOm1ColorMatrix ?: false)
+    }
     var rawCanonExposureCompensationEv by remember {
         mutableStateOf(sourcePreset?.rawCanonExposureCompensationEv
             ?: RawToneMappingParameters.CANON_EXPOSURE_COMPENSATION_DEFAULT)
@@ -224,6 +232,8 @@ fun PresetEditorScreen(
             rawHncsColorMatchingEnabled = rawHncsColorMatchingEnabled,
             rawCanonUseR5ColorMatrix = rawCanonUseR5ColorMatrix,
             rawLeicaUseM9ColorMatrix = rawLeicaUseM9ColorMatrix,
+            rawOmSystemPictureMode = rawOmSystemPictureMode.persistedValue,
+            rawOmSystemUseOm1ColorMatrix = rawOmSystemUseOm1ColorMatrix,
             rawAgxBlackRelativeExposure = rawEngineToneCurve.agxBlackRelativeExposure,
             rawAgxWhiteRelativeExposure = rawEngineToneCurve.agxWhiteRelativeExposure,
             rawAgxToe = rawEngineToneCurve.agxToe,
@@ -507,6 +517,7 @@ fun PresetEditorScreen(
                         RawRenderingEngine.Lumix -> stringResource(R.string.settings_raw_color_engine_lumix)
                         RawRenderingEngine.Canon -> stringResource(R.string.settings_raw_color_engine_canon)
                         RawRenderingEngine.Leica -> stringResource(R.string.settings_raw_color_engine_leica)
+                        RawRenderingEngine.OmSystem -> stringResource(R.string.settings_raw_color_engine_om_system)
                         RawRenderingEngine.Fotufilm -> stringResource(R.string.settings_raw_color_engine_fotufilm)
                         RawRenderingEngine.Hncs -> stringResource(
                             R.string.settings_raw_color_engine_hncs
@@ -625,6 +636,31 @@ fun PresetEditorScreen(
                                 .first { it.value == selectedLabel }.key
                         },
                     )
+                }
+
+                AnimatedVisibility(visible = rawRenderingEngine.isOmSystem) {
+                    Column {
+                        OmSystemPictureModeSelector(
+                            selectedMode = rawOmSystemPictureMode,
+                            onSelectMode = { rawOmSystemPictureMode = it },
+                        )
+                        val matrixLabels = mapOf(
+                            false to stringResource(R.string.settings_raw_om_system_color_matrix_device),
+                            true to stringResource(R.string.settings_raw_om_system_color_matrix_om1),
+                        )
+                        DropdownSettingItem(
+                            title = stringResource(R.string.settings_raw_om_system_color_matrix),
+                            description = stringResource(R.string.settings_raw_om_system_color_matrix_description),
+                            value = matrixLabels.getValue(rawOmSystemUseOm1ColorMatrix),
+                            options = matrixLabels.values.toList(),
+                            isLoading = false,
+                            onExpanded = {},
+                            onOptionSelected = { selectedLabel ->
+                                rawOmSystemUseOm1ColorMatrix = matrixLabels.entries
+                                    .first { it.value == selectedLabel }.key
+                            },
+                        )
+                    }
                 }
 
                 AnimatedVisibility(visible = rawRenderingEngine.isCanon) {

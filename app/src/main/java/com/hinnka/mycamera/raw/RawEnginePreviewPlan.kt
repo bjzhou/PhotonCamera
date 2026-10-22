@@ -64,6 +64,7 @@ class RawEnginePreviewResolver(private val context: Context, val settings: RawEn
         RawRenderingEngine.Lumix -> EquivalentCameraTarget.LumixS9
         RawRenderingEngine.Canon -> EquivalentCameraTarget.CanonEOSR5
         RawRenderingEngine.Leica -> EquivalentCameraTarget.LeicaM9
+        RawRenderingEngine.OmSystem -> EquivalentCameraTarget.OmSystemOm1MarkII
         else -> null
     }
     val needsCameraMetadata: Boolean = dcp != null || target != null
@@ -126,6 +127,10 @@ class RawEnginePreviewResolver(private val context: Context, val settings: RawEn
         val lumix = if (engine.isLumix) LumixProfile.createRenderPlan(
             context, tone.lumixPhotoStyle, cct, iso = requireNotNull(source).iso,
         ) else null
+        val omSystem = if (engine.isOmSystem) OmSystemProfile.createRenderPlan(
+            context, tone.omSystemPictureMode,
+            requireNotNull(cct) { "OM System preview needs the engine white point" },
+        ) else null
         val exposure = RawProfileExposureGl.compute(
             profileExposureCompensation = settings.exposureEv + engine.defaultExposureCompensationEv +
                 tone.engineExposureCompensationEv(engine),
@@ -142,6 +147,7 @@ class RawEnginePreviewResolver(private val context: Context, val settings: RawEn
                 outputTransform = RawToneMappingGl.computeWorkingToOutputTransform(engine.workingColorSpace, ColorSpace.SRGB),
                 dcpRenderPlan = profile, applyDcpHueSatMap = true, spectralFilmLut = spectral,
                 hncsRenderPlan = hncs, lumixRenderPlan = lumix, canonRenderPlan = canon, leicaRenderPlan = leica,
+                omSystemRenderPlan = omSystem,
                 fotufilm = fotufilm,
             ),
         )

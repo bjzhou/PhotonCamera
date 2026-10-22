@@ -1110,4 +1110,14 @@
     <string name="fotufilm_value_minutes">%1$s นาที</string>
     <string name="fotufilm_value_years">%1$s ปี</string>
     <!-- /Fotufilm controls -->
+    <string name="settings_raw_color_engine_om_system_description">สีและโทนภาพของโหมดภาพ OM-1 Mark II (TruePic X)</string>
+    <string name="settings_raw_om_system_picture_mode">โหมดภาพ</string>
+    <string name="settings_raw_om_system_picture_mode_description">เลือกโหมดภาพของ OM SYSTEM ค่าเริ่มต้นคือ Natural</string>
+    <string name="settings_raw_om_system_mode_vivid">สดใส</string>
+    <string name="settings_raw_om_system_mode_natural">ธรรมชาติ</string>
+    <string name="settings_raw_om_system_mode_muted">นุ่มนวล</string>
+    <string name="settings_raw_om_system_mode_portrait">บุคคล</string>
+    <string name="settings_raw_om_system_color_matrix">เมทริกซ์สี</string>
+    <string name="settings_raw_om_system_color_matrix_description">เลือกเมทริกซ์สีของอุปกรณ์ที่ใช้ถ่ายภาพหรือ OM-1 Mark II เพื่อปรับเทียบสี RAW</string>
+    <string name="settings_raw_om_system_color_matrix_device">ค่าเริ่มต้น</string>
 </resources>

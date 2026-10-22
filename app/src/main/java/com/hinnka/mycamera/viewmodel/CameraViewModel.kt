@@ -88,6 +88,7 @@ import com.hinnka.mycamera.raw.RawDigitalZoomResampling
 import com.hinnka.mycamera.raw.RawProfileToneMapMode
 import com.hinnka.mycamera.raw.LumixPhotoStyle
 import com.hinnka.mycamera.raw.CanonPictureStyle
+import com.hinnka.mycamera.raw.OmSystemPictureMode
 import com.hinnka.mycamera.raw.RawRenderingEngine
 import com.hinnka.mycamera.raw.RawDenoiseDefaults
 import com.hinnka.mycamera.raw.RawSharpeningDefaults
@@ -279,6 +280,8 @@ private data class PresetMatchSnapshot(
     val rawHncsColorMatchingEnabled: Boolean,
     val rawCanonUseR5ColorMatrix: Boolean,
     val rawLeicaUseM9ColorMatrix: Boolean,
+    val rawOmSystemPictureMode: OmSystemPictureMode,
+    val rawOmSystemUseOm1ColorMatrix: Boolean,
     /** 仅含 AgX / Filmic 曲线参数，见 [RawToneMappingParameters.engineToneCurve]。 */
     val rawEngineToneCurve: RawToneMappingParameters,
     val rawSpectralFilmStock: String?,
@@ -325,6 +328,8 @@ private data class PresetMatchSnapshot(
             rawHncsColorMatchingEnabled == preset.rawHncsColorMatchingEnabled &&
             rawCanonUseR5ColorMatrix == preset.rawCanonUseR5ColorMatrix &&
             rawLeicaUseM9ColorMatrix == preset.rawLeicaUseM9ColorMatrix &&
+            rawOmSystemPictureMode == OmSystemPictureMode.fromPersistedValue(preset.rawOmSystemPictureMode) &&
+            rawOmSystemUseOm1ColorMatrix == preset.rawOmSystemUseOm1ColorMatrix &&
             rawOppoMasterToneMap == preset.rawOppoMasterToneMap &&
             rawEngineToneCurve == preset.rawEngineToneCurve() &&
             rawSpectralFilmStock == preset.rawSpectralFilmStock &&
@@ -447,6 +452,15 @@ private data class PresetMatchSnapshot(
                             "preset=${preset.rawLeicaUseM9ColorMatrix}"
                     )
                 }
+                if (rawOmSystemPictureMode != OmSystemPictureMode.fromPersistedValue(preset.rawOmSystemPictureMode)) {
+                    add("rawOmSystemPictureMode current=$rawOmSystemPictureMode preset=${preset.rawOmSystemPictureMode}")
+                }
+                if (rawOmSystemUseOm1ColorMatrix != preset.rawOmSystemUseOm1ColorMatrix) {
+                    add(
+                        "rawOmSystemUseOm1ColorMatrix current=$rawOmSystemUseOm1ColorMatrix " +
+                            "preset=${preset.rawOmSystemUseOm1ColorMatrix}"
+                    )
+                }
                 if (rawOppoMasterToneMap != preset.rawOppoMasterToneMap) {
                     add(
                         "rawOppoMasterToneMap current=$rawOppoMasterToneMap " +
@@ -553,6 +567,8 @@ private data class CameraFeatureUpdate(
     val rawHncsColorMatchingEnabled: SettingValue<Boolean>? = null,
     val rawCanonUseR5ColorMatrix: SettingValue<Boolean>? = null,
     val rawLeicaUseM9ColorMatrix: SettingValue<Boolean>? = null,
+    val rawOmSystemPictureMode: SettingValue<OmSystemPictureMode>? = null,
+    val rawOmSystemUseOm1ColorMatrix: SettingValue<Boolean>? = null,
     /** 仅消费 AgX / Filmic 曲线参数。 */
     val rawEngineToneCurve: SettingValue<RawToneMappingParameters>? = null,
     val rawSpectralFilmStock: SettingValue<String?>? = null,
@@ -717,6 +733,8 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                             rawHncsColorMatchingEnabled = saved.rawHncsColorMatchingEnabled,
                             rawCanonUseR5ColorMatrix = saved.rawCanonUseR5ColorMatrix,
                             rawLeicaUseM9ColorMatrix = saved.rawLeicaUseM9ColorMatrix,
+                            rawOmSystemPictureMode = saved.rawOmSystemPictureMode,
+                            rawOmSystemUseOm1ColorMatrix = saved.rawOmSystemUseOm1ColorMatrix,
                             rawAgxBlackRelativeExposure = saved.rawAgxBlackRelativeExposure,
                             rawAgxWhiteRelativeExposure = saved.rawAgxWhiteRelativeExposure,
                             rawAgxToe = saved.rawAgxToe,
@@ -863,6 +881,8 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             rawHncsColorMatchingEnabled = rawToneMappingParameters.value.hncsColorMatchingEnabled,
             rawCanonUseR5ColorMatrix = rawToneMappingParameters.value.canonUseR5ColorMatrix,
             rawLeicaUseM9ColorMatrix = rawToneMappingParameters.value.leicaUseM9ColorMatrix,
+            rawOmSystemPictureMode = rawToneMappingParameters.value.omSystemPictureMode.persistedValue,
+            rawOmSystemUseOm1ColorMatrix = rawToneMappingParameters.value.omSystemUseOm1ColorMatrix,
             rawAgxBlackRelativeExposure = rawToneMappingParameters.value.agxBlackRelativeExposure,
             rawAgxWhiteRelativeExposure = rawToneMappingParameters.value.agxWhiteRelativeExposure,
             rawAgxToe = rawToneMappingParameters.value.agxToe,
@@ -983,6 +1003,8 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             rawHncsColorMatchingEnabled = SettingValue(this?.rawHncsColorMatchingEnabled ?: true),
             rawCanonUseR5ColorMatrix = SettingValue(this?.rawCanonUseR5ColorMatrix ?: false),
             rawLeicaUseM9ColorMatrix = SettingValue(this?.rawLeicaUseM9ColorMatrix ?: false),
+            rawOmSystemPictureMode = SettingValue(OmSystemPictureMode.fromPersistedValue(this?.rawOmSystemPictureMode)),
+            rawOmSystemUseOm1ColorMatrix = SettingValue(this?.rawOmSystemUseOm1ColorMatrix ?: false),
             rawEngineToneCurve = SettingValue(
                 this?.rawEngineToneCurve() ?: RawToneMappingParameters.DEFAULT
             ),
@@ -1133,7 +1155,8 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             update.rawCanonPictureStyle != null || update.rawCanonExposureCompensationEv != null ||
             update.rawLumixColorMatchingEnabled != null || update.rawHncsColorMatchingEnabled != null ||
             update.rawCanonUseR5ColorMatrix != null ||
-            update.rawLeicaUseM9ColorMatrix != null || update.rawEngineToneCurve != null
+            update.rawLeicaUseM9ColorMatrix != null || update.rawOmSystemPictureMode != null ||
+            update.rawOmSystemUseOm1ColorMatrix != null || update.rawEngineToneCurve != null
         ) {
             var toneMappingParameters = prefs.rawToneMappingParameters
             update.rawProfileToneMapMode?.let {
@@ -1162,6 +1185,12 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             }
             update.rawLeicaUseM9ColorMatrix?.let {
                 toneMappingParameters = toneMappingParameters.copy(leicaUseM9ColorMatrix = it.value)
+            }
+            update.rawOmSystemPictureMode?.let {
+                toneMappingParameters = toneMappingParameters.copy(omSystemPictureMode = it.value)
+            }
+            update.rawOmSystemUseOm1ColorMatrix?.let {
+                toneMappingParameters = toneMappingParameters.copy(omSystemUseOm1ColorMatrix = it.value)
             }
             update.rawEngineToneCurve?.let {
                 toneMappingParameters = toneMappingParameters.withEngineToneCurveFrom(it.value)
@@ -1442,6 +1471,8 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             rawHncsColorMatchingEnabled = prefs.rawToneMappingParameters.hncsColorMatchingEnabled,
             rawCanonUseR5ColorMatrix = prefs.rawToneMappingParameters.canonUseR5ColorMatrix,
             rawLeicaUseM9ColorMatrix = prefs.rawToneMappingParameters.leicaUseM9ColorMatrix,
+            rawOmSystemPictureMode = prefs.rawToneMappingParameters.omSystemPictureMode,
+            rawOmSystemUseOm1ColorMatrix = prefs.rawToneMappingParameters.omSystemUseOm1ColorMatrix,
             rawEngineToneCurve = prefs.rawToneMappingParameters.engineToneCurve(),
             rawSpectralFilmStock = prefs.rawSpectralFilmStock,
             rawSpectralFilmPrint = prefs.rawSpectralFilmPrint,

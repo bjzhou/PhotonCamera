@@ -13,5 +13,6 @@ internal data class RawEngineColorResources(
     val lumixRenderPlan: LumixRenderPlan?,
     val canonRenderPlan: CanonRenderPlan?,
     val leicaRenderPlan: LeicaRenderPlan?,
+    val omSystemRenderPlan: OmSystemRenderPlan? = null,
     val fotufilm: FotufilmRenderRequest? = null,
 )

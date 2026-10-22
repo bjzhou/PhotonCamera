@@ -19,6 +19,9 @@ data class RawToneMappingParameters(
     val canonUseR5ColorMatrix: Boolean = false,
     /** Use M9 sensor calibration directly instead of the capture device calibration. */
     val leicaUseM9ColorMatrix: Boolean = false,
+    val omSystemPictureMode: OmSystemPictureMode = OmSystemPictureMode.Natural,
+    /** Use OM-1 Mark II sensor calibration directly instead of the capture device calibration. */
+    val omSystemUseOm1ColorMatrix: Boolean = false,
 ) {
     /** Explicit engine adjustment, applied once after PGTM with the shared render exposure. */
     fun engineExposureCompensationEv(engine: RawRenderingEngine): Float =
@@ -29,6 +32,7 @@ data class RawToneMappingParameters(
         engine.isHncs -> hncsColorMatchingEnabled
         engine.isCanon -> !canonUseR5ColorMatrix
         engine.isLeica -> !leicaUseM9ColorMatrix
+        engine.isOmSystem -> !omSystemUseOm1ColorMatrix
         else -> false
     }
 

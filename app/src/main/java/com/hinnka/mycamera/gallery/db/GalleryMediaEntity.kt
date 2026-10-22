@@ -79,6 +79,10 @@ data class GalleryMediaEntity(
     val rawCanonUseR5ColorMatrix: Boolean = false,
     @ColumnInfo(defaultValue = "0")
     val rawLeicaUseM9ColorMatrix: Boolean = false,
+    @ColumnInfo(defaultValue = "natural")
+    val rawOmSystemPictureMode: String = "natural",
+    @ColumnInfo(defaultValue = "0")
+    val rawOmSystemUseOm1ColorMatrix: Boolean = false,
     val rawAgxBlackRelativeExposure: Float,
     val rawAgxWhiteRelativeExposure: Float,
     val rawAgxToe: Float,

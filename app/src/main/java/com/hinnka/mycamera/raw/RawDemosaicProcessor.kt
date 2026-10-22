@@ -526,6 +526,7 @@ class RawDemosaicProcessor {
             lumixRenderPlan = null,
             canonRenderPlan = null,
             leicaRenderPlan = if (warmupColorEngine.isLeica) LeicaProfile.createRenderPlan(context) else null,
+            omSystemRenderPlan = null,
             colorEngine = warmupColorEngine,
             profileToEngineTransform = identityMatrix3x3(),
             profileExposureUniforms = ProfileExposureUniforms.NEUTRAL,
@@ -1591,6 +1592,7 @@ class RawDemosaicProcessor {
         val lumixRenderPlan: LumixRenderPlan?,
         val canonRenderPlan: CanonRenderPlan?,
         val leicaRenderPlan: LeicaRenderPlan?,
+        val omSystemRenderPlan: OmSystemRenderPlan?,
         val engineWorkingColorSpace: ColorSpace,
         val profileToEngineTransform: FloatArray,
         val shadowsHighlightsParams: ShadowsHighlightsParams,
@@ -2397,6 +2399,7 @@ class RawDemosaicProcessor {
             requestedColorEngine.isHncs -> EquivalentCameraTarget.HasselbladX2DII100C
             requestedColorEngine.isCanon -> EquivalentCameraTarget.CanonEOSR5
             requestedColorEngine.isLeica -> EquivalentCameraTarget.LeicaM9
+            requestedColorEngine.isOmSystem -> EquivalentCameraTarget.OmSystemOm1MarkII
             else -> null
         }
         var embeddedDngRenderPlan: DcpRenderPlan? = sourceDngRenderPlan
@@ -2538,7 +2541,7 @@ class RawDemosaicProcessor {
 
         // An explicit source-matrix selection must not silently use the target matrix
         // when an imported RAW has no source calibration.
-        if ((requestedColorEngine.isLeica || requestedColorEngine.isCanon) &&
+        if ((requestedColorEngine.isLeica || requestedColorEngine.isCanon || requestedColorEngine.isOmSystem) &&
             cameraColorMatchingEnabled && actualMetadata != null
         ) {
             check(actualMetadata.cameraCalibration != null) {
@@ -3130,6 +3133,20 @@ class RawDemosaicProcessor {
                     "calibration=${if (directCameraInput) "M9" else "capture-device"} " +
                     "curve=${it.curveIndex} " +
                     "matrix=2 branch=R>=G contrast=2 saturation=2 localMapping=shared-PGTM " +
+                    "photonHdr=${normalizedToneMappingParameters.usePhotonHdr}")
+            }
+        } else null
+        val omSystemRenderPlan = if (colorEngine.isOmSystem) {
+            val colorTemperature = requireNotNull(engineColorTemperature) {
+                "OM System NEP1 CMX selection requires the engine white point"
+            }
+            OmSystemProfile.createRenderPlan(
+                context, normalizedToneMappingParameters.omSystemPictureMode, colorTemperature,
+            ).also {
+                PLog.i(TAG, "OM System NEP1 YC1: mode=${it.mode} input=wb-camera-rgb output=linear-sRGB " +
+                    "calibration=${if (directCameraInput) "OM-1-Mark-II" else "capture-device"} " +
+                    "cct=$colorTemperature cmx=${it.cameraMatrixIndex} sceneToSensor=${it.sceneToSensorGain} " +
+                    "localMapping=shared-PGTM " +
                     "photonHdr=${normalizedToneMappingParameters.usePhotonHdr}")
             }
         } else null
@@ -3877,6 +3894,7 @@ class RawDemosaicProcessor {
                         lumixRenderPlan = lumixRenderPlan,
                         canonRenderPlan = canonRenderPlan,
                         leicaRenderPlan = leicaRenderPlan,
+                        omSystemRenderPlan = omSystemRenderPlan,
                         engineWorkingColorSpace = engineWorkingColorSpace,
                         profileToEngineTransform = profileToEngineTransform,
                         shadowsHighlightsParams = shadowsHighlightsParams,
@@ -4062,6 +4080,7 @@ class RawDemosaicProcessor {
                     lumixRenderPlan = lumixRenderPlan,
                     canonRenderPlan = canonRenderPlan,
                     leicaRenderPlan = leicaRenderPlan,
+                    omSystemRenderPlan = omSystemRenderPlan,
                     colorEngine = colorEngine,
                     outputWorkingColorSpace = engineWorkingColorSpace,
                     profileToEngineTransform = combinedProfileToEngineTransform,
@@ -4093,6 +4112,7 @@ class RawDemosaicProcessor {
                             lumixRenderPlan = lumixRenderPlan,
                             canonRenderPlan = canonRenderPlan,
                             leicaRenderPlan = leicaRenderPlan,
+                            omSystemRenderPlan = omSystemRenderPlan,
                             colorEngine = colorEngine,
                             outputWorkingColorSpace = engineWorkingColorSpace,
                             profileToEngineTransform = combinedProfileToEngineTransform,
@@ -4303,6 +4323,7 @@ class RawDemosaicProcessor {
                             lumixRenderPlan = lumixRenderPlan,
                             canonRenderPlan = canonRenderPlan,
                             leicaRenderPlan = leicaRenderPlan,
+                            omSystemRenderPlan = omSystemRenderPlan,
                             colorEngine = colorEngine,
                             outputWorkingColorSpace = engineWorkingColorSpace,
                             profileToEngineTransform = profileToEngineTransform,
@@ -4715,6 +4736,7 @@ class RawDemosaicProcessor {
                     lumixRenderPlan = config.lumixRenderPlan,
                     canonRenderPlan = config.canonRenderPlan,
                     leicaRenderPlan = config.leicaRenderPlan,
+                    omSystemRenderPlan = config.omSystemRenderPlan,
                     colorEngine = config.colorEngine,
                     outputWorkingColorSpace = config.engineWorkingColorSpace,
                     profileToEngineTransform = config.profileToEngineTransform,
@@ -4753,6 +4775,7 @@ class RawDemosaicProcessor {
                         lumixRenderPlan = config.lumixRenderPlan,
                         canonRenderPlan = config.canonRenderPlan,
                         leicaRenderPlan = config.leicaRenderPlan,
+                        omSystemRenderPlan = config.omSystemRenderPlan,
                         colorEngine = config.colorEngine,
                         outputWorkingColorSpace = config.engineWorkingColorSpace,
                         profileToEngineTransform = config.profileToEngineTransform,
@@ -7188,6 +7211,7 @@ class RawDemosaicProcessor {
         lumixRenderPlan: LumixRenderPlan? = null,
         canonRenderPlan: CanonRenderPlan? = null,
         leicaRenderPlan: LeicaRenderPlan? = null,
+        omSystemRenderPlan: OmSystemRenderPlan? = null,
         colorEngine: RawRenderingEngine = RawRenderingEngine.AdobeCurve,
         outputWorkingColorSpace: ColorSpace = ColorSpace.ProPhoto,
         profileToEngineTransform: FloatArray = identityMatrix3x3(),
@@ -7218,6 +7242,7 @@ class RawDemosaicProcessor {
                 lumixRenderPlan = lumixRenderPlan,
                 canonRenderPlan = canonRenderPlan,
                 leicaRenderPlan = leicaRenderPlan,
+                omSystemRenderPlan = omSystemRenderPlan,
                 colorEngine = colorEngine,
                 profileToEngineTransform = profileToEngineTransform,
                 profileExposureUniforms = profileExposureUniforms,
@@ -7339,6 +7364,7 @@ class RawDemosaicProcessor {
         lumixRenderPlan: LumixRenderPlan?,
         canonRenderPlan: CanonRenderPlan?,
         leicaRenderPlan: LeicaRenderPlan?,
+        omSystemRenderPlan: OmSystemRenderPlan?,
         colorEngine: RawRenderingEngine,
         profileToEngineTransform: FloatArray,
         profileExposureUniforms: ProfileExposureUniforms,
@@ -7381,6 +7407,7 @@ class RawDemosaicProcessor {
                 lumixRenderPlan = lumixRenderPlan,
                 canonRenderPlan = canonRenderPlan,
                 leicaRenderPlan = leicaRenderPlan,
+                omSystemRenderPlan = omSystemRenderPlan,
                 fotufilm = fotufilm,
                 bindProfileGainTable = { program ->
                     if (metadata != null) {
@@ -7838,6 +7865,7 @@ class RawDemosaicProcessor {
         lumixRenderPlan: LumixRenderPlan?,
         canonRenderPlan: CanonRenderPlan?,
         leicaRenderPlan: LeicaRenderPlan?,
+        omSystemRenderPlan: OmSystemRenderPlan?,
         colorEngine: RawRenderingEngine,
         outputWorkingColorSpace: ColorSpace,
         profileToEngineTransform: FloatArray,
@@ -7902,6 +7930,7 @@ class RawDemosaicProcessor {
                         lumixRenderPlan = lumixRenderPlan,
                         canonRenderPlan = canonRenderPlan,
                         leicaRenderPlan = leicaRenderPlan,
+                        omSystemRenderPlan = omSystemRenderPlan,
                         bindProfileGainTable = { program ->
                             bindProfileGainTableMap(
                                 program = program,

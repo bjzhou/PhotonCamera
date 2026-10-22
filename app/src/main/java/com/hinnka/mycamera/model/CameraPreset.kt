@@ -8,6 +8,7 @@ import com.hinnka.mycamera.raw.HncsRenderIntent
 import com.hinnka.mycamera.raw.HncsProfileManager
 import com.hinnka.mycamera.raw.LumixPhotoStyle
 import com.hinnka.mycamera.raw.CanonPictureStyle
+import com.hinnka.mycamera.raw.OmSystemPictureMode
 import com.hinnka.mycamera.raw.RawRenderingEngine
 import com.hinnka.mycamera.raw.RawDenoiseDefaults
 import com.hinnka.mycamera.raw.RawSharpeningDefaults
@@ -49,6 +50,8 @@ data class CameraPreset(
     val rawHncsColorMatchingEnabled: Boolean = true,
     val rawCanonUseR5ColorMatrix: Boolean = false,
     val rawLeicaUseM9ColorMatrix: Boolean = false,
+    val rawOmSystemPictureMode: String = OmSystemPictureMode.Natural.persistedValue,
+    val rawOmSystemUseOm1ColorMatrix: Boolean = false,
     val rawAgxBlackRelativeExposure: Float = RawToneMappingParameters.AGX_BLACK_RELATIVE_EXPOSURE_DEFAULT,
     val rawAgxWhiteRelativeExposure: Float = RawToneMappingParameters.AGX_WHITE_RELATIVE_EXPOSURE_DEFAULT,
     val rawAgxToe: Float = RawToneMappingParameters.AGX_TOE_DEFAULT,
@@ -175,6 +178,7 @@ data class CameraPreset(
                 rawOppoMasterToneMap = rawOppoMasterToneMap,
                 rawLumixPhotoStyle = LumixPhotoStyle.fromPersistedValue(rawLumixPhotoStyle).assetName,
                 rawCanonPictureStyle = CanonPictureStyle.fromPersistedValue(rawCanonPictureStyle).persistedValue,
+                rawOmSystemPictureMode = OmSystemPictureMode.fromPersistedValue(rawOmSystemPictureMode).persistedValue,
                 rawCanonExposureCompensationEv = RawToneMappingParameters.normalizeCanonExposureCompensation(
                     rawCanonExposureCompensationEv
                 ),

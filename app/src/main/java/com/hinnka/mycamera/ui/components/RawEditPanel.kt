@@ -45,6 +45,7 @@ import com.hinnka.mycamera.raw.RawProcessingPreferences.DROMode
 import com.hinnka.mycamera.raw.RawProfileToneMapMode
 import com.hinnka.mycamera.raw.LumixPhotoStyle
 import com.hinnka.mycamera.raw.CanonPictureStyle
+import com.hinnka.mycamera.raw.OmSystemPictureMode
 import com.hinnka.mycamera.raw.RawRenderingEngine
 import com.hinnka.mycamera.raw.RawToneMappingParameters
 import com.hinnka.mycamera.raw.RawWhiteLevelCorrection
@@ -447,6 +448,35 @@ fun RawRenderingEngineSettingsPanel(
             Spacer(modifier = Modifier.height(16.dp))
         }
 
+        if (rawRenderingEngine.isOmSystem) {
+            OmSystemPictureModeSelector(
+                selectedMode = rawToneMappingParameters.omSystemPictureMode,
+                onSelectMode = {
+                    onAdjustmentStart()
+                    onRawToneMappingParametersChange(rawToneMappingParameters.copy(omSystemPictureMode = it))
+                    onAdjustmentEnd()
+                },
+            )
+            Spacer(modifier = Modifier.height(16.dp))
+            RawChoiceSetting(
+                title = stringResource(R.string.settings_raw_om_system_color_matrix),
+                description = stringResource(R.string.settings_raw_om_system_color_matrix_description),
+                levels = listOf(
+                    "device" to stringResource(R.string.settings_raw_om_system_color_matrix_device),
+                    "om1" to stringResource(R.string.settings_raw_om_system_color_matrix_om1),
+                ),
+                currentLevel = if (rawToneMappingParameters.omSystemUseOm1ColorMatrix) "om1" else "device",
+                onLevelSelected = { source ->
+                    onAdjustmentStart()
+                    onRawToneMappingParametersChange(
+                        rawToneMappingParameters.copy(omSystemUseOm1ColorMatrix = source == "om1")
+                    )
+                    onAdjustmentEnd()
+                },
+            )
+            Spacer(modifier = Modifier.height(16.dp))
+        }
+
         if (rawRenderingEngine == RawRenderingEngine.AdobeCurve) {
             RawDcpSelector(
                 selectedDcpId = selectedDcpId,
@@ -657,6 +687,30 @@ fun CanonPictureStyleSelector(
         labels = labels,
         selectedStyle = selectedStyle,
         onSelectStyle = onSelectStyle,
+    )
+}
+
+@Composable
+fun OmSystemPictureModeSelector(
+    selectedMode: OmSystemPictureMode,
+    onSelectMode: (OmSystemPictureMode) -> Unit,
+) {
+    val labels = OmSystemPictureMode.entries.associateWith { mode ->
+        stringResource(when (mode) {
+            OmSystemPictureMode.Vivid -> R.string.settings_raw_om_system_mode_vivid
+            OmSystemPictureMode.Natural -> R.string.settings_raw_om_system_mode_natural
+            OmSystemPictureMode.Muted -> R.string.settings_raw_om_system_mode_muted
+            OmSystemPictureMode.Portrait -> R.string.settings_raw_om_system_mode_portrait
+        })
+    }
+    RawPhotoStyleSelector(
+        title = stringResource(R.string.settings_raw_om_system_picture_mode),
+        description = stringResource(R.string.settings_raw_om_system_picture_mode_description),
+        styles = OmSystemPictureMode.entries,
+        styleKey = { it.persistedValue },
+        labels = labels,
+        selectedStyle = selectedMode,
+        onSelectStyle = onSelectMode,
     )
 }
 
@@ -1104,7 +1158,8 @@ private fun RawToneMappingControls(
         RawRenderingEngine.Hncs,
         RawRenderingEngine.Lumix,
         RawRenderingEngine.Canon,
-        RawRenderingEngine.Leica -> Unit
+        RawRenderingEngine.Leica,
+        RawRenderingEngine.OmSystem -> Unit
 
         RawRenderingEngine.AgX,
         RawRenderingEngine.DarktableFilmic -> {
@@ -1419,6 +1474,7 @@ private fun rawRenderingEngineName(engine: RawRenderingEngine): String {
         RawRenderingEngine.Lumix -> stringResource(R.string.settings_raw_color_engine_lumix)
         RawRenderingEngine.Canon -> stringResource(R.string.settings_raw_color_engine_canon)
         RawRenderingEngine.Leica -> stringResource(R.string.settings_raw_color_engine_leica)
+        RawRenderingEngine.OmSystem -> stringResource(R.string.settings_raw_color_engine_om_system)
         RawRenderingEngine.Fotufilm -> stringResource(R.string.settings_raw_color_engine_fotufilm)
     }
 }
@@ -1435,6 +1491,7 @@ private fun rawColorEngineDescription(engine: RawRenderingEngine): String {
         RawRenderingEngine.Lumix -> stringResource(R.string.settings_raw_color_engine_lumix_description)
         RawRenderingEngine.Canon -> stringResource(R.string.settings_raw_color_engine_canon_description)
         RawRenderingEngine.Leica -> stringResource(R.string.settings_raw_color_engine_leica_description)
+        RawRenderingEngine.OmSystem -> stringResource(R.string.settings_raw_color_engine_om_system_description)
         RawRenderingEngine.Fotufilm -> stringResource(R.string.settings_raw_color_engine_fotufilm_description)
     }
 }

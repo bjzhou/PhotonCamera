@@ -33,6 +33,7 @@ internal class RawEngineTonePass(
         val lumixRenderPlan: LumixRenderPlan? = null,
         val canonRenderPlan: CanonRenderPlan? = null,
         val leicaRenderPlan: LeicaRenderPlan? = null,
+        val omSystemRenderPlan: OmSystemRenderPlan? = null,
         val fotufilm: FotufilmRenderRequest? = null,
         val bindProfileGainTable: (program: Int) -> Unit,
     ) {
@@ -48,6 +49,7 @@ internal class RawEngineTonePass(
             lumixRenderPlan = lumixRenderPlan,
             canonRenderPlan = canonRenderPlan,
             leicaRenderPlan = leicaRenderPlan,
+            omSystemRenderPlan = omSystemRenderPlan,
             fotufilm = fotufilm,
         )
     }
@@ -70,6 +72,7 @@ internal class RawEngineTonePass(
     private val lumixAlgorithm = LumixToneAlgorithm(quad)
     private val canonAlgorithm = CanonToneAlgorithm(quad)
     private val leicaAlgorithm = LeicaToneAlgorithm(quad)
+    private val omSystemAlgorithm = OmSystemToneAlgorithm(quad)
     private val fotufilmStage = FotufilmToneStage(quad)
 
     fun render(input: Input): Output? = if (input.colorEngine.isFotufilm) {
@@ -120,6 +123,7 @@ internal class RawEngineTonePass(
         lumixAlgorithm.release()
         canonAlgorithm.release()
         leicaAlgorithm.release()
+        omSystemAlgorithm.release()
         fotufilmStage.release()
         dcpTextures.release()
         curveTextures.release()
@@ -136,6 +140,7 @@ internal class RawEngineTonePass(
             RawRenderingEngine.Lumix -> lumixAlgorithm
             RawRenderingEngine.Canon -> canonAlgorithm
             RawRenderingEngine.Leica -> leicaAlgorithm
+            RawRenderingEngine.OmSystem -> omSystemAlgorithm
             RawRenderingEngine.Fotufilm -> fotufilmStage.inputAlgorithm
         }
     }
@@ -362,6 +367,7 @@ internal class RawEngineTonePass(
                 RawRenderingEngine.Lumix -> LumixToneShader.DEFINITION
                 RawRenderingEngine.Canon -> CanonToneShader.DEFINITION
                 RawRenderingEngine.Leica -> LeicaToneShader.DEFINITION
+                RawRenderingEngine.OmSystem -> OmSystemToneShader.DEFINITION
                 RawRenderingEngine.Fotufilm -> FotufilmInputToneShader.DEFINITION
             }
         }

@@ -19,6 +19,7 @@ import com.hinnka.mycamera.raw.HncsRenderIntent
 import com.hinnka.mycamera.raw.HncsProfileManager
 import com.hinnka.mycamera.raw.LumixPhotoStyle
 import com.hinnka.mycamera.raw.CanonPictureStyle
+import com.hinnka.mycamera.raw.OmSystemPictureMode
 import com.hinnka.mycamera.raw.RawOutputUpscaleMode
 import com.hinnka.mycamera.raw.RawRenderingEngine
 import com.hinnka.mycamera.raw.RawToneMappingParameters
@@ -263,6 +264,8 @@ object GalleryMediaStore {
             rawHncsColorMatchingEnabled = metadata.rawToneMappingParameters.hncsColorMatchingEnabled,
             rawCanonUseR5ColorMatrix = metadata.rawToneMappingParameters.canonUseR5ColorMatrix,
             rawLeicaUseM9ColorMatrix = metadata.rawToneMappingParameters.leicaUseM9ColorMatrix,
+            rawOmSystemPictureMode = metadata.rawToneMappingParameters.omSystemPictureMode.persistedValue,
+            rawOmSystemUseOm1ColorMatrix = metadata.rawToneMappingParameters.omSystemUseOm1ColorMatrix,
             rawPhotonHdr = metadata.rawToneMappingParameters.usePhotonHdr,
             rawAppleProRawToneMap = false,
             frameId = metadata.frameId,
@@ -473,6 +476,8 @@ object GalleryMediaStore {
                 hncsColorMatchingEnabled = rawHncsColorMatchingEnabled,
                 canonUseR5ColorMatrix = rawCanonUseR5ColorMatrix,
                 leicaUseM9ColorMatrix = rawLeicaUseM9ColorMatrix,
+                omSystemPictureMode = OmSystemPictureMode.fromPersistedValue(rawOmSystemPictureMode),
+                omSystemUseOm1ColorMatrix = rawOmSystemUseOm1ColorMatrix,
                 usePhotonHdr = rawPhotonHdr || legacyPhotonToneMap
             ).normalized(),
             frameId = frameId,

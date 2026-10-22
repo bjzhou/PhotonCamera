@@ -19,7 +19,8 @@ internal class EquivalentCameraCalibration(private val target: EquivalentCameraT
                 })
             }
             EquivalentCameraTarget.HasselbladX2DII100C,
-            EquivalentCameraTarget.CanonEOSR5 -> {
+            EquivalentCameraTarget.CanonEOSR5,
+            EquivalentCameraTarget.OmSystemOm1MarkII -> {
                 val json = context.assets.open(target.assetPath).bufferedReader().use {
                     JSONObject(it.readText())
                 }
@@ -102,7 +103,8 @@ internal enum class EquivalentCameraTarget(val assetPath: String) {
     LumixS9("dcp/Panasonic DC-S9 Adobe Standard.dcp"),
     HasselbladX2DII100C("hncs/x2d_ii_100c_calibration.json"),
     CanonEOSR5("canon/eos_r5/calibration.json"),
-    LeicaM9("leica/m9/PROCESS/LUTS.bin");
+    LeicaM9("leica/m9/PROCESS/LUTS.bin"),
+    OmSystemOm1MarkII("om_system/om1_mark2/calibration.json");
 
     val calibration by lazy { EquivalentCameraCalibration(this) }
 }

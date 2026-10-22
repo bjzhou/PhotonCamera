@@ -488,4 +488,14 @@
     <string name="fotufilm_value_minutes">%1$s min</string>
     <string name="fotufilm_value_years">%1$s J.</string>
     <!-- /Fotufilm controls -->
+    <string name="settings_raw_color_engine_om_system_description">Farben und Tonwerte der Bildmodi der OM-1 Mark II (TruePic X).</string>
+    <string name="settings_raw_om_system_picture_mode">Bildmodus</string>
+    <string name="settings_raw_om_system_picture_mode_description">Wählen Sie einen OM SYSTEM Bildmodus. Standard ist Natürlich.</string>
+    <string name="settings_raw_om_system_mode_vivid">Lebhaft</string>
+    <string name="settings_raw_om_system_mode_natural">Natürlich</string>
+    <string name="settings_raw_om_system_mode_muted">Gedämpft</string>
+    <string name="settings_raw_om_system_mode_portrait">Porträt</string>
+    <string name="settings_raw_om_system_color_matrix">Farbmatrix</string>
+    <string name="settings_raw_om_system_color_matrix_description">Wählen Sie zur RAW-Farbkalibrierung die Farbmatrix des Aufnahmegeräts oder der OM-1 Mark II.</string>
+    <string name="settings_raw_om_system_color_matrix_device">Standard</string>
 </resources>
