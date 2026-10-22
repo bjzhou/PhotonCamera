@@ -939,6 +939,7 @@
     <string name="gallery_large_aperture_blur_title">大口径ボケ</string>
     <string name="gallery_large_aperture_blur_description">対応深度モデルでシーン深度を推定し、浅い被写界深度、背景ボケ、柔らかな玉ボケをシミュレートします。画像をタップして合焦点を変更できます。F値が小さいほどボケは強くなります。初回使用時に既定モデルをダウンロードするか、別の対応TFLiteモデルを読み込んでください。</string>
     <string name="gallery_bokeh_style_title">ボケ味</string>
+    <string name="gallery_bokeh_processing">ボケ処理中…</string>
     <string name="gallery_bokeh_style_default">ぐるぐるボケ</string>
     <string name="gallery_bokeh_style_natural">ナチュラル</string>
     <string name="gallery_bokeh_style_bubble">バブルボケ</string>

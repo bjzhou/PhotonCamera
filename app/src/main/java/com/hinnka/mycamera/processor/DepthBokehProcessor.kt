@@ -122,9 +122,11 @@ class DepthBokehProcessor(context: Context) {
                 preparedDepth.depthMap,
                 subjectMask,
                 preparedDepth.focusDepth,
+                resolvedFocusX,
+                resolvedFocusY,
                 aperture,
                 bokehStyle,
-                protectSubject = focusMask >= 0.5f,
+                focusOnSubject = focusMask >= 0.5f,
             )
             result = bokehResult
         }
