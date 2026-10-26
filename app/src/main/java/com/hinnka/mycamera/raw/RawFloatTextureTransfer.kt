@@ -28,8 +28,13 @@ internal class RawFloatTextureTransfer(private val layout: Layout = Layout.FLOAT
     private var initialized = false
     private var maxSsboBytes = 0L
     private var ssboOffsetAlignment = 1
-    /** Completion of the last upload that sources [buffer]; storage is not reclaimed before it. */
-    private var pendingUploadSync = 0L
+    /**
+     * The last upload that sources [buffer] may still be queued; storage is not reclaimed before
+     * it completes. Tracked as a flag rather than a retained fence: a sync object kept alive across
+     * the rest of the pipeline outlives the framebuffers and textures deleted in between, and
+     * libGLES_mali then aborts on a destroyed mutex at the next glFenceSync.
+     */
+    private var uploadSourcesBuffer = false
 
     /** Allocate before producing the input so allocation/compilation cannot drain that work. */
     fun prepare(width: Int, height: Int, capacityPixels: Long = width.toLong() * height) {
@@ -172,6 +177,7 @@ internal class RawFloatTextureTransfer(private val layout: Layout = Layout.FLOAT
             RawFloatTransferLayout.stripeRows(width, height, maxSsboBytes, ssboOffsetAlignment,
                 layout.bytesPerPixel)
         } else 0
+        uploadSourcesBuffer = true
         if (stripeRows > 0) {
             try {
                 // Unmap made the CPU writes visible. Avoid the driver's GL_FLOAT -> RGBA16F
@@ -179,8 +185,10 @@ internal class RawFloatTextureTransfer(private val layout: Layout = Layout.FLOAT
                 GLES31.glUseProgram(uploadProgram)
                 GLES31.glBindImageTexture(0, texture, 0, false, 0, GLES31.GL_WRITE_ONLY, GLES30.GL_RGBA16F)
                 dispatchStripes(uploadProgram, width, height, stripeRows)
+                // SHADER_STORAGE orders the next read()'s pack writes after these buffer reads.
                 GLES31.glMemoryBarrier(GLES31.GL_TEXTURE_FETCH_BARRIER_BIT or
-                    GLES31.GL_FRAMEBUFFER_BARRIER_BIT or GLES31.GL_SHADER_IMAGE_ACCESS_BARRIER_BIT)
+                    GLES31.GL_FRAMEBUFFER_BARRIER_BIT or GLES31.GL_SHADER_IMAGE_ACCESS_BARRIER_BIT or
+                    GLES31.GL_SHADER_STORAGE_BARRIER_BIT)
                 checkGl("upload float texture via image store")
             } finally {
                 GLES31.glBindImageTexture(0, 0, 0, false, 0, GLES31.GL_WRITE_ONLY, GLES30.GL_RGBA16F)
@@ -196,11 +204,8 @@ internal class RawFloatTextureTransfer(private val layout: Layout = Layout.FLOAT
             check(uploaded) { "Float PBO upload failed" }
         }
         // Mali drivers may reclaim a deleted/respecified buffer while queued work still sources it,
-        // leaving stale blocks in the destination texture. Record the upload's completion so the
-        // storage owner waits for this consumer before deleting or reallocating the buffer.
-        awaitPendingUpload()
-        pendingUploadSync = GLES30.glFenceSync(GLES30.GL_SYNC_GPU_COMMANDS_COMPLETE, 0)
-        check(pendingUploadSync != 0L) { "Unable to create float upload fence" }
+        // leaving stale blocks in the destination texture. The storage owner completes this
+        // consumer before deleting or reallocating the buffer (see awaitPendingUpload).
         PLog.i(TAG, "upload layout=$layout size=${width}x$height transfer=${if (stripeRows > 0) "SSBO_IMAGE" else "PBO"} " +
             "stripeRows=$stripeRows uploadSubmitMs=${elapsedMs(start)}")
     }
@@ -226,15 +231,11 @@ internal class RawFloatTextureTransfer(private val layout: Layout = Layout.FLOAT
         return (capacityPixels * layout.bytesPerPixel).toInt()
     }
 
+    /** Completes a queued upload with a fence that is created and deleted at this boundary. */
     private fun awaitPendingUpload() {
-        val sync = pendingUploadSync
-        if (sync == 0L) return
-        pendingUploadSync = 0L
-        try {
-            GlesGpuCompletion.awaitSync(sync, "float transfer upload")
-        } finally {
-            GLES30.glDeleteSync(sync)
-        }
+        if (!uploadSourcesBuffer) return
+        uploadSourcesBuffer = false
+        GlesGpuCompletion.awaitSubmittedWork("float transfer upload", checkGlError = {})
     }
 
     fun releaseBuffers() {
