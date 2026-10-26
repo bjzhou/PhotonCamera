@@ -1163,6 +1163,38 @@ static bool isSrgbPlaceholderForwardMatrixPair(const libraw_dng_color_t &first,
   return true;
 }
 
+struct SourceCalibrationSelection {
+  bool useSource = false;  // false: replace with fixed_raw_calibration
+  bool useForward = false;
+  bool keepSlot2 = false;
+};
+
+// Same order as RawColorCalibrationPolicy.kt. A usable ForwardMatrix set keeps the
+// source calibration as is: ColorMatrix then only locates the scene white, so an
+// sRGB placeholder ColorMatrix is kept. Otherwise ForwardMatrix is dropped and a
+// usable ColorMatrix is used alone; otherwise the fixed DNG calibration applies.
+static SourceCalibrationSelection selectSourceCalibration(
+    const libraw_dng_color_t *dngColor, const Matrix3x3 &colorMatrix1,
+    const Matrix3x3 &colorMatrix2, int illuminant1, int illuminant2,
+    const Matrix3x3 &forwardMatrix1, const Matrix3x3 &forwardMatrix2) {
+  const bool rejectForward = isSrgbPlaceholderForwardMatrixPair(dngColor[0], dngColor[1]);
+  if (rejectForward) {
+    LOGI("Ignoring identical 1/128-quantized sRGB-to-XYZ(D50) ForwardMatrix pair");
+  }
+  const bool hasForward1 = !rejectForward && dngColor[0].forwardmatrix_original_type != 0;
+  const bool hasForward2 = !rejectForward && dngColor[1].forwardmatrix_original_type != 0;
+  const bool forwardUsable = hasForward1 && isUsableSourceMatrix(forwardMatrix1, true) &&
+      (!hasForward2 || isUsableSourceMatrix(forwardMatrix2, true));
+  if (forwardUsable && isUsableSourceMatrix(colorMatrix1)) {
+    return {true, true, isUsableSourceMatrix(colorMatrix2)};
+  }
+  if (hasForward1 || hasForward2) {
+    LOGI("Ignoring unusable ForwardMatrix set; using ColorMatrix only");
+  }
+  if (!isUsableSourceColorMatrix(colorMatrix1, illuminant1)) return {};
+  return {true, false, isUsableSourceColorMatrix(colorMatrix2, illuminant2)};
+}
+
 static std::array<float, 3> multiplyMatrixVector(const Matrix3x3 &matrix,
                                                  const std::array<float, 3> &v) {
   return {matrix.m[0] * v[0] + matrix.m[1] * v[1] + matrix.m[2] * v[2],
@@ -1817,12 +1849,12 @@ static bool computeWbFromDngAsShotWhiteXY(const LibRaw &rawProcessor,
   Matrix3x3 xyzToCamera;
   int illuminant1 = rawProcessor.imgdata.color.dng_color[0].illuminant;
   int illuminant2 = rawProcessor.imgdata.color.dng_color[1].illuminant;
-  bool hasColor1 = isUsableSourceColorMatrix(colorMatrix1, illuminant1);
-  bool hasColor2 = isUsableSourceColorMatrix(colorMatrix2, illuminant2);
-  const bool usableForward = !isSrgbPlaceholderForwardMatrixPair(
-      rawProcessor.imgdata.color.dng_color[0], rawProcessor.imgdata.color.dng_color[1]) &&
-      (isUsableSourceMatrix(forwardMatrix1, true) || isUsableSourceMatrix(forwardMatrix2, true));
-  if (!hasColor1 && !hasColor2 && !usableForward) {
+  const SourceCalibrationSelection selection = selectSourceCalibration(
+      rawProcessor.imgdata.color.dng_color, colorMatrix1, colorMatrix2,
+      illuminant1, illuminant2, forwardMatrix1, forwardMatrix2);
+  bool hasColor1 = selection.useSource;
+  bool hasColor2 = selection.useSource && selection.keepSlot2;
+  if (!selection.useSource) {
     // AsShotWhiteXY-derived WB must use the same replacement as the render CCM.
     memcpy(colorMatrix1.m, fixed_raw_calibration::colorMatrix1, sizeof(colorMatrix1.m));
     memcpy(colorMatrix2.m, fixed_raw_calibration::colorMatrix2, sizeof(colorMatrix2.m));
@@ -3455,7 +3487,6 @@ Java_com_hinnka_mycamera_raw_RawDemosaicProcessor_processDngNative(
             RawProcessor.imgdata.color.dng_color[index].colormatrix[i][j];
       }
     }
-    return isUsableSourceColorMatrix(matrix, RawProcessor.imgdata.color.dng_color[index].illuminant);
   };
 
   auto readDngForwardMatrix = [&](int index, Matrix3x3 &matrix) {
@@ -3465,7 +3496,6 @@ Java_com_hinnka_mycamera_raw_RawDemosaicProcessor_processDngNative(
             RawProcessor.imgdata.color.dng_color[index].forwardmatrix[i][j];
       }
     }
-    return isUsableSourceMatrix(matrix, true);
   };
 
   auto readDngCameraCalibration = [&](int index, Matrix3x3 &matrix) {
@@ -3484,19 +3514,26 @@ Java_com_hinnka_mycamera_raw_RawDemosaicProcessor_processDngNative(
     return isDngInput && hasValue;
   };
 
-  bool hasColor1 = readDngColorMatrix(0, colorMatrix1);
-  bool hasColor2 = readDngColorMatrix(1, colorMatrix2);
-  const bool rejectForwardMatrices = isSrgbPlaceholderForwardMatrixPair(
-      RawProcessor.imgdata.color.dng_color[0], RawProcessor.imgdata.color.dng_color[1]);
-  bool hasForward1 = readDngForwardMatrix(0, forwardMatrix1) && !rejectForwardMatrices;
-  bool hasForward2 = readDngForwardMatrix(1, forwardMatrix2) && !rejectForwardMatrices;
-  if (rejectForwardMatrices) {
-    LOGI("Ignoring identical 1/128-quantized sRGB-to-XYZ(D50) ForwardMatrix pair");
-  }
+  readDngColorMatrix(0, colorMatrix1);
+  readDngColorMatrix(1, colorMatrix2);
+  readDngForwardMatrix(0, forwardMatrix1);
+  readDngForwardMatrix(1, forwardMatrix2);
   bool hasCameraCalibration1 = readDngCameraCalibration(0, cameraCalibration1);
   bool hasCameraCalibration2 = readDngCameraCalibration(1, cameraCalibration2);
   int illuminant1 = RawProcessor.imgdata.color.dng_color[0].illuminant;
   int illuminant2 = RawProcessor.imgdata.color.dng_color[1].illuminant;
+  const SourceCalibrationSelection selection = selectSourceCalibration(
+      RawProcessor.imgdata.color.dng_color, colorMatrix1, colorMatrix2,
+      illuminant1, illuminant2, forwardMatrix1, forwardMatrix2);
+  bool hasColor1 = selection.useSource;
+  bool hasColor2 = selection.useSource && selection.keepSlot2;
+  bool hasForward1 = selection.useForward;
+  bool hasForward2 = selection.useForward && selection.keepSlot2 &&
+      RawProcessor.imgdata.color.dng_color[1].forwardmatrix_original_type != 0;
+  if (selection.useSource && !selection.keepSlot2) {
+    illuminant2 = 0;
+    hasCameraCalibration2 = false;
+  }
 
   std::array<float, 3> analogBalance = {1.0f, 1.0f, 1.0f};
   for (int i = 0; i < 3; ++i) {
@@ -3506,7 +3543,7 @@ Java_com_hinnka_mycamera_raw_RawDemosaicProcessor_processDngNative(
     }
   }
 
-  const bool useFallbackCalibration = !hasColor1 && !hasColor2 && !hasForward1 && !hasForward2;
+  const bool useFallbackCalibration = !selection.useSource;
   if (useFallbackCalibration) {
     memcpy(colorMatrix1.m, fixed_raw_calibration::colorMatrix1, sizeof(colorMatrix1.m));
     memcpy(colorMatrix2.m, fixed_raw_calibration::colorMatrix2, sizeof(colorMatrix2.m));

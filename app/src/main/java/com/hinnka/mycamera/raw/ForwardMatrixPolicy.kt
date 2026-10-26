@@ -23,7 +23,8 @@ internal object ForwardMatrixPolicy {
             PLog.d("ForwardMatrixPolicy", "Ignoring identical 1/128-quantized sRGB-to-XYZ(D50) ForwardMatrix pair")
             return null to null
         }
-        return first?.takeIf(::isUsable) to second?.takeIf(::isUsable)
+        // Usability is decided with the whole calibration set in RawColorCalibrationPolicy.
+        return first to second
     }
 
     /** Original numerator/denominator words, not numerically equivalent fractions. */
@@ -46,10 +47,4 @@ internal object ForwardMatrixPolicy {
 
     private fun ColorSpaceTransform.rationalWords(): IntArray =
         IntArray(18).also { copyElements(it, 0) }
-
-    private fun isUsable(transform: ColorSpaceTransform): Boolean {
-        return RawColorCalibrationPolicy.isUsableForwardMatrix(FloatArray(9) {
-            transform.getElement(it % 3, it / 3).toFloat()
-        })
-    }
 }
