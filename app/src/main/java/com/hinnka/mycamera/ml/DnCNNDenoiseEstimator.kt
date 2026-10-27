@@ -12,13 +12,10 @@ import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import com.google.ai.edge.litert.CompiledModel
+import com.google.ai.edge.litert.support.common.FileUtil
+import com.google.ai.edge.litert.support.tensorbuffer.TensorBuffer
 import org.tensorflow.lite.Interpreter
-import org.tensorflow.lite.gpu.CompatibilityList
-import org.tensorflow.lite.gpu.GpuDelegate
-import org.tensorflow.lite.gpu.GpuDelegateFactory
-import org.tensorflow.lite.nnapi.NnApiDelegate
-import org.tensorflow.lite.support.common.FileUtil
-import org.tensorflow.lite.support.tensorbuffer.TensorBuffer
 import java.nio.ByteBuffer
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicLong
@@ -26,12 +23,10 @@ import java.util.concurrent.atomic.AtomicLong
 class DnCNNDenoiseEstimator(
     context: Context,
     private val modelAssetName: String = MODEL_DNCNN,
-    private val backend: Backend = Backend.AUTO
 ) {
     private var interpreter: Interpreter? = null
     private val extraCpuInterpreters = mutableListOf<Interpreter>()
-    private var gpuDelegate: GpuDelegate? = null
-    private var nnApiDelegate: NnApiDelegate? = null
+    private var gpuModel: LiteRtGpuModel? = null
     private var isInitialized = false
     private var activeBackend = "none"
     private var cpuWorkerCount = 1
@@ -42,6 +37,9 @@ class DnCNNDenoiseEstimator(
     private var outputHeight = 256
     private var inputChannelsFirst = false
     private var outputChannelsFirst = false
+    private var isRgbModel = false
+    private var outputShape = intArrayOf(1, 256, 256, 1)
+    private var outputDataType = org.tensorflow.lite.DataType.FLOAT32
     private val interpreterMutex = Mutex()
 
     init {
@@ -49,76 +47,35 @@ class DnCNNDenoiseEstimator(
             val modelFile = StartupTrace.measure("DnCNNDenoiseEstimator.loadMappedFile") {
                 FileUtil.loadMappedFile(context, modelAssetName)
             }
+            // Tensor dimensions are read from the plain interpreter: the compiled model
+            // exposes buffer sizes but not shapes.
+            Interpreter(modelFile, Interpreter.Options().setUseXNNPACK(false)).use(::updateTensorDimensions)
+            val elementCount = inputWidth * inputHeight * if (isRgbModel) 3 else 1
+
             val delegateCache = MlDelegateCacheFactory.create(
                 context = context,
                 tag = TAG,
-                cacheName = "dncnn_denoise",
+                cacheName = "dncnn_denoise_litert",
                 modelAssetName = modelAssetName,
                 modelSizeBytes = modelFile.capacity()
             )
 
-            if (backend == Backend.AUTO || backend == Backend.GPU) {
-                val compatList = StartupTrace.measure("DnCNNDenoiseEstimator.CompatibilityList()") {
-                    CompatibilityList()
+            try {
+                gpuModel = StartupTrace.measure("DnCNNDenoiseEstimator.CompiledModel(GPU)") {
+                    LiteRtGpuModel.fromAsset(
+                        context = context,
+                        assetName = modelAssetName,
+                        cache = delegateCache,
+                        precision = CompiledModel.GpuOptions.Precision.DEFAULT,
+                        inputElementCount = elementCount,
+                        outputElementCount = outputWidth * outputHeight * if (isRgbModel) 3 else 1,
+                    )
                 }
-                val gpuOptions = Interpreter.Options()
-                gpuDelegate = StartupTrace.measure("DnCNNDenoiseEstimator.GpuDelegate()") {
-                    val delegateOptions = if (compatList.isDelegateSupportedOnThisDevice) {
-                        compatList.bestOptionsForThisDevice
-                    } else {
-                        GpuDelegateFactory.Options()
-                    }
-                    delegateCache?.let {
-                        delegateOptions.setSerializationParams(
-                            it.directory.absolutePath,
-                            it.modelToken
-                        )
-                    }
-                    GpuDelegate(delegateOptions)
-                }
-                StartupTrace.measure("DnCNNDenoiseEstimator.gpuOptions.addDelegate") {
-                    gpuOptions.addDelegate(gpuDelegate)
-                }
-                try {
-                    interpreter = StartupTrace.measure("DnCNNDenoiseEstimator.Interpreter(GPU)") {
-                        Interpreter(modelFile, gpuOptions)
-                    }
-                    isInitialized = true
-                    activeBackend = "GPU"
-                    PLog.d(TAG, "Using GPU Delegate for DnCNN Denoise: $modelAssetName")
-                } catch (e: Exception) {
-                    PLog.w(TAG, "Failed to initialize GPU delegate, falling back to ${if (backend == Backend.AUTO) "NNAPI" else "CPU"}", e)
-                    gpuDelegate?.close()
-                    gpuDelegate = null
-                }
-            }
-
-            if (backend == Backend.AUTO && !isInitialized) {
-                val nnApiOptions = Interpreter.Options()
-                nnApiDelegate = StartupTrace.measure("DnCNNDenoiseEstimator.NnApiDelegate()") {
-                    val delegateOptions = NnApiDelegate.Options()
-                    delegateCache?.let {
-                        delegateOptions
-                            .setCacheDir(it.directory.absolutePath)
-                            .setModelToken(it.modelToken)
-                    }
-                    NnApiDelegate(delegateOptions)
-                }
-                StartupTrace.measure("DnCNNDenoiseEstimator.nnApiOptions.addDelegate") {
-                    nnApiOptions.addDelegate(nnApiDelegate)
-                }
-                try {
-                    interpreter = StartupTrace.measure("DnCNNDenoiseEstimator.Interpreter(NNAPI)") {
-                        Interpreter(modelFile, nnApiOptions)
-                    }
-                    isInitialized = true
-                    activeBackend = "NNAPI"
-                    PLog.d(TAG, "Using NNAPI (NPU) for DnCNN Denoise: $modelAssetName")
-                } catch (e: Exception) {
-                    PLog.w(TAG, "Failed to initialize NNAPI delegate, falling back to CPU", e)
-                    nnApiDelegate?.close()
-                    nnApiDelegate = null
-                }
+                isInitialized = true
+                activeBackend = "GPU"
+                PLog.d(TAG, "Using LiteRT GPU for DnCNN Denoise: $modelAssetName")
+            } catch (e: Exception) {
+                PLog.w(TAG, "Failed to initialize LiteRT GPU, falling back to CPU", e)
             }
 
             // Fallback to CPU
@@ -128,13 +85,6 @@ class DnCNNDenoiseEstimator(
                 interpreter = StartupTrace.measure("DnCNNDenoiseEstimator.Interpreter(CPU)") {
                     Interpreter(modelFile, cpuOptions)
                 }
-                if (backend == Backend.CPU && cpuWorkerCount > 1) {
-                    repeat(cpuWorkerCount - 1) { index ->
-                        extraCpuInterpreters += StartupTrace.measure("DnCNNDenoiseEstimator.Interpreter(CPU worker ${index + 2})") {
-                            Interpreter(modelFile, createCpuOptions(cpuThreadsPerInterpreter))
-                        }
-                    }
-                }
                 isInitialized = true
                 activeBackend = "CPU"
                 PLog.d(
@@ -143,23 +93,14 @@ class DnCNNDenoiseEstimator(
                 )
             }
 
-            interpreter?.let {
-                updateTensorDimensions(it)
-            }
         } catch (e: Exception) {
             PLog.e(TAG, "Error initializing DnCNNDenoiseEstimator: $modelAssetName", e)
         }
     }
 
     private fun configureCpuParallelism() {
-        val availableProcessors = Runtime.getRuntime().availableProcessors().coerceAtLeast(1)
-        if (backend == Backend.CPU) {
-            cpuWorkerCount = availableProcessors.coerceIn(2, 4)
-            cpuThreadsPerInterpreter = (availableProcessors / cpuWorkerCount).coerceAtLeast(1)
-        } else {
-            cpuWorkerCount = 1
-            cpuThreadsPerInterpreter = 4
-        }
+        cpuWorkerCount = 1
+        cpuThreadsPerInterpreter = 4
     }
 
     private fun createCpuOptions(numThreads: Int): Interpreter.Options {
@@ -172,6 +113,9 @@ class DnCNNDenoiseEstimator(
     private fun updateTensorDimensions(interpreter: Interpreter) {
         val inputShape = interpreter.getInputTensor(0).shape()
         val outputShape = interpreter.getOutputTensor(0).shape()
+        this.outputShape = outputShape
+        outputDataType = interpreter.getOutputTensor(0).dataType()
+        isRgbModel = inputShape.last() == 3 || (inputShape.size == 4 && inputShape[1] == 3)
 
         // typically [1, 1, H, W] or [1, H, W, 1]
         inputChannelsFirst = inputShape.size == 4 && (inputShape[1] == 1 || inputShape[1] == 3)
@@ -244,17 +188,13 @@ class DnCNNDenoiseEstimator(
      * [strength] (0.0 to 1.0) controls the blending with the original image.
      */
     suspend fun denoise(inputBitmap: Bitmap, strength: Float = 1.0f): Bitmap? {
-        if (!isInitialized || interpreter == null) {
+        if (!isInitialized) {
             PLog.e(TAG, "DnCNNDenoiseEstimator is not initialized")
             return null
         }
 
         try {
-            val inputTensor = interpreter!!.getInputTensor(0)
-            val outputTensor = interpreter!!.getOutputTensor(0)
-            val outputDataType = outputTensor.dataType()
-
-            val isRgb = inputTensor.shape().last() == 3 || (inputChannelsFirst && inputTensor.shape()[1] == 3)
+            val isRgb = isRgbModel
             val channels = if (isRgb) 3 else 1
             val buffer = LargeDirectBuffer.allocate(
                 inputWidth.toLong() * inputHeight.toLong() * channels.toLong() * 4L,
@@ -264,13 +204,11 @@ class DnCNNDenoiseEstimator(
 
                 preprocessNative(inputBitmap, 0, 0, inputWidth, inputHeight, buffer, isRgb, inputChannelsFirst)
 
-                val outputBuffer = TensorBuffer.createFixedSize(outputTensor.shape(), outputDataType)
+                val outputBuffer = TensorBuffer.createFixedSize(outputShape, outputDataType)
 
-                StartupTrace.measure("DnCNNDenoiseEstimator.Interpreter.run") {
+                StartupTrace.measure("DnCNNDenoiseEstimator.run") {
                     interpreterMutex.withLock {
-                        buffer.rewind()
-                        outputBuffer.buffer.rewind()
-                        interpreter?.run(buffer, outputBuffer.buffer)
+                        runInference(buffer, outputBuffer.buffer)
                     }
                 }
 
@@ -314,7 +252,7 @@ class DnCNNDenoiseEstimator(
         strength: Float = 1.0f,
         onProgress: ((Float) -> Unit)? = null
     ): Bitmap? = coroutineScope {
-        if (!isInitialized || interpreter == null) {
+        if (!isInitialized) {
             PLog.e(TAG, "DnCNNDenoiseEstimator is not initialized")
             return@coroutineScope null
         }
@@ -330,11 +268,8 @@ class DnCNNDenoiseEstimator(
         val totalSteps = ((height + strideY - 1) / strideY) * ((width + strideX - 1) / strideX)
         var completedSteps = 0
 
-        val inputTensor = interpreter!!.getInputTensor(0)
-        val outputTensor = interpreter!!.getOutputTensor(0)
-        val isRgb = inputTensor.shape().last() == 3 || (inputChannelsFirst && inputTensor.shape()[1] == 3)
+        val isRgb = isRgbModel
         val channels = if (isRgb) 3 else 1
-        val outputDataType = outputTensor.dataType()
         var preprocessMs = 0L
         var inferenceMs = 0L
         var postprocessMs = 0L
@@ -389,7 +324,7 @@ class DnCNNDenoiseEstimator(
                         inputWidth.toLong() * inputHeight.toLong() * channels.toLong() * 4L,
                         "DnCNN worker input"
                     ) ?: throw OutOfMemoryError("Failed to allocate DnCNN worker input buffer")
-                    val outBuffer = TensorBuffer.createFixedSize(outputTensor.shape(), outputDataType)
+                    val outBuffer = TensorBuffer.createFixedSize(outputShape, outputDataType)
                     try {
                         while (true) {
                             val patchIndex = nextPatch.getAndIncrement()
@@ -440,7 +375,7 @@ class DnCNNDenoiseEstimator(
                 inputWidth.toLong() * inputHeight.toLong() * channels.toLong() * 4L,
                 "DnCNN patch input"
             ) ?: return@coroutineScope null
-            val outBuffer = TensorBuffer.createFixedSize(outputTensor.shape(), outputDataType)
+            val outBuffer = TensorBuffer.createFixedSize(outputShape, outputDataType)
 
             try {
                 for (task in patchTasks) {
@@ -449,11 +384,9 @@ class DnCNNDenoiseEstimator(
                     preprocessMs += SystemClock.elapsedRealtime() - stageStartMs
 
                     stageStartMs = SystemClock.elapsedRealtime()
-                    StartupTrace.measure("DnCNNDenoiseEstimator.Interpreter.run") {
+                    StartupTrace.measure("DnCNNDenoiseEstimator.run") {
                         interpreterMutex.withLock {
-                            buffer.rewind()
-                            outBuffer.buffer.rewind()
-                            interpreter?.run(buffer, outBuffer.buffer)
+                            runInference(buffer, outBuffer.buffer)
                         }
                     }
                     inferenceMs += SystemClock.elapsedRealtime() - stageStartMs
@@ -487,13 +420,25 @@ class DnCNNDenoiseEstimator(
         return@coroutineScope resultBitmap
     }
 
+    /** Runs one patch on the active backend; both buffers hold FLOAT32 tensors. */
+    private fun runInference(input: ByteBuffer, output: ByteBuffer) {
+        input.rewind()
+        output.rewind()
+        val gpu = gpuModel
+        if (gpu != null) {
+            val inputValues = FloatArray(input.capacity() / Float.SIZE_BYTES)
+            input.asFloatBuffer().get(inputValues)
+            output.asFloatBuffer().put(gpu.run(inputValues))
+        } else {
+            interpreter?.run(input, output)
+        }
+    }
+
     fun close() {
         interpreter?.close()
         interpreter = null
-        gpuDelegate?.close()
-        gpuDelegate = null
-        nnApiDelegate?.close()
-        nnApiDelegate = null
+        gpuModel?.close()
+        gpuModel = null
         extraCpuInterpreters.forEach { it.close() }
         extraCpuInterpreters.clear()
         isInitialized = false

@@ -10,15 +10,13 @@ import com.hinnka.mycamera.utils.PLog
 import com.hinnka.mycamera.utils.StartupTrace
 import org.tensorflow.lite.DataType
 import org.tensorflow.lite.Interpreter
-import org.tensorflow.lite.nnapi.NnApiDelegate
 import org.tensorflow.lite.Tensor
-import org.tensorflow.lite.support.tensorbuffer.TensorBuffer
+import com.google.ai.edge.litert.support.tensorbuffer.TensorBuffer
 import java.io.FileInputStream
 import java.nio.ByteBuffer
 
 class DepthEstimator(context: Context) {
     private var interpreter: Interpreter? = null
-    private var nnApiDelegate: NnApiDelegate? = null
     private var isInitialized = false
     private var inputWidth = 518
     private var inputHeight = 518
@@ -43,53 +41,18 @@ class DepthEstimator(context: Context) {
                     )
                 }
             }
-            val delegateCache = MlDelegateCacheFactory.create(
-                context = context,
-                tag = TAG,
-                cacheName = "depth_estimator",
-                modelAssetName = modelFile.name,
-                modelSizeBytes = modelBuffer.capacity(),
-                modelFingerprint = DepthModelManager.installedModelFingerprint(context)
-            )
-
-            // The GPU delegate is deliberately not used: this model can compile but
-            // produce a constant map on affected Qualcomm GLES drivers.
-            PLog.d(TAG, "Depth model: trying NNAPI first")
-            try {
-                val nnApiOptions = Interpreter.Options()
-                nnApiDelegate = StartupTrace.measure("DepthEstimator.NnApiDelegate()") {
-                    val delegateOptions = NnApiDelegate.Options()
-                    delegateCache?.let {
-                        delegateOptions
-                            .setCacheDir(it.directory.absolutePath)
-                            .setModelToken(it.modelToken)
-                    }
-                    NnApiDelegate(delegateOptions)
-                }
-                StartupTrace.measure("DepthEstimator.nnApiOptions.addDelegate") {
-                    nnApiOptions.addDelegate(nnApiDelegate)
-                }
-                interpreter = StartupTrace.measure("DepthEstimator.Interpreter(NNAPI)") {
-                    Interpreter(modelBuffer, nnApiOptions)
-                }
-                isInitialized = true
-                PLog.d(TAG, "Using NNAPI (NPU) for depth model")
-            } catch (e: Exception) {
-                PLog.w(TAG, "Failed to initialize NNAPI delegate, falling back to CPU", e)
-                nnApiDelegate?.close()
-                nnApiDelegate = null
+            // LiteRT 2.x no longer provides the NNAPI delegate. The GPU accelerator is
+            // deliberately not used: this model can compile but produce a constant map
+            // on affected Qualcomm drivers. XNNPACK runs every supported depth contract,
+            // including quantized inputs and multi-output graphs.
+            val cpuOptions = Interpreter.Options()
+                .setNumThreads(CPU_THREADS)
+                .setUseXNNPACK(true)
+            interpreter = StartupTrace.measure("DepthEstimator.Interpreter(CPU)") {
+                Interpreter(modelBuffer, cpuOptions)
             }
-
-            // Fallback to CPU
-            if (!isInitialized) {
-                val cpuOptions = Interpreter.Options()
-                cpuOptions.setNumThreads(4)
-                interpreter = StartupTrace.measure("DepthEstimator.Interpreter(CPU)") {
-                    Interpreter(modelBuffer, cpuOptions)
-                }
-                isInitialized = true
-                PLog.d(TAG, "Using CPU for depth model")
-            }
+            isInitialized = true
+            PLog.d(TAG, "Using CPU/XNNPACK for depth model threads=$CPU_THREADS")
 
             interpreter?.let {
                 applyModelContract(it, inspectDepthModelContract(it))
@@ -336,12 +299,11 @@ class DepthEstimator(context: Context) {
     fun close() {
         interpreter?.close()
         interpreter = null
-        nnApiDelegate?.close()
-        nnApiDelegate = null
         isInitialized = false
     }
 
     companion object {
         private const val TAG = "DepthEstimator"
+        private const val CPU_THREADS = 4
     }
 }

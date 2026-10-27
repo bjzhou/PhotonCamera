@@ -11,7 +11,7 @@ import com.hinnka.mycamera.processor.PhotonCoreImagingTuning
 import com.hinnka.mycamera.utils.PLog
 import org.tensorflow.lite.DataType
 import org.tensorflow.lite.Interpreter
-import org.tensorflow.lite.support.common.FileUtil
+import com.google.ai.edge.litert.support.common.FileUtil
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import kotlin.math.abs

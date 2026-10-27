@@ -8,7 +8,7 @@ import android.graphics.Paint
 import android.graphics.RectF
 import org.tensorflow.lite.DataType
 import org.tensorflow.lite.Interpreter
-import org.tensorflow.lite.support.common.FileUtil
+import com.google.ai.edge.litert.support.common.FileUtil
 import java.io.Closeable
 import java.nio.ByteBuffer
 import java.nio.ByteOrder

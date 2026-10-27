@@ -7,10 +7,10 @@ import android.graphics.ColorSpace
 import android.graphics.Paint
 import android.graphics.Rect
 import android.os.SystemClock
-import com.hinnka.mycamera.utils.LargeDirectBuffer
 import com.hinnka.mycamera.utils.PLog
 import java.io.FileInputStream
 import java.nio.ByteBuffer
+import java.nio.FloatBuffer
 import java.nio.channels.FileChannel
 import java.util.concurrent.Executors
 import kotlinx.coroutines.CancellationException
@@ -19,16 +19,14 @@ import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
+import com.google.ai.edge.litert.CompiledModel
 import org.tensorflow.lite.DataType
 import org.tensorflow.lite.Interpreter
-import org.tensorflow.lite.gpu.CompatibilityList
-import org.tensorflow.lite.gpu.GpuDelegate
-import org.tensorflow.lite.gpu.GpuDelegateFactory
 
 /**
- * Owns the bundled U2NetP interpreter on one thread for its complete lifetime.
- * The GPU delegate is preferred; the CPU / XNNPACK interpreter replaces it when
- * the device does not support it, it fails to build, or a GPU inference fails.
+ * Owns the bundled U2NetP model on one thread for its complete lifetime.
+ * The LiteRT GPU compiled model is preferred; the CPU / XNNPACK interpreter replaces
+ * it when the GPU accelerator is unavailable, fails to compile, or a GPU inference fails.
  */
 object SharedSubjectMaskEstimator {
     private const val TAG = "SharedSubjectMaskEstimator"
@@ -44,17 +42,35 @@ object SharedSubjectMaskEstimator {
         Thread(runnable, TAG).apply { isDaemon = true }
     }.asCoroutineDispatcher()
 
-    private class LoadedModel(val interpreter: Interpreter, val gpuDelegate: GpuDelegate?) {
-        val backend: String get() = if (gpuDelegate != null) "GPU" else "CPU/XNNPACK"
+    private sealed interface LoadedModel {
+        val backend: String
+        val isGpu: Boolean
+        fun run(input: FloatArray): FloatArray
+        fun close()
+    }
 
-        fun close() {
-            interpreter.close()
-            gpuDelegate?.close()
+    private class GpuModel(private val runner: LiteRtGpuModel) : LoadedModel {
+        override val backend = "GPU"
+        override val isGpu = true
+        override fun run(input: FloatArray): FloatArray = runner.run(input)
+        override fun close() = runner.close()
+    }
+
+    private class CpuModel(private val interpreter: Interpreter) : LoadedModel {
+        override val backend = "CPU/XNNPACK"
+        override val isGpu = false
+
+        override fun run(input: FloatArray): FloatArray {
+            val values = FloatArray(MODEL_SIZE * MODEL_SIZE)
+            interpreter.run(FloatBuffer.wrap(input), FloatBuffer.wrap(values))
+            return values
         }
+
+        override fun close() = interpreter.close()
     }
 
     // Access, including initialization and destruction, is confined to the dispatcher:
-    // the GPU delegate must be created, run and closed on one thread.
+    // the GPU model is created, run and closed on one thread.
     private var model: LoadedModel? = null
     private var gpuDisabled = false
 
@@ -107,7 +123,7 @@ object SharedSubjectMaskEstimator {
      */
     private fun infer(context: Context, inputBitmap: Bitmap, crop: DepthSubjectCropPlanner.Crop): SubjectMask {
         val loaded = model ?: createModel(context).also { model = it }
-        if (loaded.gpuDelegate == null) return runInference(loaded, inputBitmap, crop)
+        if (!loaded.isGpu) return runInference(loaded, inputBitmap, crop)
         return try {
             runInference(loaded, inputBitmap, crop)
         } catch (error: Exception) {
@@ -138,50 +154,44 @@ object SharedSubjectMaskEstimator {
             setNumThreads(CPU_THREADS)
             setUseXNNPACK(true)
         }
-        val loaded = LoadedModel(Interpreter(modelBuffer, options), null)
+        val interpreter = Interpreter(modelBuffer, options)
         try {
-            validateTensors(loaded.interpreter)
+            validateTensors(interpreter)
         } catch (error: Throwable) {
-            loaded.close()
+            interpreter.close()
             throw error
         }
+        val loaded = CpuModel(interpreter)
         logReady(loaded, startedAt)
         return loaded
     }
 
-    /** The GPU interpreter, or null when the delegate is unsupported or fails to build / validate. */
+    /** The GPU compiled model, or null when the accelerator is unavailable or fails to compile / validate. */
     private fun createGpuModel(context: Context, modelBuffer: ByteBuffer): LoadedModel? {
-        val compatibility = CompatibilityList()
-        try {
-            val delegateOptions = if (compatibility.isDelegateSupportedOnThisDevice) {
-                compatibility.bestOptionsForThisDevice
-            } else {
-                GpuDelegateFactory.Options()
-            }
-            MlDelegateCacheFactory.create(
+        return try {
+            // The tensor contract is checked on the plain interpreter: the compiled model
+            // exposes buffer sizes but not shapes or element types.
+            Interpreter(modelBuffer, Interpreter.Options().setUseXNNPACK(false)).use(::validateTensors)
+            val cache = MlDelegateCacheFactory.create(
                 context = context,
                 tag = TAG,
-                cacheName = "u2netp_subject_mask",
+                cacheName = "u2netp_subject_mask_litert",
                 modelAssetName = MODEL_ASSET,
                 modelSizeBytes = modelBuffer.capacity(),
-            )?.let { cache ->
-                delegateOptions.setSerializationParams(cache.directory.absolutePath, cache.modelToken)
-            }
-            var delegate: GpuDelegate? = null
-            var interpreter: Interpreter? = null
-            return try {
-                delegate = GpuDelegate(delegateOptions)
-                interpreter = Interpreter(modelBuffer, Interpreter.Options().addDelegate(delegate))
-                validateTensors(interpreter)
-                LoadedModel(interpreter, delegate)
-            } catch (error: Exception) {
-                PLog.w(TAG, "U2NetP GPU delegate unavailable; using CPU/XNNPACK", error)
-                interpreter?.close()
-                delegate?.close()
-                null
-            }
-        } finally {
-            compatibility.close()
+            )
+            GpuModel(
+                LiteRtGpuModel.fromAsset(
+                    context = context,
+                    assetName = MODEL_ASSET,
+                    cache = cache,
+                    precision = CompiledModel.GpuOptions.Precision.DEFAULT,
+                    inputElementCount = MODEL_SIZE * MODEL_SIZE * CHANNEL_COUNT,
+                    outputElementCount = MODEL_SIZE * MODEL_SIZE,
+                )
+            )
+        } catch (error: Exception) {
+            PLog.w(TAG, "U2NetP GPU accelerator unavailable; using CPU/XNNPACK", error)
+            null
         }
     }
 
@@ -202,12 +212,9 @@ object SharedSubjectMaskEstimator {
     }
 
     private fun logReady(loaded: LoadedModel, startedAt: Long) {
-        val input = loaded.interpreter.getInputTensor(0)
-        val output = loaded.interpreter.getOutputTensor(0)
         PLog.d(TAG, "U2NetP ready: backend=${loaded.backend}" +
-            (if (loaded.gpuDelegate == null) " threads=$CPU_THREADS" else "") +
-            " input=${input.shape().contentToString()} output=${output.shape().contentToString()} " +
-            "init=${SystemClock.elapsedRealtime() - startedAt}ms")
+            (if (!loaded.isGpu) " threads=$CPU_THREADS" else "") +
+            " init=${SystemClock.elapsedRealtime() - startedAt}ms")
     }
 
     private fun runInference(
@@ -217,8 +224,6 @@ object SharedSubjectMaskEstimator {
     ): SubjectMask {
         val startedAt = SystemClock.elapsedRealtime()
         var guide: Bitmap? = null
-        var inputBytes: ByteBuffer? = null
-        var outputBytes: ByteBuffer? = null
         try {
             // Resize and color-convert in one draw; never allocate a full-size SDR copy.
             val resized = Bitmap.createBitmap(
@@ -240,29 +245,17 @@ object SharedSubjectMaskEstimator {
             }
             val inputScale = maximumChannel.coerceAtLeast(1).toFloat()
             val pixelCount = MODEL_SIZE * MODEL_SIZE
-            val inputBuffer = LargeDirectBuffer.allocate(
-                pixelCount.toLong() * CHANNEL_COUNT * Float.SIZE_BYTES, "U2NetP input",
-            ) ?: throw IllegalStateException("Unable to allocate U2NetP input buffer")
-            inputBytes = inputBuffer
-            val outputBuffer = LargeDirectBuffer.allocate(
-                pixelCount.toLong() * Float.SIZE_BYTES, "U2NetP output",
-            ) ?: throw IllegalStateException("Unable to allocate U2NetP output buffer")
-            outputBytes = outputBuffer
-            val input = inputBuffer.asFloatBuffer()
-            val output = outputBuffer.asFloatBuffer()
+            val input = FloatArray(pixelCount * CHANNEL_COUNT)
+            var inputIndex = 0
             for (pixel in pixels) {
-                input.put((((pixel ushr 16) and 0xff) / inputScale - INPUT_MEAN[0]) / INPUT_STD[0])
-                input.put((((pixel ushr 8) and 0xff) / inputScale - INPUT_MEAN[1]) / INPUT_STD[1])
-                input.put(((pixel and 0xff) / inputScale - INPUT_MEAN[2]) / INPUT_STD[2])
+                input[inputIndex++] = (((pixel ushr 16) and 0xff) / inputScale - INPUT_MEAN[0]) / INPUT_STD[0]
+                input[inputIndex++] = (((pixel ushr 8) and 0xff) / inputScale - INPUT_MEAN[1]) / INPUT_STD[1]
+                input[inputIndex++] = ((pixel and 0xff) / inputScale - INPUT_MEAN[2]) / INPUT_STD[2]
             }
-            input.rewind()
-            output.rewind()
             val runStartedAt = SystemClock.elapsedRealtime()
-            loaded.interpreter.run(input, output)
+            val values = loaded.run(input)
             val runFinishedAt = SystemClock.elapsedRealtime()
-            output.rewind()
-            val values = FloatArray(pixelCount)
-            output.get(values)
+            check(values.size == pixelCount) { "Unexpected U2NetP output size: ${values.size}" }
             var minimum = Float.POSITIVE_INFINITY
             var maximum = Float.NEGATIVE_INFINITY
             for ((index, value) in values.withIndex()) {
@@ -287,8 +280,6 @@ object SharedSubjectMaskEstimator {
                 crop.right.toFloat() / inputBitmap.width, crop.bottom.toFloat() / inputBitmap.height,
             ))
         } finally {
-            LargeDirectBuffer.free(outputBytes)
-            LargeDirectBuffer.free(inputBytes)
             guide?.recycle()
         }
     }
