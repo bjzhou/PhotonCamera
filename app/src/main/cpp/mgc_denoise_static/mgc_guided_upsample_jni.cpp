@@ -79,8 +79,7 @@ Java_com_hinnka_mycamera_raw_MgcGuidedUpsample_nativePrepare(
     // The low color branch starts before CCM/DCP/tone; never downsample an
     // encoded JPEG.
     std::vector<int16_t> low_rgb(ln * 3);
-    if (RunYuvToRgb(low.data(), pw / scale, ph / scale, low_rgb.data()) != 0)
-      return 0;
+    GuidedLinearYuvToRgb(low.data(), ln, low_rgb.data());
     const auto low_color = Clock::now();
 #pragma omp parallel for schedule(static) num_threads(4)
     for (size_t i = 0; i < ln; ++i) {

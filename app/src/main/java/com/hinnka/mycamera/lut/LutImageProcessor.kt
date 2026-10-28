@@ -12,11 +12,10 @@ import android.opengl.GLES30
 import android.opengl.GLES31
 import androidx.core.graphics.createBitmap
 import com.hinnka.mycamera.model.ColorRecipeParams
-import com.hinnka.mycamera.lut.ChromaDenoiseShaders
 import com.hinnka.mycamera.processor.GlesComputeWorkGroup
 import com.hinnka.mycamera.processor.DenoiseStrength
-import com.hinnka.mycamera.raw.DenoiseProfileNlmConfig
-import com.hinnka.mycamera.raw.DenoiseProfileShaders
+import com.hinnka.mycamera.raw.denoise.PhotonMultiScaleDenoiser
+import com.hinnka.mycamera.raw.denoise.PhotonNoiseModel
 import com.hinnka.mycamera.utils.LargeDirectBuffer
 import com.hinnka.mycamera.utils.PLog
 import kotlinx.coroutines.asCoroutineDispatcher
@@ -84,22 +83,16 @@ class LutImageProcessor(context: Context? = null) {
     private var texCoordBuffer: FloatBuffer? = null
     private var indexBuffer: ShortBuffer? = null
 
-    private var bitmapDenoisePreconditionProgram = 0
-    private var bitmapDenoiseNlmInitProgram = 0
-    private var bitmapDenoiseNlmFusedAccuProgram = 0
-    private var bitmapDenoiseNlmFinishProgram = 0
+    private var bitmapSrgbTransferProgram = 0
     private var bitmapDenoisePassthroughProgram = 0
     private var computeCapabilitiesChecked = false
     private var computeCapabilitiesSupported = false
-    private var bitmapChromaDenoiseGuideProgram = 0
-    private var bitmapChromaDenoiseProgram = 0
+    private val bitmapPhotonDenoiser = PhotonMultiScaleDenoiser()
     private var lutSharpenProgram = 0
     private var lutLuminanceGainProgram = 0
 
     private val bitmapDenoiseTexId = IntArray(2)
     private val bitmapDenoiseFboId = IntArray(2)
-    private var bitmapDenoiseNlmU2BufferId = 0
-    private var bitmapDenoiseNlmBufferPixels = 0
     private var bitmapDenoiseWidth = 0
     private var bitmapDenoiseHeight = 0
     private var lutSharpenTextureId = 0
@@ -340,7 +333,6 @@ class LutImageProcessor(context: Context? = null) {
         val sharpening: Float = colorRecipeParams?.sharpness?.coerceIn(-1f, 1f) ?: 0f
         val noiseReduction: Float = noiseReductionValue
         val chromaNoiseReduction: Float = chromaNoiseReductionValue
-        val chromaDenoiseStrength = DenoiseStrength.clamp(chromaNoiseReduction)
 
         // 激活上下文
         EGL14.eglMakeCurrent(eglDisplay, eglSurface, eglSurface, eglContext)
@@ -353,27 +345,15 @@ class LutImageProcessor(context: Context? = null) {
         uploadImageTextureFromArgb(argbData, width, height)
         currentCoroutineContext().ensureActive()
 
-        if (chromaDenoiseStrength > 0) {
-            renderBitmapChromaDenoise(imageTextureId, width, height, chromaDenoiseStrength)
-            currentCoroutineContext().ensureActive()
-        }
-
-        val chromaDenoisedTexId = if (chromaDenoiseStrength > 0) bitmapDenoiseTexId[0] else imageTextureId
-        if (noiseReduction > 0) {
-            renderBitmapDenoiseProfile(chromaDenoisedTexId, width, height, noiseReduction)
-            currentCoroutineContext().ensureActive()
-        }
+        val denoised = renderBitmapPhotonDenoise(imageTextureId, width, height, noiseReduction, chromaNoiseReduction)
+        currentCoroutineContext().ensureActive()
 
         // 上传 LUT 纹理
         if (lutConfig != null) {
             uploadLutTexture(lutConfig)
         }
 
-        val inputTexId = if (noiseReduction > 0) {
-            bitmapDenoiseTexId[1]
-        } else {
-            chromaDenoisedTexId
-        }
+        val inputTexId = if (denoised) bitmapDenoiseTexId[1] else imageTextureId
 
         // HDF 光晕效果预处理（在主 shader 之前，需要模糊的光晕纹理）
         if (halation > 0f) {
@@ -486,7 +466,6 @@ class LutImageProcessor(context: Context? = null) {
         val sharpening: Float = colorRecipeParams?.sharpness?.coerceIn(-1f, 1f) ?: 0f
         val noiseReduction: Float = noiseReductionValue
         val chromaNoiseReduction: Float = chromaNoiseReductionValue
-        val chromaDenoiseStrength = DenoiseStrength.clamp(chromaNoiseReduction)
 
         // 确保上下文激活
         EGL14.eglMakeCurrent(eglDisplay, eglSurface, eglSurface, eglContext)
@@ -502,27 +481,15 @@ class LutImageProcessor(context: Context? = null) {
         uploadImageTexture(bitmap)
         currentCoroutineContext().ensureActive()
 
-        if (chromaDenoiseStrength > 0) {
-            renderBitmapChromaDenoise(imageTextureId, width, height, chromaDenoiseStrength)
-            currentCoroutineContext().ensureActive()
-        }
-
-        val chromaDenoisedTexId = if (chromaDenoiseStrength > 0) bitmapDenoiseTexId[0] else imageTextureId
-        if (noiseReduction > 0) {
-            renderBitmapDenoiseProfile(chromaDenoisedTexId, width, height, noiseReduction)
-            currentCoroutineContext().ensureActive()
-        }
+        val denoised = renderBitmapPhotonDenoise(imageTextureId, width, height, noiseReduction, chromaNoiseReduction)
+        currentCoroutineContext().ensureActive()
 
         // 上传 LUT 纹理
         if (lutConfig != null) {
             uploadLutTexture(lutConfig)
         }
 
-        val inputTexId = if (noiseReduction > 0) {
-            bitmapDenoiseTexId[1]
-        } else {
-            chromaDenoisedTexId
-        }
+        val inputTexId = if (denoised) bitmapDenoiseTexId[1] else imageTextureId
         val renderColorSpace = bitmap.colorSpace ?: ColorSpace.get(ColorSpace.Named.SRGB)
 
         // HDF 光晕效果预处理
@@ -779,11 +746,11 @@ class LutImageProcessor(context: Context? = null) {
         setupFramebuffer(width, height)
         uploadImageTexture(bitmap)
 
-        renderBitmapChromaDenoise(imageTextureId, width, height, strength)
+        val denoised = renderBitmapPhotonDenoise(imageTextureId, width, height, 0f, strength)
         performRender(
             width = width,
             height = height,
-            inputTextureId = bitmapDenoiseTexId[0],
+            inputTextureId = if (denoised) bitmapDenoiseTexId[1] else imageTextureId,
             inputColorSpace = bitmap.colorSpace ?: ColorSpace.get(ColorSpace.Named.SRGB),
             lutConfig = null,
             colorRecipeParams = null,
@@ -1304,47 +1271,23 @@ class LutImageProcessor(context: Context? = null) {
         )
     }
 
-    private fun ensureBitmapDenoiseProfilePrograms() {
+    /** The Photon denoiser and the sRGB transfer passes around it (docs/photon-multiscale-denoise.md §9). */
+    private fun ensureBitmapPhotonDenoisePrograms(): Boolean {
         if (!computeCapabilitiesChecked) {
             computeCapabilitiesSupported = logAndValidateComputeCapabilities()
             computeCapabilitiesChecked = true
         }
-        if (!computeCapabilitiesSupported) {
-            ensureBitmapDenoisePassthroughProgram()
-            return
-        }
-        if (bitmapDenoisePreconditionProgram == 0) {
-            bitmapDenoisePreconditionProgram = compileComputeProgram(
-                DenoiseProfileShaders.PRECONDITION_V2,
-                "BitmapDenoise_PreconditionV2",
-            )
-        }
-        if (bitmapDenoiseNlmInitProgram == 0) {
-            bitmapDenoiseNlmInitProgram = compileComputeProgram(
-                DenoiseProfileShaders.INIT,
-                "BitmapDenoise_NLM_Init",
-            )
-        }
-        if (bitmapDenoiseNlmFusedAccuProgram == 0) {
-            bitmapDenoiseNlmFusedAccuProgram = compileComputeProgram(
-                DenoiseProfileShaders.FUSED_ACCU,
-                "BitmapDenoise_NLM_FusedAccu",
-            )
-        }
-        if (bitmapDenoiseNlmFinishProgram == 0) {
-            bitmapDenoiseNlmFinishProgram = compileComputeProgram(
-                DenoiseProfileShaders.FINISH_V2,
-                "BitmapDenoise_NLM_FinishV2",
-            )
-        }
+        if (!computeCapabilitiesSupported) return false
         ensureBitmapDenoisePassthroughProgram()
-        PLog.d(
-            TAG,
-            "Bitmap denoiseprofile programs initialized: pre=$bitmapDenoisePreconditionProgram " +
-                "init=$bitmapDenoiseNlmInitProgram fusedAccu=$bitmapDenoiseNlmFusedAccuProgram " +
-                "finish=$bitmapDenoiseNlmFinishProgram " +
-                "pass=$bitmapDenoisePassthroughProgram"
-        )
+        if (bitmapSrgbTransferProgram == 0) {
+            bitmapSrgbTransferProgram = createFragmentProgram(
+                IMAGE_VERTEX_SHADER,
+                SRGB_TRANSFER_SHADER,
+                "BitmapDenoise_SrgbTransfer",
+            )
+        }
+        return bitmapSrgbTransferProgram != 0 && bitmapDenoisePassthroughProgram != 0 &&
+            bitmapPhotonDenoiser.initialize()
     }
 
     private fun ensureBitmapDenoisePassthroughProgram() {
@@ -1353,24 +1296,6 @@ class LutImageProcessor(context: Context? = null) {
                 IMAGE_VERTEX_SHADER,
                 TEXTURE_PASSTHROUGH_SHADER,
                 "BitmapDenoise_Passthrough",
-            )
-        }
-    }
-
-    private fun ensureBitmapChromaDenoisePrograms() {
-        ensureBitmapDenoisePassthroughProgram()
-        if (bitmapChromaDenoiseGuideProgram == 0) {
-            bitmapChromaDenoiseGuideProgram = createFragmentProgram(
-                IMAGE_VERTEX_SHADER,
-                ChromaDenoiseShaders.PASS_EDGE_GUIDE,
-                "BitmapChromaDenoise_EdgeGuide",
-            )
-        }
-        if (bitmapChromaDenoiseProgram == 0) {
-            bitmapChromaDenoiseProgram = createFragmentProgram(
-                IMAGE_VERTEX_SHADER,
-                ChromaDenoiseShaders.PASS_CHROMA_DENOISE,
-                "BitmapChromaDenoise_MultiScale",
             )
         }
     }
@@ -1479,161 +1404,58 @@ class LutImageProcessor(context: Context? = null) {
         GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, 0)
     }
 
-    private fun renderBitmapDenoiseProfile(
+    /**
+     * §9: sRGB → linear, the Photon denoiser on the nominal Bitmap profile, linear → sRGB.
+     * The result is in bitmapDenoiseTexId[1]; returns false (result not written) when either
+     * strength is zero for both or the compute path is unavailable.
+     */
+    private fun renderBitmapPhotonDenoise(
         sourceTextureId: Int,
         width: Int,
         height: Int,
-        noiseReduction: Float
-    ) {
-        ensureBitmapDenoiseProfilePrograms()
-        setupBitmapDenoiseFramebuffers(width, height)
-
-        val strength = DenoiseStrength.clamp(noiseReduction)
-        if (strength <= 0f || width * height < 2) {
-            renderTexturePassthrough(sourceTextureId, bitmapDenoiseFboId[1], width, height)
-            return
-        }
-        if (!isBitmapDenoiseProfileReady()) {
-            renderTexturePassthrough(sourceTextureId, bitmapDenoiseFboId[1], width, height)
-            return
-        }
-        setupBitmapDenoiseResources(width, height)
-
-        val preconditionTextureId = if (sourceTextureId == bitmapDenoiseTexId[0]) {
-            bitmapDenoiseTexId[1]
-        } else {
-            bitmapDenoiseTexId[0]
-        }
-        val params = buildBitmapDenoiseParams(strength)
-        dispatchBitmapDenoisePreconditionV2(sourceTextureId, preconditionTextureId, width, height, params)
-        dispatchBitmapDenoiseNlm(sourceTextureId, preconditionTextureId, bitmapDenoiseTexId[1], width, height, params)
-        checkGlError("renderBitmapDenoiseProfile")
-    }
-
-    private fun renderBitmapChromaDenoise(
-        sourceTextureId: Int,
-        width: Int,
-        height: Int,
+        noiseReduction: Float,
         chromaNoiseReduction: Float,
-        targetIndex: Int = 0
-    ) {
-        ensureBitmapChromaDenoisePrograms()
-        setupBitmapDenoiseFramebuffers(width, height)
-
-        val strength = DenoiseStrength.clamp(chromaNoiseReduction)
-        val target = targetIndex.coerceIn(0, bitmapDenoiseTexId.lastIndex)
-        val edgeGuidanceRelaxation =
-            ChromaDenoiseDefaults.edgeGuidanceRelaxation(strength)
-        if (strength <= 0f || bitmapChromaDenoiseProgram == 0 ||
-            bitmapChromaDenoiseGuideProgram == 0
-        ) {
-            renderTexturePassthrough(sourceTextureId, bitmapDenoiseFboId[target], width, height)
-            return
+    ): Boolean {
+        val lumaStrength = DenoiseStrength.clamp(noiseReduction)
+        val chromaStrength = DenoiseStrength.clamp(chromaNoiseReduction)
+        if ((lumaStrength <= 0f && chromaStrength <= 0f) || width * height < 2) return false
+        if (!ensureBitmapPhotonDenoisePrograms()) {
+            PLog.e(TAG, "Bitmap Photon denoise is unavailable: GLES compute support is missing")
+            return false
         }
-
-        val identityMatrix = FloatArray(16)
-        android.opengl.Matrix.setIdentityM(identityMatrix, 0)
-        val h = ChromaDenoiseDefaults.noiseBandwidth(strength)
-        val guideIndex = if (target == 0) 1 else 0
-        renderBitmapChromaDenoiseEdgeGuide(
-            sourceTextureId,
-            bitmapDenoiseFboId[guideIndex],
-            width,
-            height
-        )
-        val guideTextureId = bitmapDenoiseTexId[guideIndex]
-
-        GLES30.glUseProgram(bitmapChromaDenoiseProgram)
-        GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, bitmapDenoiseFboId[target])
-        GLES30.glViewport(0, 0, width, height)
-        GLES30.glActiveTexture(GLES30.GL_TEXTURE0)
-        GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, sourceTextureId)
-        GLES30.glUniform1i(GLES30.glGetUniformLocation(bitmapChromaDenoiseProgram, "uInputTexture"), 0)
-        GLES30.glActiveTexture(GLES30.GL_TEXTURE1)
-        GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, guideTextureId)
-        GLES30.glUniform1i(
-            GLES30.glGetUniformLocation(bitmapChromaDenoiseProgram, "uGuideTexture"),
-            1
-        )
-        GLES30.glUniform2f(
-            GLES30.glGetUniformLocation(bitmapChromaDenoiseProgram, "uTexelSize"),
-            1.0f / width,
-            1.0f / height
-        )
-        GLES30.glUniformMatrix4fv(
-            GLES30.glGetUniformLocation(bitmapChromaDenoiseProgram, "uMVPMatrix"),
-            1,
-            false,
-            identityMatrix,
-            0
-        )
-        GLES30.glUniform1f(
-            GLES30.glGetUniformLocation(bitmapChromaDenoiseProgram, "uOutputStrength"),
-            ChromaDenoiseDefaults.outputStrength(strength)
-        )
-        GLES30.glUniform1f(
-            GLES30.glGetUniformLocation(
-                bitmapChromaDenoiseProgram,
-                "uEdgeGuidanceRelaxation"
-            ),
-            edgeGuidanceRelaxation
-        )
-        GLES30.glUniform1i(
-            GLES30.glGetUniformLocation(bitmapChromaDenoiseProgram, "uCameraRgbInput"),
-            0
-        )
-        GLES30.glUniform1f(GLES30.glGetUniformLocation(bitmapChromaDenoiseProgram, "uH"), h)
-        GLES30.glUniform4f(
-            GLES30.glGetUniformLocation(bitmapChromaDenoiseProgram, "uNoiseModelRB"),
-            BITMAP_DENOISE_A * 2f,
-            BITMAP_DENOISE_B * 2f,
-            BITMAP_DENOISE_A * 2f,
-            BITMAP_DENOISE_B * 2f
-        )
-        GLES30.glUniform2f(
-            GLES30.glGetUniformLocation(bitmapChromaDenoiseProgram, "uNoiseModelG"),
-            BITMAP_DENOISE_A * 2f,
-            BITMAP_DENOISE_B * 2f
-        )
-        drawQuad(bitmapChromaDenoiseProgram)
-        checkGlError("renderBitmapChromaDenoise")
+        setupBitmapDenoiseFramebuffers(width, height)
+        renderSrgbTransfer(sourceTextureId, bitmapDenoiseFboId[0], width, height, encode = false)
+        val params = PhotonNoiseModel.buildBitmap(width, height, lumaStrength, chromaStrength)
+        val denoised = checkNotNull(bitmapPhotonDenoiser.denoise(bitmapDenoiseTexId[0], width, height, params)) {
+            "Photon denoise programs are unavailable"
+        }
+        try {
+            renderSrgbTransfer(denoised, bitmapDenoiseFboId[1], width, height, encode = true)
+        } finally {
+            GLES30.glDeleteTextures(1, intArrayOf(denoised), 0)
+        }
+        checkGlError("Bitmap Photon denoise")
+        return true
     }
 
-    private fun renderBitmapChromaDenoiseEdgeGuide(
-        sourceTextureId: Int,
-        targetFramebufferId: Int,
-        width: Int,
-        height: Int,
-    ) {
-        GLES30.glUseProgram(bitmapChromaDenoiseGuideProgram)
-        GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, targetFramebufferId)
+    private fun renderSrgbTransfer(sourceTextureId: Int, targetFboId: Int, width: Int, height: Int, encode: Boolean) {
+        GLES30.glUseProgram(bitmapSrgbTransferProgram)
+        GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, targetFboId)
         GLES30.glViewport(0, 0, width, height)
         GLES30.glActiveTexture(GLES30.GL_TEXTURE0)
         GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, sourceTextureId)
-        GLES30.glUniform1i(
-            GLES30.glGetUniformLocation(bitmapChromaDenoiseGuideProgram, "uInputTexture"),
-            0
-        )
-        GLES30.glUniform2f(
-            GLES30.glGetUniformLocation(bitmapChromaDenoiseGuideProgram, "uTexelSize"),
-            1.0f / width,
-            1.0f / height
-        )
-        GLES30.glUniform1i(
-            GLES30.glGetUniformLocation(bitmapChromaDenoiseGuideProgram, "uCameraRgbInput"),
-            0
-        )
+        GLES30.glUniform1i(GLES30.glGetUniformLocation(bitmapSrgbTransferProgram, "uInputTexture"), 0)
+        GLES30.glUniform1i(GLES30.glGetUniformLocation(bitmapSrgbTransferProgram, "uEncode"), if (encode) 1 else 0)
         val identityMatrix = FloatArray(16)
         android.opengl.Matrix.setIdentityM(identityMatrix, 0)
         GLES30.glUniformMatrix4fv(
-            GLES30.glGetUniformLocation(bitmapChromaDenoiseGuideProgram, "uMVPMatrix"),
+            GLES30.glGetUniformLocation(bitmapSrgbTransferProgram, "uMVPMatrix"),
             1,
             false,
             identityMatrix,
             0
         )
-        drawQuad(bitmapChromaDenoiseGuideProgram)
-        checkGlError("renderBitmapChromaDenoiseEdgeGuide")
+        drawQuad(bitmapSrgbTransferProgram)
     }
 
     private fun renderTexturePassthrough(sourceTextureId: Int, targetFboId: Int, width: Int, height: Int) {
@@ -1779,220 +1601,6 @@ class LutImageProcessor(context: Context? = null) {
         }
         lutSharpenWidth = 0
         lutSharpenHeight = 0
-    }
-
-    private data class BitmapDenoiseParams(
-        val strength: Float,
-        val patchRadius: Int,
-        val expectedFineDistance: Float,
-        val expectedGuideDistance: Float,
-        val inverseBandwidth: Float,
-        val coarseGuideWeight: Float,
-        val centralPixelWeight: Float,
-        val p: FloatArray,
-        val signalScale: FloatArray,
-        val aa: FloatArray,
-        val bb: FloatArray,
-        val bias: Float,
-        val scale: Float
-    )
-
-    private fun isBitmapDenoiseProfileReady(): Boolean {
-        return bitmapDenoisePreconditionProgram != 0 &&
-            bitmapDenoiseNlmInitProgram != 0 &&
-            bitmapDenoiseNlmFusedAccuProgram != 0 &&
-            bitmapDenoiseNlmFinishProgram != 0 &&
-            bitmapDenoisePassthroughProgram != 0
-    }
-
-    private fun setupBitmapDenoiseResources(width: Int, height: Int) {
-        val pixelCount = width * height
-        if (
-            bitmapDenoiseNlmBufferPixels == pixelCount &&
-            bitmapDenoiseNlmU2BufferId != 0
-        ) {
-            return
-        }
-
-        if (bitmapDenoiseNlmU2BufferId != 0) {
-            GLES31.glDeleteBuffers(1, intArrayOf(bitmapDenoiseNlmU2BufferId), 0)
-            bitmapDenoiseNlmU2BufferId = 0
-        }
-
-        val buffers = IntArray(1)
-        GLES31.glGenBuffers(buffers.size, buffers, 0)
-        bitmapDenoiseNlmU2BufferId = buffers[0]
-
-        GLES31.glBindBuffer(GLES31.GL_SHADER_STORAGE_BUFFER, bitmapDenoiseNlmU2BufferId)
-        GLES31.glBufferData(GLES31.GL_SHADER_STORAGE_BUFFER, pixelCount * 4 * 4, null, GLES31.GL_DYNAMIC_DRAW)
-        GLES31.glBindBuffer(GLES31.GL_SHADER_STORAGE_BUFFER, 0)
-        bitmapDenoiseNlmBufferPixels = pixelCount
-    }
-
-    private fun buildBitmapDenoiseParams(strengthValue: Float): BitmapDenoiseParams {
-        val strength = DenoiseStrength.clamp(strengthValue)
-        val varianceScale = DenoiseStrength.noiseVarianceScale(strength)
-        val a = BITMAP_DENOISE_A * varianceScale
-        val b = BITMAP_DENOISE_B * varianceScale
-        val scale = 1.0f
-        val shadows = max(0.1f - 0.1f * ln(a), 0.7f).coerceAtMost(1.8f)
-        val bias = -max(5f + 0.5f * ln(a), 0.0f)
-        val compensateP = 0.05f / 0.05f.pow(shadows)
-        val patchRadius = DenoiseProfileShaders.PATCH_RADIUS
-        val weightTuning = DenoiseProfileNlmConfig.weightTuning(patchRadius)
-        val centralPixelWeight = 0.1f * scale
-        return BitmapDenoiseParams(
-            strength = DenoiseStrength.outputMix(strength),
-            patchRadius = patchRadius,
-            expectedFineDistance = weightTuning.expectedFineDistance,
-            expectedGuideDistance = weightTuning.expectedGuideDistance,
-            inverseBandwidth = weightTuning.inverseBandwidth,
-            coarseGuideWeight = weightTuning.coarseGuideWeight,
-            centralPixelWeight = centralPixelWeight,
-            p = floatArrayOf(shadows, shadows, shadows, 1.0f),
-            signalScale = floatArrayOf(
-                scale,
-                scale,
-                scale,
-                1.0f
-            ),
-            aa = floatArrayOf(a * compensateP, a * compensateP, a * compensateP, 1.0f),
-            bb = floatArrayOf(b, b, b, 1.0f),
-            bias = bias,
-            scale = scale
-        )
-    }
-
-    private fun dispatchBitmapDenoisePreconditionV2(input: Int, output: Int, width: Int, height: Int, params: BitmapDenoiseParams) {
-        GLES31.glUseProgram(bitmapDenoisePreconditionProgram)
-        bindComputeSampler(bitmapDenoisePreconditionProgram, "uInput", 0, input)
-        GLES31.glBindImageTexture(1, output, 0, false, 0, GLES31.GL_WRITE_ONLY, GLES31.GL_RGBA16F)
-        setBitmapDenoiseCommonUniforms(bitmapDenoisePreconditionProgram, width, height, params)
-        dispatchBitmapDenoiseImage(width, height, "BitmapDenoise NLM precondition")
-    }
-
-    private fun dispatchBitmapDenoiseNlm(
-        originalTextureId: Int,
-        preconditionedTextureId: Int,
-        outputTextureId: Int,
-        width: Int,
-        height: Int,
-        params: BitmapDenoiseParams
-    ) {
-        dispatchBitmapDenoiseNlmInit(width, height)
-
-        for (offset in DenoiseProfileNlmConfig.searchOffsets) {
-            dispatchBitmapDenoiseNlmFusedAccumulate(
-                preconditionedTextureId,
-                width,
-                height,
-                offset.x,
-                offset.y,
-                params
-            )
-        }
-
-        dispatchBitmapDenoiseNlmFinish(originalTextureId, outputTextureId, width, height, params)
-    }
-
-    private fun dispatchBitmapDenoiseNlmInit(width: Int, height: Int) {
-        GLES31.glUseProgram(bitmapDenoiseNlmInitProgram)
-        GLES31.glBindBufferBase(GLES31.GL_SHADER_STORAGE_BUFFER, 0, bitmapDenoiseNlmU2BufferId)
-        GLES31.glUniform2i(GLES31.glGetUniformLocation(bitmapDenoiseNlmInitProgram, "uImageSize"), width, height)
-        setBitmapDenoiseStripeUniforms(bitmapDenoiseNlmInitProgram, height)
-        dispatchBitmapDenoiseImage(width, height, "BitmapDenoise NLM init")
-        GLES31.glMemoryBarrier(GLES31.GL_SHADER_STORAGE_BARRIER_BIT)
-    }
-
-    private fun dispatchBitmapDenoiseNlmFusedAccumulate(
-        input: Int,
-        width: Int,
-        height: Int,
-        qx: Int,
-        qy: Int,
-        params: BitmapDenoiseParams
-    ) {
-        GLES31.glUseProgram(bitmapDenoiseNlmFusedAccuProgram)
-        bindComputeSampler(bitmapDenoiseNlmFusedAccuProgram, "uInput", 0, input)
-        GLES31.glBindBufferBase(GLES31.GL_SHADER_STORAGE_BUFFER, 0, bitmapDenoiseNlmU2BufferId)
-        GLES31.glUniform2i(GLES31.glGetUniformLocation(bitmapDenoiseNlmFusedAccuProgram, "uImageSize"), width, height)
-        setBitmapDenoiseStripeUniforms(bitmapDenoiseNlmFusedAccuProgram, height)
-        GLES31.glUniform2i(GLES31.glGetUniformLocation(bitmapDenoiseNlmFusedAccuProgram, "uQ"), qx, qy)
-        GLES31.glUniform1f(
-            GLES31.glGetUniformLocation(bitmapDenoiseNlmFusedAccuProgram, "uExpectedFineDistance"),
-            params.expectedFineDistance
-        )
-        GLES31.glUniform1f(
-            GLES31.glGetUniformLocation(bitmapDenoiseNlmFusedAccuProgram, "uExpectedGuideDistance"),
-            params.expectedGuideDistance
-        )
-        GLES31.glUniform1f(
-            GLES31.glGetUniformLocation(bitmapDenoiseNlmFusedAccuProgram, "uInverseBandwidth"),
-            params.inverseBandwidth
-        )
-        GLES31.glUniform1f(
-            GLES31.glGetUniformLocation(bitmapDenoiseNlmFusedAccuProgram, "uCoarseGuideWeight"),
-            params.coarseGuideWeight
-        )
-        GLES31.glUniform1f(
-            GLES31.glGetUniformLocation(bitmapDenoiseNlmFusedAccuProgram, "uCentralPixelWeight"),
-            params.centralPixelWeight
-        )
-        dispatchBitmapDenoiseImage(width, height, "BitmapDenoise NLM fused accu q=($qx,$qy)")
-        GLES31.glMemoryBarrier(GLES31.GL_SHADER_STORAGE_BARRIER_BIT)
-    }
-
-    private fun dispatchBitmapDenoiseNlmFinish(input: Int, output: Int, width: Int, height: Int, params: BitmapDenoiseParams) {
-        GLES31.glUseProgram(bitmapDenoiseNlmFinishProgram)
-        bindComputeSampler(bitmapDenoiseNlmFinishProgram, "uInput", 0, input)
-        GLES31.glBindBufferBase(GLES31.GL_SHADER_STORAGE_BUFFER, 0, bitmapDenoiseNlmU2BufferId)
-        GLES31.glBindImageTexture(1, output, 0, false, 0, GLES31.GL_WRITE_ONLY, GLES31.GL_RGBA16F)
-        setBitmapDenoiseCommonUniforms(bitmapDenoiseNlmFinishProgram, width, height, params)
-        setBitmapDenoiseStripeUniforms(bitmapDenoiseNlmFinishProgram, height)
-        GLES31.glUniform1f(GLES31.glGetUniformLocation(bitmapDenoiseNlmFinishProgram, "uBias"), params.bias - 0.5f * ln(params.scale))
-        GLES31.glUniform1f(
-            GLES31.glGetUniformLocation(bitmapDenoiseNlmFinishProgram, "uDenoiseMix"),
-            params.strength
-        )
-        dispatchBitmapDenoiseImage(width, height, "BitmapDenoise NLM finish")
-    }
-
-    private fun setBitmapDenoiseStripeUniforms(program: Int, height: Int) {
-        GLES31.glUniform1i(GLES31.glGetUniformLocation(program, "uStripeRowOffset"), 0)
-        GLES31.glUniform1i(GLES31.glGetUniformLocation(program, "uStripeRowCount"), height)
-    }
-
-    private fun setBitmapDenoiseCommonUniforms(program: Int, width: Int, height: Int, params: BitmapDenoiseParams) {
-        GLES31.glUniform2i(GLES31.glGetUniformLocation(program, "uImageSize"), width, height)
-        GLES31.glUniform4fv(GLES31.glGetUniformLocation(program, "uA"), 1, params.aa, 0)
-        GLES31.glUniform4fv(GLES31.glGetUniformLocation(program, "uP"), 1, params.p, 0)
-        GLES31.glUniform4fv(GLES31.glGetUniformLocation(program, "uB"), 1, params.bb, 0)
-        GLES31.glUniform4fv(
-            GLES31.glGetUniformLocation(program, "uSignalScale"),
-            1,
-            params.signalScale,
-            0
-        )
-    }
-
-    private fun bindComputeSampler(program: Int, name: String, unit: Int, textureId: Int) {
-        GLES31.glActiveTexture(GLES31.GL_TEXTURE0 + unit)
-        GLES31.glBindTexture(GLES31.GL_TEXTURE_2D, textureId)
-        GLES31.glUniform1i(GLES31.glGetUniformLocation(program, name), unit)
-    }
-
-    private fun dispatchBitmapDenoiseImage(width: Int, height: Int, tag: String) {
-        GLES31.glDispatchCompute(
-            GlesComputeWorkGroup.imageGroupCount(width),
-            GlesComputeWorkGroup.imageGroupCount(height),
-            1,
-        )
-        GLES31.glMemoryBarrier(
-            GLES31.GL_SHADER_IMAGE_ACCESS_BARRIER_BIT or
-                GLES31.GL_TEXTURE_FETCH_BARRIER_BIT or
-                GLES31.GL_FRAMEBUFFER_BARRIER_BIT
-        )
-        checkGlError(tag)
     }
 
     /**
@@ -2638,13 +2246,9 @@ class LutImageProcessor(context: Context? = null) {
         }
         releaseReadbackBuffer()
 
-        if (bitmapDenoisePreconditionProgram != 0) GLES31.glDeleteProgram(bitmapDenoisePreconditionProgram)
-        if (bitmapDenoiseNlmInitProgram != 0) GLES31.glDeleteProgram(bitmapDenoiseNlmInitProgram)
-        if (bitmapDenoiseNlmFusedAccuProgram != 0) GLES31.glDeleteProgram(bitmapDenoiseNlmFusedAccuProgram)
-        if (bitmapDenoiseNlmFinishProgram != 0) GLES31.glDeleteProgram(bitmapDenoiseNlmFinishProgram)
+        if (bitmapSrgbTransferProgram != 0) GLES30.glDeleteProgram(bitmapSrgbTransferProgram)
         if (bitmapDenoisePassthroughProgram != 0) GLES30.glDeleteProgram(bitmapDenoisePassthroughProgram)
-        if (bitmapChromaDenoiseGuideProgram != 0) GLES30.glDeleteProgram(bitmapChromaDenoiseGuideProgram)
-        if (bitmapChromaDenoiseProgram != 0) GLES30.glDeleteProgram(bitmapChromaDenoiseProgram)
+        bitmapPhotonDenoiser.release()
         if (lutSharpenProgram != 0) {
             GLES30.glDeleteProgram(lutSharpenProgram)
             lutSharpenProgram = 0
@@ -2658,11 +2262,6 @@ class LutImageProcessor(context: Context? = null) {
             if (bitmapDenoiseFboId[i] != 0) GLES30.glDeleteFramebuffers(1, intArrayOf(bitmapDenoiseFboId[i]), 0)
         }
         releaseLutSharpenFramebuffer()
-        if (bitmapDenoiseNlmU2BufferId != 0) {
-            GLES31.glDeleteBuffers(1, intArrayOf(bitmapDenoiseNlmU2BufferId), 0)
-            bitmapDenoiseNlmU2BufferId = 0
-        }
-        bitmapDenoiseNlmBufferPixels = 0
 
         // 释放 HDF 资源
         if (hdfExtractBlurHProgram != 0) GLES30.glDeleteProgram(hdfExtractBlurHProgram)
@@ -2729,6 +2328,32 @@ class LutImageProcessor(context: Context? = null) {
 
             void main() {
                 fragColor = texture(uInputTexture, vTexCoord);
+            }
+        """.trimIndent()
+
+        /** sRGB transfer curve, decode (uEncode = 0) or encode, on RGB; alpha passes through. */
+        private val SRGB_TRANSFER_SHADER = """
+            #version 300 es
+            precision highp float;
+
+            in vec2 vTexCoord;
+            out vec4 fragColor;
+
+            uniform highp sampler2D uInputTexture;
+            uniform int uEncode;
+
+            vec3 decode(vec3 v) {
+                return mix(v / 12.92, pow((v + 0.055) / 1.055, vec3(2.4)), step(vec3(0.04045), v));
+            }
+
+            vec3 encode(vec3 v) {
+                v = max(v, vec3(0.0));
+                return mix(v * 12.92, 1.055 * pow(v, vec3(1.0 / 2.4)) - 0.055, step(vec3(0.0031308), v));
+            }
+
+            void main() {
+                vec4 c = texture(uInputTexture, vTexCoord);
+                fragColor = vec4(uEncode == 1 ? encode(c.rgb) : decode(max(c.rgb, vec3(0.0))), c.a);
             }
         """.trimIndent()
 

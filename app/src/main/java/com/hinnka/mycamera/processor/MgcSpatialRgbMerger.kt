@@ -72,14 +72,6 @@ internal object MgcSpatialRgbMerger {
         outputPlanarF16.limit(outputPlanarF16.capacity())
     }
 
-    /** Reuses the uploaded planar F16 allocation as the Spatial-noise AOT's planar Q14 input. */
-    fun convertPlanarF16ToFixed16(buffer: ByteBuffer, sampleCount: Int) {
-        val result = nativeConvertPlanarF16ToFixed16(buffer, sampleCount)
-        check(result == 0) { "MGC planar F16-to-Q14 conversion failed with status=$result" }
-        buffer.position(0)
-        buffer.limit(buffer.capacity())
-    }
-
     private external fun nativeMerge(
         rawBuffers: Array<ByteBuffer>,
         rawOffsets: IntArray,
@@ -106,10 +98,5 @@ internal object MgcSpatialRgbMerger {
         outputStorageHeight: Int,
         cfaPattern: Int,
         outputPlanarF16: ByteBuffer,
-    ): Int
-
-    private external fun nativeConvertPlanarF16ToFixed16(
-        buffer: ByteBuffer,
-        sampleCount: Int,
     ): Int
 }

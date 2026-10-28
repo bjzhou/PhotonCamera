@@ -32,7 +32,7 @@ internal class MgcGuidedUpsample(private val transfer: RawFloatTextureTransfer) 
         try {
             transfer.read(texture, width, height, capacityPixels, label = "guidedPrepare") { rgba ->
                 handle = nativePrepare(rgba, width, height, resolution.log2Downsample,
-                    MgcFullResolutionDenoise.normalizedRgbWhiteBalance(gains))
+                    normalizedRgbWhiteBalance(gains))
                 check(handle != 0L) { "MGC linear guide/BoxDownsample preparation failed" }
             }
             cameraTexture = createTexture()
@@ -139,4 +139,25 @@ internal class MgcGuidedUpsample(private val transfer: RawFloatTextureTransfer) 
             }
         """.trimIndent()
     }
+}
+
+/**
+ * The guide's linear YUV boundary applies channel gains normalized to the green mean; the
+ * native bridge removes them again after YUV -> RGB.
+ */
+private fun normalizedRgbWhiteBalance(gains: FloatArray): FloatArray {
+    fun safeGain(index: Int, fallback: Float): Float {
+        val value = gains.getOrElse(index) { fallback }
+        return value.takeIf { it.isFinite() && it > 0f } ?: fallback
+    }
+    val greenEven = safeGain(1, 1f)
+    val greenOdd = safeGain(2, greenEven)
+    val green = (0.5f * (greenEven + greenOdd))
+        .takeIf { it.isFinite() && it > 0f }
+        ?: 1f
+    return floatArrayOf(
+        (safeGain(0, green) / green).coerceIn(1e-3f, 64f),
+        1f,
+        (safeGain(3, green) / green).coerceIn(1e-3f, 64f),
+    )
 }

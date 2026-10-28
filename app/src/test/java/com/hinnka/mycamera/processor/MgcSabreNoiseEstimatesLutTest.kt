@@ -99,13 +99,4 @@ class MgcSabreNoiseEstimatesLutTest {
         assertTrue(shader.contains(sqrtTransform))
         assertTrue(shader.indexOf(sqrtTransform) < shader.indexOf(greenTensorInput))
     }
-
-    @Test
-    fun diagnosticMergeFactorUsesActualGreenRbfWeightsInQ8Domain() {
-        val shader = GlesMgcRawSabreShaders.reciprocalGreenWeight4x4
-
-        assertTrue(shader.contains("texelFetch(uAccumulatedWeightsGb, p, 0).r"))
-        assertTrue(shader.contains("floor(weight * 256.0 + 0.5)"))
-        assertTrue(shader.contains("reciprocalSum += 256.0 / weightQ8"))
-    }
 }

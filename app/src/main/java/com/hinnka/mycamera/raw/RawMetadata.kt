@@ -150,6 +150,18 @@ data class RawMetadata(
     val lensShadingMapGrid: FloatArray? = null,
 
     /**
+     * 已乘入像素的 LSC 增益（合成时施加），降噪入口除去、出口乘回。
+     * 与待施加的 [lensShadingMap] 相互独立，见 docs/photon-multiscale-denoise.md §3.2。
+     */
+    val appliedLensShading: RawAppliedLensShading? = null,
+
+    /**
+     * 合成方差比与已降噪的残余比，见 docs/photon-multiscale-denoise.md §2.2、§2.4。
+     * null 表示未合成、未降噪的单帧。
+     */
+    val denoiseHistory: RawDenoiseHistory? = null,
+
+    /**
      * 数字增益 (Post RAW Boost)
      */
     val postRawSensitivityBoost: Float = 1.0f,
@@ -181,19 +193,6 @@ data class RawMetadata(
     val sensorPixelArrayWidth: Int = 0,
     val sensorPixelArrayHeight: Int = 0,
     val frameCount: Int = 1,
-    /**
-     * MGC's normalized 128-bin power-correlation spectrum after the selected MGC merge branch.
-     * Null means either a single uncorrelated source or an unsupported propagated model.
-     */
-    val mgcDenoiseCorrelation: FloatArray? = null,
-    /** Process-local normalized camera-RGB read variance emitted by the selected MGC merge branch. */
-    val mgcDenoiseReadNoise: FloatArray? = null,
-    /** Process-local normalized camera-RGB shot coefficient emitted by the selected MGC merge branch. */
-    val mgcDenoiseShotNoise: FloatArray? = null,
-    /** Exact process-local Q8 Spatial variance multiplier; never serialized into DNG. */
-    val mgcSpatialStrengthMap: MgcSpatialStrengthMap? = null,
-    /** Merged output-frame SNR used by MGC FinishRaw to select luma/chroma tuning. */
-    val mgcDenoiseTuningSnr: Float? = null,
     /** Reference-frame SNR for original MGC sharpen curve selection; not the merged SNR. */
     val mgcSharpenTuningSnr: Float? = null,
     /** MGC-derived attenuation applied to the final sharpen kernel. */
@@ -1171,6 +1170,8 @@ data class RawMetadata(
         } else if (other.camera2ColorCorrectionTransform != null) return false
         if (camera2ColorCorrectionMode != other.camera2ColorCorrectionMode) return false
         if (!cameraWhite.contentEquals(other.cameraWhite)) return false
+        if (appliedLensShading != other.appliedLensShading) return false
+        if (denoiseHistory != other.denoiseHistory) return false
         if (baselineExposure != other.baselineExposure) return false
         if (shadowScale != other.shadowScale) return false
         if (iso != other.iso) return false
@@ -1180,20 +1181,6 @@ data class RawMetadata(
         if (frameCount != other.frameCount) return false
         if (!channelNoiseProfile.contentEquals(other.channelNoiseProfile)) return false
         if (noiseProfileLayout != other.noiseProfileLayout) return false
-        if (mgcDenoiseCorrelation != null) {
-            if (other.mgcDenoiseCorrelation == null) return false
-            if (!mgcDenoiseCorrelation.contentEquals(other.mgcDenoiseCorrelation)) return false
-        } else if (other.mgcDenoiseCorrelation != null) return false
-        if (mgcDenoiseReadNoise != null) {
-            if (other.mgcDenoiseReadNoise == null) return false
-            if (!mgcDenoiseReadNoise.contentEquals(other.mgcDenoiseReadNoise)) return false
-        } else if (other.mgcDenoiseReadNoise != null) return false
-        if (mgcDenoiseShotNoise != null) {
-            if (other.mgcDenoiseShotNoise == null) return false
-            if (!mgcDenoiseShotNoise.contentEquals(other.mgcDenoiseShotNoise)) return false
-        } else if (other.mgcDenoiseShotNoise != null) return false
-        if (mgcSpatialStrengthMap != other.mgcSpatialStrengthMap) return false
-        if (mgcDenoiseTuningSnr != other.mgcDenoiseTuningSnr) return false
         if (mgcSharpenTuningSnr != other.mgcSharpenTuningSnr) return false
         if (mgcSharpenAttenuationScale != other.mgcSharpenAttenuationScale) return false
         if (rawMaxQualityTuningEnabled != other.rawMaxQualityTuningEnabled) return false
@@ -1219,6 +1206,8 @@ data class RawMetadata(
         result = 31 * result + lensShadingMapWidth
         result = 31 * result + lensShadingMapHeight
         result = 31 * result + (lensShadingMapGrid?.contentHashCode() ?: 0)
+        result = 31 * result + (appliedLensShading?.hashCode() ?: 0)
+        result = 31 * result + (denoiseHistory?.hashCode() ?: 0)
         result = 31 * result + postRawSensitivityBoost.hashCode()
         result = 31 * result + baselineExposure.hashCode()
         result = 31 * result + shadowScale.hashCode()
@@ -1229,11 +1218,6 @@ data class RawMetadata(
         result = 31 * result + frameCount
         result = 31 * result + channelNoiseProfile.contentHashCode()
         result = 31 * result + noiseProfileLayout.hashCode()
-        result = 31 * result + (mgcDenoiseCorrelation?.contentHashCode() ?: 0)
-        result = 31 * result + (mgcDenoiseReadNoise?.contentHashCode() ?: 0)
-        result = 31 * result + (mgcDenoiseShotNoise?.contentHashCode() ?: 0)
-        result = 31 * result + (mgcSpatialStrengthMap?.hashCode() ?: 0)
-        result = 31 * result + (mgcDenoiseTuningSnr?.hashCode() ?: 0)
         result = 31 * result + (mgcSharpenTuningSnr?.hashCode() ?: 0)
         result = 31 * result + (mgcSharpenAttenuationScale?.hashCode() ?: 0)
         result = 31 * result + rawMaxQualityTuningEnabled.hashCode()

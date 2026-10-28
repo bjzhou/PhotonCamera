@@ -31,6 +31,8 @@ import com.hinnka.mycamera.raw.RawDigitalZoomResampling
 import com.hinnka.mycamera.raw.RawDemosaicProcessor
 import com.hinnka.mycamera.raw.RawHdrRenderResult
 import com.hinnka.mycamera.raw.RawMetadata
+import com.hinnka.mycamera.raw.RawAppliedLensShadingMetadata
+import com.hinnka.mycamera.raw.RawDenoiseHistoryMetadata
 import com.hinnka.mycamera.raw.RawPhotonHdrMetadata
 import com.hinnka.mycamera.raw.RawNoiseProfileManager
 import com.hinnka.mycamera.raw.SpectralFilmTuning
@@ -586,6 +588,8 @@ class PhotoProcessor(
             rawBlackPointCorrection = metadata.rawBlackPointCorrection ?: 0f,
             rawWhitePointCorrection = metadata.rawWhitePointCorrection ?: 0f,
             applyLensShadingCorrection = resolveRawLensShadingCorrectionEnabled(metadata),
+            appliedLensShading = RawAppliedLensShadingMetadata.read(metadata.customProperties),
+            denoiseHistory = RawDenoiseHistoryMetadata.read(metadata.customProperties),
             rawBlackLevelMode = metadata.rawBlackLevelMode,
             rawCustomBlackLevel = metadata.rawCustomBlackLevel,
             rawWhiteLevelMode = metadata.rawWhiteLevelMode,
@@ -674,6 +678,8 @@ class PhotoProcessor(
             rawBlackPointCorrection = metadata.rawBlackPointCorrection ?: 0f,
             rawWhitePointCorrection = metadata.rawWhitePointCorrection ?: 0f,
             applyLensShadingCorrection = resolveRawLensShadingCorrectionEnabled(metadata),
+            appliedLensShading = RawAppliedLensShadingMetadata.read(metadata.customProperties),
+            denoiseHistory = RawDenoiseHistoryMetadata.read(metadata.customProperties),
             rawBlackLevelMode = metadata.rawBlackLevelMode,
             rawCustomBlackLevel = metadata.rawCustomBlackLevel,
             rawWhiteLevelMode = metadata.rawWhiteLevelMode,

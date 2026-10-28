@@ -103,35 +103,6 @@ bool CheckedProduct(std::initializer_list<int64_t> factors, int64_t* result) {
     return true;
 }
 
-float HalfToFloat(uint16_t value) {
-    const uint32_t sign = static_cast<uint32_t>(value & 0x8000u) << 16u;
-    uint32_t exponent = (value >> 10u) & 0x1fu;
-    uint32_t mantissa = value & 0x03ffu;
-    uint32_t encoded = 0;
-    if (exponent == 0) {
-        if (mantissa == 0) {
-            encoded = sign;
-        } else {
-            int shift = 0;
-            while ((mantissa & 0x0400u) == 0) {
-                mantissa <<= 1u;
-                ++shift;
-            }
-            mantissa &= 0x03ffu;
-            encoded = sign |
-                (static_cast<uint32_t>(127 - 14 - shift) << 23u) |
-                (mantissa << 13u);
-        }
-    } else if (exponent == 0x1fu) {
-        encoded = sign | 0x7f800000u | (mantissa << 13u);
-    } else {
-        encoded = sign | ((exponent + 127u - 15u) << 23u) | (mantissa << 13u);
-    }
-    float result = 0.0f;
-    std::memcpy(&result, &encoded, sizeof(result));
-    return result;
-}
-
 }  // namespace
 
 // Exact generated ABI at MGC 9.7.047 V25 libgcastartup.so+0x371990c.
@@ -401,27 +372,6 @@ Java_com_hinnka_mycamera_processor_MgcSpatialRgbMerger_nativeMerge(
             frame_count,
             cfa_pattern);
         return result;
-    }
-    return 0;
-}
-
-extern "C" JNIEXPORT jint JNICALL
-Java_com_hinnka_mycamera_processor_MgcSpatialRgbMerger_nativeConvertPlanarF16ToFixed16(
-    JNIEnv* env,
-    jobject,
-    jobject buffer,
-    jint sample_count) {
-    if (buffer == nullptr || sample_count <= 0) return -1;
-    auto* samples = static_cast<uint16_t*>(env->GetDirectBufferAddress(buffer));
-    const int64_t required_bytes =
-        static_cast<int64_t>(sample_count) * static_cast<int64_t>(sizeof(uint16_t));
-    if (samples == nullptr || env->GetDirectBufferCapacity(buffer) < required_bytes) return -1;
-    auto* fixed16 = reinterpret_cast<int16_t*>(samples);
-    for (int index = 0; index < sample_count; ++index) {
-        const float sample = HalfToFloat(samples[index]);
-        const float finite_sample = std::isfinite(sample) ? sample : 0.0f;
-        fixed16[index] = static_cast<int16_t>(std::lrintf(
-            std::clamp(finite_sample, 0.0f, 32767.0f)));
     }
     return 0;
 }

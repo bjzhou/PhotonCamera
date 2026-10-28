@@ -226,22 +226,29 @@ internal data class CaptureDenoiseStrengths(
     val bakedChroma: Float?,
 )
 
+/**
+ * RAW captures take the RAWmax luma / chroma strengths from the settings. A merge bakes them into
+ * its default denoise before the DNG is written, so its editable strengths start at 0; a single
+ * frame has no default denoise, so the same strengths become its editable initial values and the
+ * user-adjustment denoise applies them (docs/photon-multiscale-denoise.md §10.3).
+ */
 internal fun resolveCaptureDenoiseStrengths(
     isRawCapture: Boolean,
+    isMergedCapture: Boolean,
     userPrefs: UserPreferences?,
-): CaptureDenoiseStrengths = when {
-    !isRawCapture -> CaptureDenoiseStrengths(0f, 0f, null, null)
-    else -> CaptureDenoiseStrengths(
-        editableLuma = 0f,
-        editableChroma = 0f,
-        bakedLuma = RawDenoiseDefaults.normalize(
-            userPrefs?.rawMaxNoiseReduction ?: RawDenoiseDefaults.RAW_MAX_LUMA_STRENGTH
-        ),
-        bakedChroma = RawDenoiseDefaults.normalize(
-            userPrefs?.rawMaxChromaNoiseReduction
-                ?: RawDenoiseDefaults.RAW_MAX_CHROMA_STRENGTH
-        ),
+): CaptureDenoiseStrengths {
+    if (!isRawCapture) return CaptureDenoiseStrengths(0f, 0f, null, null)
+    val luma = RawDenoiseDefaults.normalize(
+        userPrefs?.rawMaxNoiseReduction ?: RawDenoiseDefaults.RAW_MAX_LUMA_STRENGTH
     )
+    val chroma = RawDenoiseDefaults.normalize(
+        userPrefs?.rawMaxChromaNoiseReduction ?: RawDenoiseDefaults.RAW_MAX_CHROMA_STRENGTH
+    )
+    return if (isMergedCapture) {
+        CaptureDenoiseStrengths(editableLuma = 0f, editableChroma = 0f, bakedLuma = luma, bakedChroma = chroma)
+    } else {
+        CaptureDenoiseStrengths(editableLuma = luma, editableChroma = chroma, bakedLuma = null, bakedChroma = null)
+    }
 }
 
 private fun ColorRecipeParams.withoutIndependentEffects(): ColorRecipeParams {
@@ -6044,6 +6051,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             )
             val denoiseStrengths = resolveCaptureDenoiseStrengths(
                 isRawCapture = isRawCapture,
+                isMergedCapture = false,
                 userPrefs = userPrefs,
             )
             val noiseReductionValue = denoiseStrengths.editableLuma
@@ -6450,6 +6458,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             )
             val denoiseStrengths = resolveCaptureDenoiseStrengths(
                 isRawCapture = isRawStack,
+                isMergedCapture = true,
                 userPrefs = userPrefs,
             )
             val noiseReductionValue = denoiseStrengths.editableLuma
@@ -6811,6 +6820,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         )
         val denoiseStrengths = resolveCaptureDenoiseStrengths(
             isRawCapture = isRawCapture,
+            isMergedCapture = true,
             userPrefs = userPrefs,
         )
         val noiseReductionValue = denoiseStrengths.editableLuma

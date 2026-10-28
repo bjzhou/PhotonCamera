@@ -77,4 +77,26 @@ inline bool GuidedFloatRgbaToLinearYuv(const float *rgba, int width, int height,
   return invalid == 0;
 }
 
+// White-box YuvToRgbS16 (MGC 9.6.080 V24, photon_mgc_yuv_to_rgb_s16): the AOT's
+// entry fixes four Q-format coefficients and its vector body computes, per pixel,
+//   R = Y + rshr(V * 25802, 15)
+//   G = Y + rshr(V * -15340 + U * -8658, 16)
+//   B = Y + rshr(U * 21442, 14)
+// with rshr the signed rounding shift (ties toward +infinity) on the int32 product
+// and a saturating narrow to int16. It inverts the matrix above. Verified bit-exact
+// against the AOT body under emulation on edge grids and full-range random planes.
+inline void GuidedLinearYuvToRgb(const int16_t *yuv, size_t count, int16_t *rgb) {
+  const int16_t *y_plane = yuv, *u_plane = yuv + count, *v_plane = yuv + count * 2;
+  const auto saturate = [](int32_t v) {
+    return int16_t(std::clamp<int32_t>(v, INT16_MIN, INT16_MAX));
+  };
+#pragma omp parallel for schedule(static) num_threads(4)
+  for (size_t i = 0; i < count; ++i) {
+    const int32_t y = y_plane[i], u = u_plane[i], v = v_plane[i];
+    rgb[i] = saturate(y + ((v * 25802 + (1 << 14)) >> 15));
+    rgb[count + i] = saturate(y + ((v * -15340 + u * -8658 + (1 << 15)) >> 16));
+    rgb[count * 2 + i] = saturate(y + ((u * 21442 + (1 << 13)) >> 14));
+  }
+}
+
 } // namespace photon::mgc_denoise

@@ -9,7 +9,7 @@ import com.hinnka.mycamera.camera.AspectRatio
 import com.hinnka.mycamera.camera.MultiFrameConfig
 import com.hinnka.mycamera.model.SafeImage
 import com.hinnka.mycamera.raw.DngProfileGainTableMap
-import com.hinnka.mycamera.raw.MgcSpatialStrengthMap
+import com.hinnka.mycamera.raw.RawDenoiseHistory
 import com.hinnka.mycamera.raw.RawProfileToneMapMode
 import com.hinnka.mycamera.raw.RawSceneAERawStats
 import com.hinnka.mycamera.utils.BitmapUtils
@@ -108,29 +108,10 @@ data class RawStackResult(
     val lensShadingCorrectionApplied: Boolean = false,
     val mergedFrameCount: Int = 1,
     /**
-     * MGC's normalized 128-bin merged NoiseModel correlation spectrum.
-     *
-     * Null means the merged model is unavailable; a requested default merge-denoise pass must fail.
+     * Merge variance ratios of the output relative to the reference frame's noise profile
+     * (docs/photon-multiscale-denoise.md §2.2); null when the merge did not report them.
      */
-    val mgcDenoiseCorrelation: FloatArray? = null,
-    /**
-     * Normalized camera-RGB read variance emitted by the selected MGC merge branch.
-     */
-    val mgcDenoiseReadNoise: FloatArray? = null,
-    /**
-     * Normalized camera-RGB shot coefficient emitted by the selected MGC merge branch.
-     */
-    val mgcDenoiseShotNoise: FloatArray? = null,
-    /**
-     * Exact process-local Q8 variance multiplier emitted by MGC Spatial and consumed before
-     * DNG write.
-     */
-    val mgcSpatialStrengthMap: MgcSpatialStrengthMap? = null,
-    /**
-     * Merged output-frame SNR used by MGC FinishRaw to select luma/chroma tuning.
-     * This is the linear signal-domain SNR, not ISO or sensor gain.
-     */
-    val mgcDenoiseTuningSnr: Float? = null,
+    val denoiseHistory: RawDenoiseHistory? = null,
     /** Reference-frame SNR for original MGC sharpen curve selection; not the merged SNR. */
     val mgcSharpenTuningSnr: Float? = null,
     /** MGC-derived attenuation applied to the final sharpen kernel. */

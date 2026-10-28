@@ -654,41 +654,6 @@ internal object GlesMgcRawSabreShaders {
         }
     """.trimIndent()
 
-    /**
-     * Reproduces the Q8 `SABRE: Average merge factor` diagnostic at V25 0x34e6964. The original
-     * computes the global mean of `256 / accumulated_green_weight_q8`. This is diagnostic only;
-     * classic Sabre builds its merged NoiseModel from the exposure-normalized frame models.
-     *
-     * Four-by-four reduction keeps the readback small without changing the global average.
-     */
-    val reciprocalGreenWeight4x4 = """
-        #version 300 es
-        precision highp float;
-        precision highp sampler2D;
-        precision highp int;
-        uniform sampler2D uAccumulatedWeightsGb;
-        uniform ivec2 uInputSize;
-        layout(location = 0) out vec2 oReciprocalSumAndCount;
-        void main() {
-            ivec2 base = ivec2(gl_FragCoord.xy) * 4;
-            float reciprocalSum = 0.0;
-            float sampleCount = 0.0;
-            for (int y = 0; y < 4; ++y) {
-                for (int x = 0; x < 4; ++x) {
-                    ivec2 p = base + ivec2(x, y);
-                    if (p.x >= uInputSize.x || p.y >= uInputSize.y) {
-                        continue;
-                    }
-                    float weight = texelFetch(uAccumulatedWeightsGb, p, 0).r;
-                    float weightQ8 = max(floor(weight * 256.0 + 0.5), 1.0);
-                    reciprocalSum += 256.0 / weightQ8;
-                    sampleCount += 1.0;
-                }
-            }
-            oReciprocalSumAndCount = vec2(reciprocalSum, sampleCount);
-        }
-    """.trimIndent()
-
     val dehomogenize = """
         #version 300 es
         precision highp float;
