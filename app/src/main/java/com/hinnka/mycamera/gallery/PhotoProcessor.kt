@@ -23,7 +23,6 @@ import com.hinnka.mycamera.hdr.SourceKind
 import com.hinnka.mycamera.lut.ColorCorrectionPipelineResolver
 import com.hinnka.mycamera.lut.LutImageProcessor
 import com.hinnka.mycamera.lut.LutManager
-import com.hinnka.mycamera.processor.PhotonSensorSizeTuning
 import com.hinnka.mycamera.processor.DepthBokehProcessor
 import com.hinnka.mycamera.processor.BokehStyle
 import com.hinnka.mycamera.raw.RawOutputScaling
@@ -595,10 +594,6 @@ class PhotoProcessor(
             rawWhiteLevelMode = metadata.rawWhiteLevelMode,
             rawCustomWhiteLevel = metadata.rawCustomWhiteLevel,
             sharpeningValue = rawSharpening,
-            processLocalQualityTuningEnabled =
-                PhotonSensorSizeTuning.enabledFromProperties(metadata.customProperties),
-            processLocalQualityTuningSensorAreaMm2 =
-                PhotonSensorSizeTuning.areaFromProperties(metadata.customProperties),
             denoiseValue = rawNoiseReduction,
             chromaDenoiseValue = rawChromaNoiseReduction,
             rawDcpId = metadata.rawDcpId,
@@ -685,10 +680,6 @@ class PhotoProcessor(
             rawWhiteLevelMode = metadata.rawWhiteLevelMode,
             rawCustomWhiteLevel = metadata.rawCustomWhiteLevel,
             sharpeningValue = finalSharpening,
-            processLocalQualityTuningEnabled =
-                PhotonSensorSizeTuning.enabledFromProperties(metadata.customProperties),
-            processLocalQualityTuningSensorAreaMm2 =
-                PhotonSensorSizeTuning.areaFromProperties(metadata.customProperties),
             denoiseValue = finalNoiseReduction,
             chromaDenoiseValue = finalChromaNoiseReduction,
             rawDcpId = metadata.rawDcpId,

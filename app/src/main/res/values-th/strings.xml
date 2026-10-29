@@ -930,8 +930,6 @@
     <string name="settings_auto_rotate">หมุนอัตโนมัติ</string>
     <string name="settings_auto_rotate_description">หมุนปุ่มควบคุมและภาพตัวอย่างบนหน้าจอตามทิศทางของอุปกรณ์</string>
     <string name="recipe_palette_tone">โทนแสง</string>
-    <string name="settings_raw_max_quality_tuning">ปรับคุณภาพภาพ HDR+</string>
-    <string name="settings_raw_max_quality_tuning_description">ปรับการประเมินสัญญาณรบกวนในการรวมภาพและการลดสัญญาณรบกวนตามขนาดจริงของเซ็นเซอร์ เมื่อปิดจะใช้พารามิเตอร์ภาพเริ่มต้น</string>
     <string name="settings_raw_output_upscale_mode">ซูเปอร์เรโซลูชัน</string>
     <string name="settings_raw_output_upscale_mode_description">เลือกอัลกอริทึมซูเปอร์เรโซลูชันสำหรับโหมดโปรเฟสชันนัล RAISR และการขยายด้วย Lanczos-3 ใช้พร้อมกันไม่ได้</string>
     <string name="settings_raw_output_upscale_mode_lanczos">Lanczos-3</string>

@@ -29,7 +29,6 @@ import com.hinnka.mycamera.raw.denoise.PhotonLensShading
 import com.hinnka.mycamera.raw.denoise.PhotonMultiScaleDenoiser
 import com.hinnka.mycamera.raw.denoise.PhotonNoiseModel
 import com.hinnka.mycamera.ml.SharedDepthEstimator
-import com.hinnka.mycamera.processor.PhotonQualitySharpenTuning
 import com.hinnka.mycamera.processor.GlesGpuCompletion
 import com.hinnka.mycamera.processor.GlesGpuScheduler
 import com.hinnka.mycamera.processor.GlesComputeWorkGroup
@@ -233,8 +232,6 @@ class RawDemosaicProcessor {
             frameCount = baseMetadata?.frameCount ?: 1,
             mgcSharpenTuningSnr = baseMetadata?.mgcSharpenTuningSnr,
             mgcSharpenAttenuationScale = baseMetadata?.mgcSharpenAttenuationScale,
-            rawMaxQualityTuningEnabled = baseMetadata?.rawMaxQualityTuningEnabled ?: false,
-            rawMaxQualityTuningSensorAreaMm2 = baseMetadata?.rawMaxQualityTuningSensorAreaMm2,
             rotation = dngRawData.rotation,
             profileGainTableMap = baseMetadata?.profileGainTableMap
         )
@@ -1644,8 +1641,6 @@ class RawDemosaicProcessor {
         rawWhiteLevelMode: String? = null,
         rawCustomWhiteLevel: Float? = null,
         sharpeningValue: Float = 0f,
-        processLocalQualityTuningEnabled: Boolean? = null,
-        processLocalQualityTuningSensorAreaMm2: Float? = null,
         denoiseValue: Float? = null,
         chromaDenoiseValue: Float? = null,
         rawDcpId: String? = null,
@@ -1699,8 +1694,6 @@ class RawDemosaicProcessor {
                 rawWhiteLevelMode = rawWhiteLevelMode,
                 rawCustomWhiteLevel = rawCustomWhiteLevel,
                 sharpeningValue = sharpeningValue,
-                processLocalQualityTuningEnabled = processLocalQualityTuningEnabled,
-                processLocalQualityTuningSensorAreaMm2 = processLocalQualityTuningSensorAreaMm2,
                 denoiseValue = denoiseValue,
                 chromaDenoiseValue = chromaDenoiseValue,
                 rawDcpId = rawDcpId,
@@ -1757,8 +1750,6 @@ class RawDemosaicProcessor {
         rawWhitePointCorrection: Float = 0f,
         applyLensShadingCorrection: Boolean = true,
         sharpeningValue: Float = 0f,
-        processLocalQualityTuningEnabled: Boolean? = null,
-        processLocalQualityTuningSensorAreaMm2: Float? = null,
         denoiseValue: Float? = null,
         chromaDenoiseValue: Float? = null,
         rawDcpId: String? = null,
@@ -1804,8 +1795,6 @@ class RawDemosaicProcessor {
                 rawWhitePointCorrection = rawWhitePointCorrection,
                 applyLensShadingCorrection = applyLensShadingCorrection,
                 sharpeningValue = sharpeningValue,
-                processLocalQualityTuningEnabled = processLocalQualityTuningEnabled,
-                processLocalQualityTuningSensorAreaMm2 = processLocalQualityTuningSensorAreaMm2,
                 denoiseValue = denoiseValue,
                 chromaDenoiseValue = chromaDenoiseValue,
                 rawDcpId = rawDcpId,
@@ -1911,8 +1900,6 @@ class RawDemosaicProcessor {
         rawWhiteLevelMode: String? = null,
         rawCustomWhiteLevel: Float? = null,
         sharpeningValue: Float = 0f,
-        processLocalQualityTuningEnabled: Boolean? = null,
-        processLocalQualityTuningSensorAreaMm2: Float? = null,
         processLocalMgcSharpenTuningSnr: Float? = null,
         processLocalMgcSharpenAttenuationScale: Float? = null,
         denoiseValue: Float? = null,
@@ -1968,8 +1955,6 @@ class RawDemosaicProcessor {
                 rawWhiteLevelMode = rawWhiteLevelMode,
                 rawCustomWhiteLevel = rawCustomWhiteLevel,
                 sharpeningValue = sharpeningValue,
-                processLocalQualityTuningEnabled = processLocalQualityTuningEnabled,
-                processLocalQualityTuningSensorAreaMm2 = processLocalQualityTuningSensorAreaMm2,
                 processLocalMgcSharpenTuningSnr = processLocalMgcSharpenTuningSnr,
                 processLocalMgcSharpenAttenuationScale = processLocalMgcSharpenAttenuationScale,
                 denoiseValue = denoiseValue,
@@ -2038,8 +2023,6 @@ class RawDemosaicProcessor {
         rawWhiteLevelMode: String? = null,
         rawCustomWhiteLevel: Float? = null,
         sharpeningValue: Float = 0f,
-        processLocalQualityTuningEnabled: Boolean? = null,
-        processLocalQualityTuningSensorAreaMm2: Float? = null,
         denoiseValue: Float? = null,
         chromaDenoiseValue: Float? = null,
         rawDcpId: String? = null,
@@ -2143,8 +2126,6 @@ class RawDemosaicProcessor {
                 rawWhiteLevelMode = rawWhiteLevelMode,
                 rawCustomWhiteLevel = rawCustomWhiteLevel,
                 sharpeningValue = sharpeningValue,
-                processLocalQualityTuningEnabled = processLocalQualityTuningEnabled,
-                processLocalQualityTuningSensorAreaMm2 = processLocalQualityTuningSensorAreaMm2,
                 denoiseValue = denoiseValue,
                 chromaDenoiseValue = chromaDenoiseValue,
                 rawDcpId = rawDcpId,
@@ -2209,8 +2190,6 @@ class RawDemosaicProcessor {
         rawWhiteLevelMode: String? = null,
         rawCustomWhiteLevel: Float? = null,
         sharpeningValue: Float = 0f,
-        processLocalQualityTuningEnabled: Boolean? = null,
-        processLocalQualityTuningSensorAreaMm2: Float? = null,
         processLocalMgcSharpenTuningSnr: Float? = null,
         processLocalMgcSharpenAttenuationScale: Float? = null,
         denoiseValue: Float? = null,
@@ -2477,14 +2456,6 @@ class RawDemosaicProcessor {
                 .rawNoiseProfileManager
                 .resolveSelection(rawNoiseProfileId, actualMetadata),
         )
-        actualMetadata = actualMetadata?.let {
-            it.copy(
-                rawMaxQualityTuningEnabled =
-                    processLocalQualityTuningEnabled ?: it.rawMaxQualityTuningEnabled,
-                rawMaxQualityTuningSensorAreaMm2 =
-                    processLocalQualityTuningSensorAreaMm2 ?: it.rawMaxQualityTuningSensorAreaMm2,
-            )
-        }
         // Gains already in the pixels are independent of the user's LSC preference, which only
         // governs the gain map still to be applied (docs/photon-multiscale-denoise.md §3.2).
         if (denoiseHistory != null) {
@@ -7779,7 +7750,6 @@ class RawDemosaicProcessor {
             height = metadata.height,
             snr = snr,
             attenuation = effectiveStrength,
-            tuning = PhotonQualitySharpenTuning.resolve(metadata.rawMaxQualityTuningEnabled),
         )
     }
 

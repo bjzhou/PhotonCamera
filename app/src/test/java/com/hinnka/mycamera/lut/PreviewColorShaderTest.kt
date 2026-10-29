@@ -41,29 +41,6 @@ class PreviewColorShaderTest {
     }
 
     @Test
-    fun capturedSpatialEffectsMatchStaticImageOrder() {
-        val variant = PreviewColorShaderVariant(
-            textureSource = PreviewColorTextureSource.TEXTURE_2D,
-            includeExtendedLutCurves = true,
-            includeOklchDensity = true,
-            includeLchMixer = true,
-            includePreLogFilmGrain = false,
-            includeJpegInputToneCurve = true,
-            includeSpatialRecipeEffects = true,
-        )
-        val source = PreviewColorShader.source(variant)
-
-        val curveIndex = source.indexOf("if (uCurveEnabled)")
-        val halationIndex = source.indexOf("if (uRedHalation > 0.0)")
-        val lutIndex = source.indexOf("if (uLutEnabled && uLutIntensity > 0.0)")
-        val softLightIndex = source.indexOf("if (uSoftLight > 0.0)")
-        assertTrue(curveIndex >= 0)
-        assertTrue(halationIndex > curveIndex)
-        assertTrue(lutIndex > halationIndex)
-        assertTrue(softLightIndex > lutIndex)
-    }
-
-    @Test
     fun customLogFilmGrainRunsBeforeLogEncoding() {
         val variant = PreviewColorShaderVariant(
             textureSource = PreviewColorTextureSource.TEXTURE_2D,

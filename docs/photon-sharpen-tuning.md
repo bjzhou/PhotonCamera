@@ -5,7 +5,7 @@
 经 JNI 传入原版 `GuidedUpsampleS16To16BitHalide`（无重建输入时为直接 `SharpenTo16BitHalide`）。
 不增加持久化读写或设置界面。
 
-关闭画质调优时默认值保持此前 MGC 通用锐化曲线的结果。开启时使用下述固定 AGC 参考配方。
+默认值保持此前 MGC 通用锐化曲线的结果。
 RAISR/Polysharp 和降噪参数不属于这张锐化表。
 
 用户输出倍率在 `RawOutputPass` 中执行：原生融合 → 原生降噪 → 低频颜色处理 →
@@ -28,12 +28,11 @@ LinearRaw DNG 保存原生分辨率；相册 `customProperties.rawDisplayOutputS
 RAW 黑边裁切始终以原生像素计。分块按整张输出图的网格采样，Lanczos 支持区额外保留
 3 个原生像素；HDR 采用相同的放大后 SDR 色彩和同坐标的平滑增益。
 
-## 画质调优的固定配方
+## AGC 固定配方（未接入运行期）
 
-入口：`PhotonQualitySharpenTuning.FIXED`，由拍摄时保存的画质调优标记选择。
+入口：`PhotonQualitySharpenTuning.FIXED`。「HDR+ 画质调优」移除后运行期不再选择它，仅作参考配方保留。
 来源：`AGC9.6v5_LMv1.1_多大底机型.agc` 的 p0「清晰🏡明亮」、镜头槽0。
 选取一个明确槽位供所有传感器统一使用，不平均各镜头数值，不根据面积改变参数。
-没有面积信息也可生效；SNR 适配和既有锐化滑杆/runtime attenuation 继续保留。
 
 | 固定项 | 数值 |
 | --- | --- |

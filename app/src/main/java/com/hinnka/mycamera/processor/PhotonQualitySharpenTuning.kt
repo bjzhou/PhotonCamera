@@ -1,6 +1,6 @@
 package com.hinnka.mycamera.processor
 
-/** Fixed quality-toggle preset, shared by every sensor and by capture/reprocessing. */
+/** Fixed Sabre sharpen preset, shared by every sensor. */
 object PhotonQualitySharpenTuning {
     /**
      * Sabre selector 0 is clamped to 1: first table, nodes 2/8/16.
@@ -24,9 +24,6 @@ object PhotonQualitySharpenTuning {
                 band2 = curve(.0002f, .9f * 1.125f)),
         ),
     )
-
-    fun resolve(enabled: Boolean): PhotonSharpenTuning =
-        if (enabled) FIXED else PhotonCoreImagingTuning.sharpen
 
     private fun curve(
         lowContrastInput: Float,

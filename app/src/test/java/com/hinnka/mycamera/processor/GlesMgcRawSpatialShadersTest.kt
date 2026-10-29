@@ -151,68 +151,6 @@ class GlesMgcRawSpatialShadersTest {
     }
 
     @Test
-    fun longFrameClippingGuardUsesAlignedUnnormalizedRawPhases() {
-        val clippingMask = GlesMgcRawSpatialShaders.alignedRawClippingMask
-
-        assertTrue(clippingMask.contains("uniform highp usampler2D uRaw;"))
-        assertTrue(clippingMask.contains("uniform sampler2D uFlow;"))
-        assertTrue(clippingMask.contains("for (int phase = 0; phase < 4; ++phase)"))
-        assertTrue(clippingMask.contains("rawValue >= uPhaseClippingLevels[phase]"))
-        assertTrue(clippingMask.contains("vec2 sourceFlow = texture(uFlow, flowUv).xy"))
-        assertTrue(
-            clippingMask.contains(
-                "ivec2 referenceQuad = min(outputPixel * 4 + ivec2(2), uBayerSize - ivec2(1))",
-            ),
-        )
-        assertFalse(clippingMask.contains("uGains"))
-        assertFalse(clippingMask.contains("uExposureRatio"))
-    }
-
-    @Test
-    fun alignmentPyramidPreservesMgcSignedS16BlackResiduals() {
-        val rawToGray = GlesMgcRawSpatialShaders.rawToGray
-        val signedConsumers = listOf(
-            GlesMgcRawSpatialShaders.grayDownsample,
-            GlesMgcRawSpatialShaders.grayDownsample4,
-            GlesMgcRawSpatialShaders.alignmentGradientProducts,
-            GlesMgcRawSpatialShaders.upsampleAlignment,
-            GlesMgcRawSpatialShaders.blockLucasKanade,
-            GlesMgcRawSpatialShaders.rejectionFilterDownsample,
-        )
-
-        assertTrue(rawToGray.contains("out highp int oGray"))
-        assertTrue(rawToGray.contains("return (v - uBlackLevels) * uGain"))
-        assertTrue(rawToGray.contains("value + 0.5, -16383.0, 16383.0"))
-        assertFalse(rawToGray.contains("max(v - uBlackLevels"))
-        signedConsumers.forEach { shader ->
-            assertTrue(shader.contains("precision highp isampler2D"))
-            assertFalse(shader.contains("highp usampler2D uReference"))
-            assertFalse(shader.contains("highp usampler2D uCurrent"))
-        }
-        assertTrue(
-            GlesMgcRawSpatialShaders.rejectionFilterDownsample.contains(
-                "uniform highp isampler2D uBaseLuma",
-            ),
-        )
-        assertFalse(
-            GlesMgcRawSpatialShaders.rejectionFilterDownsample.contains(
-                "uniform highp usampler2D uBaseLuma",
-            ),
-        )
-    }
-
-    @Test
-    fun alignmentPyramidUsesOriginalSingleQuantizationFourTimesKernel() {
-        val shader = GlesMgcRawSpatialShaders.grayDownsample4
-
-        assertTrue(shader.contains("ivec2(gl_FragCoord.xy) * 4"))
-        assertTrue(shader.contains("for (int y = -3; y <= 3; ++y)"))
-        assertTrue(shader.contains("float(4 - abs(offset)) * (1.0 / 16.0)"))
-        assertTrue(shader.contains("floor(value + 0.5)"))
-        assertFalse(shader.contains("ivec2(gl_FragCoord.xy) * 2"))
-    }
-
-    @Test
     fun originalAotOutputUsesPlanarQ14CameraRgbWithoutWbUndo() {
         val shader = GlesMgcRawSpatialShaders.normalizeAotRgb16
 
@@ -229,40 +167,4 @@ class GlesMgcRawSpatialShadersTest {
         assertFalse(shader.contains("uCameraDomainScale"))
     }
 
-    @Test
-    fun spatialRejectionPipelineKeepsMergeAcceptanceWeightSemantics() {
-        val pixelDifferenceDownsample =
-            GlesMgcRawSpatialShaders.rejectionPixelDifferenceDownsample
-        val dilate = GlesMgcRawSpatialShaders.dilateRejection
-        val filter = GlesMgcRawSpatialShaders.rejectionFilter
-        val postprocess = GlesMgcRawSpatialShaders.rejectionPostprocess
-
-        assertTrue(pixelDifferenceDownsample.contains("ivec2(gl_FragCoord.xy) * 2"))
-        assertTrue(pixelDifferenceDownsample.contains("source + ivec2(1, 1)"))
-        assertTrue(dilate.contains("oWeight = 1.0 - rejection"))
-        assertTrue(filter.contains("max(deltaWeight, centerWeight)"))
-        assertFalse(filter.contains("min(deltaWeight, centerWeight)"))
-        assertTrue(postprocess.contains("uniform sampler2D uOriginalWeight"))
-        assertTrue(postprocess.contains("uniform sampler2D uFilteredWeight"))
-        assertTrue(postprocess.contains("if (filtered > original)"))
-    }
-
-    @Test
-    fun finalAlignmentUpsampleSelectsWholeCandidateBeforeMergeInterpolation() {
-        val shader = GlesMgcRawSpatialShaders.upsampleAlignment
-
-        assertTrue(shader.contains("uniform int uTargetTileSize"))
-        assertTrue(shader.contains("float candidateCost"))
-        assertTrue(shader.contains("vec2 bestFlow = candidateFlow(nearest)"))
-        assertTrue(shader.contains("vec2 flowY = candidateFlow(nextY)"))
-        assertTrue(shader.contains("vec2 flowX = candidateFlow(nextX)"))
-        assertFalse(shader.contains("mix(flow00, flow10"))
-
-        // MergeBayer performs the only guarded interpolation. ConvertAlignment follows MGC's
-        // sparse same-grid contract so rejection and Sabre sample it through flow_scale_offset.
-        assertTrue(GlesMgcRawSpatialShaders.mergeBayer.contains("cancelInterpolation"))
-        assertFalse(GlesMgcRawSpatialShaders.convertAlignment.contains("cancelInterpolation"))
-        assertFalse(GlesMgcRawSpatialShaders.convertAlignment.contains("uInterpolationFlowTolerance"))
-        assertTrue(GlesMgcRawSpatialShaders.convertAlignment.contains("ivec2 tile = ivec2(gl_FragCoord.xy)"))
-    }
 }

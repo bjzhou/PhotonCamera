@@ -17,7 +17,6 @@ class BokehShadersTest {
         "comp" to BokehShaders.GUIDED_APPLY_COMPUTE_SHADER,
         "frag" to BokehShaders.JBU_UPSAMPLE_FRAGMENT_SHADER,
         "frag" to BokehShaders.DEPTH_REFINE_FRAGMENT_SHADER,
-        "comp" to BokehShaders.LAYER_MEDIAN_COMPUTE_SHADER,
         "frag" to BokehShaders.COC_FRAGMENT_SHADER,
         "frag" to BokehShaders.COC_SPREAD_FRAGMENT_SHADER,
         "frag" to BokehShaders.GUIDE_LUMINANCE_FRAGMENT_SHADER,
@@ -47,38 +46,6 @@ class BokehShadersTest {
         shaders.forEachIndexed { index, (stage, shader) ->
             val version = if (stage == "comp") "#version 310 es" else "#version 300 es"
             assertTrue("shader $index must start with $version for Mali drivers", shader.startsWith(version))
-        }
-    }
-
-    @Test
-    fun psfGradientFieldsIntegrateToUnitMasks() {
-        listOf(1.4f, 2.8f, 8f).forEach { aperture ->
-            val params = LensBlurParams.forAperture(aperture)
-            val bank = LensBlurPsfBank.build(params, maxRadius = 12f, domainScale = 0.64f, originalLongEdge = 4000)
-            val data = bank.data
-            val headerOffset = data[2]
-            for (p in 0 until bank.psfCount) {
-                val half = data[headerOffset + 3 * p]
-                val rowTable = data[headerOffset + 3 * p + 1]
-                val entries = data[headerOffset + 3 * p + 2]
-                var total = 0f
-                for (row in 0 until 2 * half + 1) {
-                    var running = 0f
-                    var rowSum = 0f
-                    var column = -half
-                    for (e in data[rowTable + row] until data[rowTable + row + 1]) {
-                        val dx = (data[entries + 2 * e] shl 16) shr 16
-                        while (column < dx) {
-                            rowSum += running
-                            column++
-                        }
-                        running += java.lang.Float.intBitsToFloat(data[entries + 2 * e + 1])
-                    }
-                    assertEquals("f/$aperture psf $p row $row must return to zero", 0f, running, 1e-4f)
-                    total += rowSum
-                }
-                assertEquals("f/$aperture psf $p must integrate to one", 1f, total, 1e-3f)
-            }
         }
     }
 

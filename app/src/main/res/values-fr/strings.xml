@@ -313,8 +313,6 @@
     <string name="settings_auto_rotate">Rotation automatique</string>
     <string name="settings_auto_rotate_description">Faire pivoter les commandes et les aperçus selon l’orientation de l’appareil.</string>
     <string name="recipe_palette_tone">Rendu tonal</string>
-    <string name="settings_raw_max_quality_tuning">Réglage de la qualité HDR+</string>
-    <string name="settings_raw_max_quality_tuning_description">Adapte l’estimation du bruit de fusion et la réduction du bruit à la taille physique du capteur. Si désactivé, les paramètres par défaut sont utilisés.</string>
     <string name="settings_shutter_sound_single">Son prise unique</string>
     <string name="settings_shutter_sound_burst">Son rafale</string>
     <string name="settings_shutter_sound_custom_description">Importez un clip audio de 3 secondes maximum, en 48 kHz, mono ou stéréo. Le son de rafale se répète pendant la prise de vue.</string>

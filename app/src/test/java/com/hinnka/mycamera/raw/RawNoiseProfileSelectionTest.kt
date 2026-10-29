@@ -12,11 +12,11 @@ import kotlin.math.sqrt
 
 class RawNoiseProfileSelectionTest {
     @Test
-    fun unconfiguredLensesUsePixel5WithUnityCaptureStrength() {
+    fun unconfiguredLensesUseSystemProfileWithUnityCaptureStrength() {
         val preferences = UserPreferences()
-        assertEquals(RawNoiseProfileManager.PIXEL5_PROFILE_ID,
+        assertEquals(RawNoiseProfileManager.SYSTEM_PROFILE_ID,
             preferences.rawNoiseProfileIdForLens("rear_main"))
-        assertEquals(RawNoiseProfileManager.PIXEL5_PROFILE_ID,
+        assertEquals(RawNoiseProfileManager.SYSTEM_PROFILE_ID,
             preferences.rawNoiseProfileIdForLens("rear_isz"))
         assertEquals(1f, RawDenoiseDefaults.RAW_MAX_LUMA_STRENGTH, 0f)
         assertEquals(1f, RawDenoiseDefaults.RAW_MAX_CHROMA_STRENGTH, 0f)

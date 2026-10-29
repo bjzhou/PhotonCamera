@@ -189,10 +189,6 @@ data class RawMetadata(
     val maxAnalogSensitivity: Int = 0,
     val shutterSpeed: Long = 0L,
     val aperture: Float = FALLBACK_APERTURE_F_NUMBER,
-    /** Capture-scoped quality choice; fixed sharpening does not require sensor geometry. */
-    val rawMaxQualityTuningEnabled: Boolean = false,
-    /** Optional area for the enabled quality mode's fusion/denoise fit only. */
-    val rawMaxQualityTuningSensorAreaMm2: Float? = null,
     /** CameraCharacteristics sensor geometry used only for adaptive noise-model estimation. */
     val sensorPhysicalWidthMm: Float = 0f,
     val sensorPhysicalHeightMm: Float = 0f,
@@ -1190,8 +1186,6 @@ data class RawMetadata(
         if (noiseProfileLayout != other.noiseProfileLayout) return false
         if (mgcSharpenTuningSnr != other.mgcSharpenTuningSnr) return false
         if (mgcSharpenAttenuationScale != other.mgcSharpenAttenuationScale) return false
-        if (rawMaxQualityTuningEnabled != other.rawMaxQualityTuningEnabled) return false
-        if (rawMaxQualityTuningSensorAreaMm2 != other.rawMaxQualityTuningSensorAreaMm2) return false
         if (rotation != other.rotation) return false
 
         return true
@@ -1228,8 +1222,6 @@ data class RawMetadata(
         result = 31 * result + noiseProfileLayout.hashCode()
         result = 31 * result + (mgcSharpenTuningSnr?.hashCode() ?: 0)
         result = 31 * result + (mgcSharpenAttenuationScale?.hashCode() ?: 0)
-        result = 31 * result + rawMaxQualityTuningEnabled.hashCode()
-        result = 31 * result + (rawMaxQualityTuningSensorAreaMm2?.hashCode() ?: 0)
         result = 31 * result + (rotation ?: 0)
         return result
     }

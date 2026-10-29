@@ -313,8 +313,6 @@
     <string name="settings_auto_rotate">Automatisch drehen</string>
     <string name="settings_auto_rotate_description">Bedienelemente und Vorschauen folgen der Ausrichtung des Geräts.</string>
     <string name="recipe_palette_tone">Tonwerte</string>
-    <string name="settings_raw_max_quality_tuning">HDR+ Bildqualitätsoptimierung</string>
-    <string name="settings_raw_max_quality_tuning_description">Rauschschätzung bei der Fusion und Rauschminderung an die physische Sensorgröße anpassen. Wenn deaktiviert, werden die Standardparameter verwendet.</string>
     <string name="settings_shutter_sound_single">Einzelaufnahmeton</string>
     <string name="settings_shutter_sound_burst">Serienaufnahmeton</string>
     <string name="settings_shutter_sound_custom_description">Audioclip mit bis zu 3 Sekunden, 48 kHz, mono oder stereo importieren. Der Serienaufnahmeton wird während der Aufnahme wiederholt.</string>

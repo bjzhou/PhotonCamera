@@ -1270,8 +1270,6 @@
     <string name="settings_color_palette_description">在编辑页显示调色盘，可同时调整影调和饱和度。</string>
     <string name="settings_auto_rotate">自动旋转</string>
     <string name="settings_auto_rotate_description">界面控件与预览内容跟随设备方向自动旋转</string>
-    <string name="settings_raw_max_quality_tuning">HDR+ 画质调优</string>
-    <string name="settings_raw_max_quality_tuning_description">按物理传感器尺寸调整融合噪声估计和降噪。关闭时使用默认成像参数。</string>
     <string name="settings_shutter_sound_single">单拍声音</string>
     <string name="settings_shutter_sound_burst">连拍声音</string>
     <string name="settings_shutter_sound_custom_description">导入时长不超过 3 秒、48 kHz、单声道或立体声的音频片段。连拍音频会在拍摄过程中重复播放。</string>

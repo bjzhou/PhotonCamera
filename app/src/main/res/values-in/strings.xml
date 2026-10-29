@@ -313,8 +313,6 @@
     <string name="settings_auto_rotate">Putar otomatis</string>
     <string name="settings_auto_rotate_description">Putar kontrol dan pratinjau di layar mengikuti orientasi perangkat.</string>
     <string name="recipe_palette_tone">Tonalitas</string>
-    <string name="settings_raw_max_quality_tuning">Penyetelan kualitas gambar HDR+</string>
-    <string name="settings_raw_max_quality_tuning_description">Sesuaikan estimasi derau penggabungan dan pengurangan derau dengan ukuran fisik sensor. Saat nonaktif, gunakan parameter gambar bawaan.</string>
     <string name="settings_shutter_sound_single">Suara satu bidikan</string>
     <string name="settings_shutter_sound_burst">Suara beruntun</string>
     <string name="settings_shutter_sound_custom_description">Impor klip audio hingga 3 detik, 48 kHz, mono atau stereo. Audio beruntun akan diulang selama pemotretan.</string>

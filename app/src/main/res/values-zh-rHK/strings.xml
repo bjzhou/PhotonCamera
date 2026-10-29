@@ -1244,8 +1244,6 @@
     <string name="settings_color_palette_description">在編輯頁顯示調色盤，可同時調整影調和飽和度。</string>
     <string name="settings_auto_rotate">自動旋轉</string>
     <string name="settings_auto_rotate_description">介面控制項與預覽內容隨裝置方向自動旋轉</string>
-    <string name="settings_raw_max_quality_tuning">HDR+ 畫質調校</string>
-    <string name="settings_raw_max_quality_tuning_description">按實體感光元件尺寸調整融合雜訊估計與降噪。關閉時使用預設成像參數。</string>
     <string name="settings_shutter_sound_single">單拍聲音</string>
     <string name="settings_shutter_sound_burst">連拍聲音</string>
     <string name="settings_shutter_sound_custom_description">匯入長度不超過 3 秒、48 kHz、單聲道或立體聲的音訊片段。連拍音訊會在拍攝期間重複播放。</string>

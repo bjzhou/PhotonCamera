@@ -1130,8 +1130,6 @@
     <string name="settings_color_palette_description">編集画面にカラーパレットを表示し、階調と彩度を同時に調整できます。</string>
     <string name="settings_auto_rotate">自動回転</string>
     <string name="settings_auto_rotate_description">画面上の操作ボタンやプレビューを端末の向きに合わせて回転</string>
-    <string name="settings_raw_max_quality_tuning">HDR+ 画質調整</string>
-    <string name="settings_raw_max_quality_tuning_description">センサーの物理サイズに合わせて合成時のノイズ推定とノイズ低減を調整します。オフの場合は標準の画像処理パラメータを使用します。</string>
     <string name="settings_shutter_sound_single">単写音</string>
     <string name="settings_shutter_sound_burst">連写音</string>
     <string name="settings_shutter_sound_custom_description">3秒以内、48 kHz、モノラルまたはステレオの音声クリップを読み込みます。連写音は撮影中に繰り返し再生されます。</string>

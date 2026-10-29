@@ -314,8 +314,6 @@
     <string name="settings_auto_rotate">Girar automaticamente</string>
     <string name="settings_auto_rotate_description">Girar controles e prévias na tela conforme a orientação do dispositivo.</string>
     <string name="recipe_palette_tone">Equilíbrio tonal</string>
-    <string name="settings_raw_max_quality_tuning">Ajuste de qualidade HDR+</string>
-    <string name="settings_raw_max_quality_tuning_description">Ajusta a estimativa de ruído da fusão e a redução de ruído ao tamanho físico do sensor. Quando desativado, usa os parâmetros de imagem padrão.</string>
     <string name="settings_shutter_sound_single">Som de foto única</string>
     <string name="settings_shutter_sound_burst">Som de disparo contínuo</string>
     <string name="settings_shutter_sound_custom_description">Importe um clipe de áudio de até 3 segundos, 48 kHz, mono ou estéreo. O áudio do disparo contínuo se repete durante a captura.</string>

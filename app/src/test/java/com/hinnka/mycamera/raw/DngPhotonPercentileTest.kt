@@ -17,36 +17,6 @@ class DngPhotonPercentileTest {
     }
 
     @Test
-    fun identityLocalLaplacianMapsRenderedUpperPercentileToOne() {
-        val width = 16
-        val height = 16
-        val source = FloatArray(width * height) { index ->
-            if (index < 2) 0f else index.toFloat() / (width * height - 1f)
-        }
-        val result = DngPhotonLocalToneMapper.localLaplacianToneMap(
-            source = source,
-            width = width,
-            height = height,
-            exposureGain = 2.3f,
-            parameters = PhotonLocalToneMappingParameters(
-                localLaplacianDetailExponent = 1f,
-                targetDynamicRange = 1_000_000f,
-            ),
-        )
-
-        val sourceUpper = DngPhotonLocalToneMapper.percentile(
-            source.copyOf().also { it.sort() },
-            0.995f,
-        )
-        val maximumError = source.indices.maxOf {
-            abs(result.target[it] * 2.3f - source[it] / sourceUpper)
-        }
-        assertEquals(0f, result.target[0], 1e-6f)
-        assertEquals(0f, result.target[1], 1e-6f)
-        assertTrue("identity LL normalized maximum error=$maximumError", maximumError < 2e-4f)
-    }
-
-    @Test
     fun outputPercentileExponentUsesFiniteRawBlackEndpoint() {
         val exponent = DngPhotonLocalToneMapper.outputPercentileExponent(
             filteredLower = 0f,

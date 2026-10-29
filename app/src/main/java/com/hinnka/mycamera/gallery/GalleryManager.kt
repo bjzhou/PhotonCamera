@@ -38,7 +38,6 @@ import com.hinnka.mycamera.model.SafeImage
 import com.hinnka.mycamera.processor.BokehStyle
 import com.hinnka.mycamera.processor.GpuBayerSource
 import com.hinnka.mycamera.processor.GpuLinearRgbSource
-import com.hinnka.mycamera.processor.PhotonSensorSizeTuning
 import com.hinnka.mycamera.processor.GpuLinearRgbStorage
 import com.hinnka.mycamera.processor.MgcSpatialOutputMode
 import com.hinnka.mycamera.processor.MgcMergeMethod
@@ -2294,10 +2293,6 @@ object GalleryManager {
                 captureExposureCompensationEv = captureExposureCompensationEv,
             ).let(physicalRawCrop::rebase).copy(
                 exposureCompensation = captureExposureCompensationEv,
-                rawMaxQualityTuningEnabled =
-                    PhotonSensorSizeTuning.enabledFromProperties(metadata.customProperties),
-                rawMaxQualityTuningSensorAreaMm2 =
-                    PhotonSensorSizeTuning.areaFromProperties(metadata.customProperties),
             )
             val rawBuffer = image.use {
                 RawProcessor.copyRawSensorImageToContiguousBuffer(
@@ -2434,10 +2429,6 @@ object GalleryManager {
                 rawWhiteLevelMode = updatedMetadata.rawWhiteLevelMode,
                 rawCustomWhiteLevel = updatedMetadata.rawCustomWhiteLevel,
                 sharpeningValue = rawSharpening,
-                processLocalQualityTuningEnabled =
-                    PhotonSensorSizeTuning.enabledFromProperties(updatedMetadata.customProperties),
-                processLocalQualityTuningSensorAreaMm2 =
-                    PhotonSensorSizeTuning.areaFromProperties(updatedMetadata.customProperties),
                 denoiseValue = rawNoiseReduction,
                 chromaDenoiseValue = rawChromaNoiseReduction,
                 rawDcpId = updatedMetadata.rawDcpId,
@@ -2531,10 +2522,6 @@ object GalleryManager {
                     rawWhiteLevelMode = updatedMetadata.rawWhiteLevelMode,
                     rawCustomWhiteLevel = updatedMetadata.rawCustomWhiteLevel,
                     sharpeningValue = rawSharpening,
-                    processLocalQualityTuningEnabled =
-                        PhotonSensorSizeTuning.enabledFromProperties(updatedMetadata.customProperties),
-                    processLocalQualityTuningSensorAreaMm2 =
-                        PhotonSensorSizeTuning.areaFromProperties(updatedMetadata.customProperties),
                     denoiseValue = rawNoiseReduction,
                     chromaDenoiseValue = rawChromaNoiseReduction,
                     rawDcpId = updatedMetadata.rawDcpId,
@@ -3342,10 +3329,6 @@ object GalleryManager {
                 colorSpace = RawDemosaicProcessor.getInstance().getRawColorSpace(),
             ).let(physicalRawCrop::rebase).copy(
                 exposureCompensation = captureExposureCompensationEv,
-                rawMaxQualityTuningEnabled =
-                    PhotonSensorSizeTuning.enabledFromProperties(metadata.customProperties),
-                rawMaxQualityTuningSensorAreaMm2 =
-                    PhotonSensorSizeTuning.areaFromProperties(metadata.customProperties),
             )
             val noiseProfileSelection = ContentRepository.getInstance(context)
                 .rawNoiseProfileManager
@@ -3799,10 +3782,6 @@ object GalleryManager {
                     rawWhiteLevelMode = updatedMetadata.rawWhiteLevelMode,
                     rawCustomWhiteLevel = updatedMetadata.rawCustomWhiteLevel,
                     sharpeningValue = rawSharpening,
-                    processLocalQualityTuningEnabled =
-                        PhotonSensorSizeTuning.enabledFromProperties(updatedMetadata.customProperties),
-                    processLocalQualityTuningSensorAreaMm2 =
-                        PhotonSensorSizeTuning.areaFromProperties(updatedMetadata.customProperties),
                     processLocalMgcSharpenTuningSnr = finalStackResult.mgcSharpenTuningSnr,
                     processLocalMgcSharpenAttenuationScale =
                         finalStackResult.mgcSharpenAttenuationScale,
@@ -3899,10 +3878,6 @@ object GalleryManager {
                         rawWhiteLevelMode = updatedMetadata.rawWhiteLevelMode,
                         rawCustomWhiteLevel = updatedMetadata.rawCustomWhiteLevel,
                         sharpeningValue = rawSharpening,
-                        processLocalQualityTuningEnabled =
-                            PhotonSensorSizeTuning.enabledFromProperties(updatedMetadata.customProperties),
-                        processLocalQualityTuningSensorAreaMm2 =
-                            PhotonSensorSizeTuning.areaFromProperties(updatedMetadata.customProperties),
                         denoiseValue = rawNoiseReduction,
                         chromaDenoiseValue = rawChromaNoiseReduction,
                         rawDcpId = updatedMetadata.rawDcpId,
@@ -4189,10 +4164,6 @@ object GalleryManager {
             rawWhiteLevelMode = updatedMetadata.rawWhiteLevelMode,
             rawCustomWhiteLevel = updatedMetadata.rawCustomWhiteLevel,
             sharpeningValue = rawSharpening,
-            processLocalQualityTuningEnabled =
-                PhotonSensorSizeTuning.enabledFromProperties(updatedMetadata.customProperties),
-            processLocalQualityTuningSensorAreaMm2 =
-                PhotonSensorSizeTuning.areaFromProperties(updatedMetadata.customProperties),
             denoiseValue = rawNoiseReduction,
             chromaDenoiseValue = rawChromaNoiseReduction,
             rawDcpId = updatedMetadata.rawDcpId,
@@ -5654,10 +5625,6 @@ object GalleryManager {
                             rawWhiteLevelMode = updatedMetadata.rawWhiteLevelMode,
                             rawCustomWhiteLevel = updatedMetadata.rawCustomWhiteLevel,
                             sharpeningValue = RawSharpeningDefaults.DEFAULT_STRENGTH,
-                            processLocalQualityTuningEnabled =
-                                PhotonSensorSizeTuning.enabledFromProperties(updatedMetadata.customProperties),
-                            processLocalQualityTuningSensorAreaMm2 =
-                                PhotonSensorSizeTuning.areaFromProperties(updatedMetadata.customProperties),
                             denoiseValue = rawNoiseReduction,
                             chromaDenoiseValue = rawChromaNoiseReduction,
                             rawDcpId = updatedMetadata.rawDcpId,
@@ -5836,10 +5803,6 @@ object GalleryManager {
                     rawCustomWhiteLevel = updatedMetadata?.rawCustomWhiteLevel,
                     sharpeningValue = updatedMetadata?.sharpening
                         ?: RawSharpeningDefaults.DEFAULT_STRENGTH,
-                    processLocalQualityTuningEnabled =
-                        PhotonSensorSizeTuning.enabledFromProperties(updatedMetadata?.customProperties.orEmpty()),
-                    processLocalQualityTuningSensorAreaMm2 =
-                        PhotonSensorSizeTuning.areaFromProperties(updatedMetadata?.customProperties.orEmpty()),
                     denoiseValue = rawNoiseReduction,
                     chromaDenoiseValue = rawChromaNoiseReduction,
                     rawDcpId = updatedMetadata?.rawDcpId,

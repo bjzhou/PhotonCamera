@@ -149,7 +149,7 @@ class RawNoiseProfileManager(context: Context) {
         const val PIXEL8_PRO_PROFILE_ID = "builtin_noise_pixel8_pro"
         const val X9_ULTRA_PROFILE_ID = "builtin_noise_x9_ultra"
         const val X9_ULTRA_3X_PROFILE_ID = "builtin_noise_x9_ultra_3x"
-        const val DEFAULT_PROFILE_ID = PIXEL5_PROFILE_ID
+        const val DEFAULT_PROFILE_ID = SYSTEM_PROFILE_ID
 
         private val BUILT_IN_PROFILES = listOf(
             RawNoiseProfileInfo(

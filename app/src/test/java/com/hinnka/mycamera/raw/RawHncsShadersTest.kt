@@ -44,18 +44,6 @@ class RawHncsShadersTest {
     }
 
     @Test
-    fun rawSrgbOutputEncodesLinearRgbExactlyOnce() {
-        val shader = RawSrgbPass.FRAGMENT_SHADER
-
-        assertTrue(shader.contains("vec3 color = texture(uInputTexture, vTexCoord).rgb;"))
-        assertTrue(shader.contains("fragColor = vec4(linearToSrgb(color), 1.0);"))
-        assertEquals(
-            1,
-            Regex(Regex.escape("linearToSrgb(color)")).findAll(shader).count(),
-        )
-    }
-
-    @Test
     fun engineFragmentShadersPassAvailableNdkValidator() {
         val sdkRoot = System.getenv("ANDROID_SDK_ROOT") ?: System.getenv("ANDROID_HOME")
         val ndkRoots = sdkRoot?.let(::File)

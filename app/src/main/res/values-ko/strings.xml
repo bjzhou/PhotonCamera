@@ -314,8 +314,6 @@
     <string name="settings_auto_rotate">자동 회전</string>
     <string name="settings_auto_rotate_description">화면 컨트롤과 미리보기를 기기 방향에 맞춰 회전</string>
     <string name="recipe_palette_tone">명암</string>
-    <string name="settings_raw_max_quality_tuning">HDR+ 화질 조정</string>
-    <string name="settings_raw_max_quality_tuning_description">센서의 물리적 크기에 맞춰 합성 노이즈 추정과 노이즈 감소를 조정합니다. 끄면 기본 이미지 처리 매개변수를 사용합니다.</string>
     <string name="settings_shutter_sound_single">단일 촬영음</string>
     <string name="settings_shutter_sound_burst">연사 촬영음</string>
     <string name="settings_shutter_sound_custom_description">최대 3초, 48kHz, 모노 또는 스테레오 오디오 클립을 가져옵니다. 연사 오디오는 촬영 중 반복 재생됩니다.</string>
