@@ -42,23 +42,86 @@ internal object PhotonDenoiseTuning {
     }
 
     /**
-     * §9 nominal Bitmap noise profile (r_bm, s_bm), applied to all three channels of linear
-     * sRGB and scaled by s². Pre-tuning value: a 1/255 standard deviation at mid grey, split
-     * evenly between read and shot terms; the BITMAP table's PSNR optimisation replaces it.
+     * §9 Bitmap blind denoise: an ISP-processed image has no usable noise model, so the denoiser
+     * runs on the sRGB-encoded values with a constant reference noise of one 8-bit code value
+     * (read term only); the §5.1 per-image estimate, uncapped, sets the amount per level and
+     * luma bin relative to it.
      */
-    const val BITMAP_READ = 0.5f / (255f * 255f)
-    const val BITMAP_SHOT = 0.5f / (255f * 255f * 0.18f)
+    const val BITMAP_READ = 1f / (255f * 255f)
+    const val BITMAP_SHOT = 0f
 
     private val DEFAULT_NODE = Node(
         n = 1f,
         alpha = floatArrayOf(1f, 1f, 1f, 1.2f, 1.2f, 1.2f, 1.2f),
-        grain = floatArrayOf(0.30f, 0.20f, 0.15f, 0.10f, 0.10f, 0.10f, 0.10f),
+        grain = floatArrayOf(0f, 0f, 0f, 0f, 0f, 0f, 0f),
         outlier = floatArrayOf(2.5f, 2.5f, 2.5f, 2.5f, 2.5f, 2.5f, 2.5f),
         gateLuma = floatArrayOf(16.919f, 27.877f),
         gateChroma = floatArrayOf(5.991f, 13.816f),
         bilateralLevels = 3,
         bilateralLuma = 4f,
         bilateralChroma = 4f,
+    )
+
+    /**
+     * §5.1 per-level table over image SNR (MGC's tuning nodes 5 / 20 / 40), luma and chroma rows
+     * L0–L4 (deeper levels use L4), linear in ln SNR between nodes and clamped at the ends.
+     */
+    class SnrTable(
+        val snr: FloatArray,
+        val luma: Array<FloatArray>,
+        val chroma: Array<FloatArray>,
+    ) {
+        init {
+            require(snr.size == SNR_NODES && snr[0] < snr[1] && snr[1] < snr[2])
+            require(luma.size == SNR_TABLE_LEVELS && luma.all { it.size == SNR_NODES })
+            require(chroma.size == SNR_TABLE_LEVELS && chroma.all { it.size == SNR_NODES })
+        }
+
+        fun luma(level: Int, snr: Float): Float = at(luma[minOf(level, SNR_TABLE_LEVELS - 1)], snr)
+        fun chroma(level: Int, snr: Float): Float = at(chroma[minOf(level, SNR_TABLE_LEVELS - 1)], snr)
+
+        private fun at(row: FloatArray, snr: Float): Float {
+            val x = ln(snr.coerceAtLeast(1e-6f))
+            val nodes = FloatArray(SNR_NODES) { ln(this.snr[it]) }
+            if (x <= nodes[0]) return row[0]
+            if (x >= nodes[SNR_NODES - 1]) return row[SNR_NODES - 1]
+            val upper = (1 until SNR_NODES).first { x < nodes[it] }
+            val f = (x - nodes[upper - 1]) / (nodes[upper] - nodes[upper - 1])
+            return row[upper - 1] + f * (row[upper] - row[upper - 1])
+        }
+    }
+
+    private const val SNR_TABLE_LEVELS = 5
+    private const val SNR_NODES = 3
+
+    private fun rows(vararg values: Float) = Array(SNR_TABLE_LEVELS) { level ->
+        FloatArray(SNR_NODES) { values[level * SNR_NODES + it] }
+    }
+
+    /**
+     * §5.1 cap of the per-image strength estimate of a RAW source. Blind estimation takes fine
+     * texture as noise; the error matters where texture and noise are of similar size, i.e. at
+     * high SNR, so the cap tightens with the image SNR. Node 40 keeps 1793243503594 (ISO 100,
+     * SNR 91) as textured as the measured table did; nodes 5 / 20 stay above the estimates of the
+     * 10x merges 1793253607706 / 1793253630461 (ISO 9100, SNR 12–16), whose coarse chroma reaches
+     * 7–13.
+     */
+    val ESTIMATE_CAP = SnrTable(
+        snr = floatArrayOf(5f, 20f, 40f),
+        luma = rows(
+            2f, 1.5f, 0.75f,
+            4f, 3f, 1.25f,
+            8f, 6f, 2.5f,
+            16f, 12f, 5f,
+            24f, 18f, 6f,
+        ),
+        chroma = rows(
+            1f, 1f, 1f,
+            1f, 1f, 1f,
+            4f, 3f, 0.75f,
+            12f, 8f, 1.5f,
+            24f, 16f, 2f,
+        ),
     )
 
     private val TABLES: Map<RawDenoisePipeline, List<Node>> =

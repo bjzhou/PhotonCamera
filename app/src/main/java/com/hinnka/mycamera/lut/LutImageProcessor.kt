@@ -14,6 +14,7 @@ import androidx.core.graphics.createBitmap
 import com.hinnka.mycamera.model.ColorRecipeParams
 import com.hinnka.mycamera.processor.GlesComputeWorkGroup
 import com.hinnka.mycamera.processor.DenoiseStrength
+import com.hinnka.mycamera.raw.denoise.PhotonDenoiseDump
 import com.hinnka.mycamera.raw.denoise.PhotonMultiScaleDenoiser
 import com.hinnka.mycamera.raw.denoise.PhotonNoiseModel
 import com.hinnka.mycamera.utils.LargeDirectBuffer
@@ -83,7 +84,6 @@ class LutImageProcessor(context: Context? = null) {
     private var texCoordBuffer: FloatBuffer? = null
     private var indexBuffer: ShortBuffer? = null
 
-    private var bitmapSrgbTransferProgram = 0
     private var bitmapDenoisePassthroughProgram = 0
     private var computeCapabilitiesChecked = false
     private var computeCapabilitiesSupported = false
@@ -1271,7 +1271,7 @@ class LutImageProcessor(context: Context? = null) {
         )
     }
 
-    /** The Photon denoiser and the sRGB transfer passes around it (docs/photon-multiscale-denoise.md §9). */
+    /** The Photon denoiser and the copy passes around it (docs/photon-multiscale-denoise.md §9). */
     private fun ensureBitmapPhotonDenoisePrograms(): Boolean {
         if (!computeCapabilitiesChecked) {
             computeCapabilitiesSupported = logAndValidateComputeCapabilities()
@@ -1279,14 +1279,7 @@ class LutImageProcessor(context: Context? = null) {
         }
         if (!computeCapabilitiesSupported) return false
         ensureBitmapDenoisePassthroughProgram()
-        if (bitmapSrgbTransferProgram == 0) {
-            bitmapSrgbTransferProgram = createFragmentProgram(
-                IMAGE_VERTEX_SHADER,
-                SRGB_TRANSFER_SHADER,
-                "BitmapDenoise_SrgbTransfer",
-            )
-        }
-        return bitmapSrgbTransferProgram != 0 && bitmapDenoisePassthroughProgram != 0 &&
+        return bitmapDenoisePassthroughProgram != 0 &&
             bitmapPhotonDenoiser.initialize()
     }
 
@@ -1405,9 +1398,11 @@ class LutImageProcessor(context: Context? = null) {
     }
 
     /**
-     * §9: sRGB → linear, the Photon denoiser on the nominal Bitmap profile, linear → sRGB.
-     * The result is in bitmapDenoiseTexId[1]; returns false (result not written) when either
-     * strength is zero for both or the compute path is unavailable.
+     * §9 blind denoise of an ISP-processed Bitmap: the Photon denoiser runs on the sRGB-encoded
+     * values with the fixed BITMAP strengths (no noise model of the source). The input is copied to
+     * RGBA16F first so the denoiser (and the debug dump) read the same texture. The result is in
+     * bitmapDenoiseTexId[1]; returns false (result not written) when both strengths are zero or
+     * the compute path is unavailable.
      */
     private fun renderBitmapPhotonDenoise(
         sourceTextureId: Int,
@@ -1424,38 +1419,24 @@ class LutImageProcessor(context: Context? = null) {
             return false
         }
         setupBitmapDenoiseFramebuffers(width, height)
-        renderSrgbTransfer(sourceTextureId, bitmapDenoiseFboId[0], width, height, encode = false)
+        renderTexturePassthrough(sourceTextureId, bitmapDenoiseFboId[0], width, height)
         val params = PhotonNoiseModel.buildBitmap(width, height, lumaStrength, chromaStrength)
+        if (PhotonDenoiseDump.enabled) {
+            appContext?.let { context ->
+                PhotonDenoiseDump.write(context, "${params.pipeline.name}_EDIT", bitmapDenoiseTexId[0], width, height,
+                    metadata = null, params = params, lensShadingSource = null)
+            } ?: PLog.w(TAG, "Bitmap denoise dump skipped: LutImageProcessor has no context")
+        }
         val denoised = checkNotNull(bitmapPhotonDenoiser.denoise(bitmapDenoiseTexId[0], width, height, params)) {
             "Photon denoise programs are unavailable"
         }
         try {
-            renderSrgbTransfer(denoised, bitmapDenoiseFboId[1], width, height, encode = true)
+            renderTexturePassthrough(denoised, bitmapDenoiseFboId[1], width, height)
         } finally {
             GLES30.glDeleteTextures(1, intArrayOf(denoised), 0)
         }
         checkGlError("Bitmap Photon denoise")
         return true
-    }
-
-    private fun renderSrgbTransfer(sourceTextureId: Int, targetFboId: Int, width: Int, height: Int, encode: Boolean) {
-        GLES30.glUseProgram(bitmapSrgbTransferProgram)
-        GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, targetFboId)
-        GLES30.glViewport(0, 0, width, height)
-        GLES30.glActiveTexture(GLES30.GL_TEXTURE0)
-        GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, sourceTextureId)
-        GLES30.glUniform1i(GLES30.glGetUniformLocation(bitmapSrgbTransferProgram, "uInputTexture"), 0)
-        GLES30.glUniform1i(GLES30.glGetUniformLocation(bitmapSrgbTransferProgram, "uEncode"), if (encode) 1 else 0)
-        val identityMatrix = FloatArray(16)
-        android.opengl.Matrix.setIdentityM(identityMatrix, 0)
-        GLES30.glUniformMatrix4fv(
-            GLES30.glGetUniformLocation(bitmapSrgbTransferProgram, "uMVPMatrix"),
-            1,
-            false,
-            identityMatrix,
-            0
-        )
-        drawQuad(bitmapSrgbTransferProgram)
     }
 
     private fun renderTexturePassthrough(sourceTextureId: Int, targetFboId: Int, width: Int, height: Int) {
@@ -2246,7 +2227,6 @@ class LutImageProcessor(context: Context? = null) {
         }
         releaseReadbackBuffer()
 
-        if (bitmapSrgbTransferProgram != 0) GLES30.glDeleteProgram(bitmapSrgbTransferProgram)
         if (bitmapDenoisePassthroughProgram != 0) GLES30.glDeleteProgram(bitmapDenoisePassthroughProgram)
         bitmapPhotonDenoiser.release()
         if (lutSharpenProgram != 0) {
@@ -2328,32 +2308,6 @@ class LutImageProcessor(context: Context? = null) {
 
             void main() {
                 fragColor = texture(uInputTexture, vTexCoord);
-            }
-        """.trimIndent()
-
-        /** sRGB transfer curve, decode (uEncode = 0) or encode, on RGB; alpha passes through. */
-        private val SRGB_TRANSFER_SHADER = """
-            #version 300 es
-            precision highp float;
-
-            in vec2 vTexCoord;
-            out vec4 fragColor;
-
-            uniform highp sampler2D uInputTexture;
-            uniform int uEncode;
-
-            vec3 decode(vec3 v) {
-                return mix(v / 12.92, pow((v + 0.055) / 1.055, vec3(2.4)), step(vec3(0.04045), v));
-            }
-
-            vec3 encode(vec3 v) {
-                v = max(v, vec3(0.0));
-                return mix(v * 12.92, 1.055 * pow(v, vec3(1.0 / 2.4)) - 0.055, step(vec3(0.0031308), v));
-            }
-
-            void main() {
-                vec4 c = texture(uInputTexture, vTexCoord);
-                fragColor = vec4(uEncode == 1 ? encode(c.rgb) : decode(max(c.rgb, vec3(0.0))), c.a);
             }
         """.trimIndent()
 

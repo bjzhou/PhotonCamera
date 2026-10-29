@@ -1222,11 +1222,13 @@ class RawDemosaicProcessor {
                         width, height, metadata, params, lensShadingSource)
                 }
                 val denoiseStartNs = System.nanoTime()
+                // §5.1: the table applied here is recorded for later passes over the output.
+                val strength = FloatArray(params.levels * RawDenoiseHistory.STRENGTH_ENTRIES)
                 denoisedTexture = checkNotNull(
-                    photonDenoiser.denoise(workingFloatTexture, width, height, params),
+                    photonDenoiser.denoise(workingFloatTexture, width, height, params, strength),
                 ) { "Photon $mode denoise programs are unavailable" }
                 denoiseMs = (System.nanoTime() - denoiseStartNs) / 1_000_000L
-                outputHistory = params.outputHistory()
+                outputHistory = params.outputHistory(strength)
             } else {
                 PLog.i(
                     TAG,
@@ -7637,14 +7639,20 @@ class RawDemosaicProcessor {
         ) { "RAW HDR reference pass failed" }
     }
 
-    /** MGC sharpen tuning SNR from one native RAW measurement; merged captures carry the reference frame's. */
+    /**
+     * One native measurement of the mean green signal (MGC EstimateSnr's mean): the MGC sharpen
+     * tuning SNR (merged captures carry the reference frame's) and the denoiser's image SNR signal
+     * (docs/photon-multiscale-denoise.md §5.1).
+     */
     private fun RawMetadata.withMgcRenderTuning(
         rawData: ByteBuffer?,
         rowStride: Int,
         samplesPerPixel: Int,
     ): RawMetadata {
         // Guided reconstruction is still required when the sharpening slider is zero.
-        if (mgcSharpenTuningSnr != null) return this
+        val needsSharpenSnr = mgcSharpenTuningSnr == null
+        val needsDenoiseSignal = denoiseSignal == null
+        if (!needsSharpenSnr && !needsDenoiseSignal) return this
         val signalStartNs = System.nanoTime()
         val measuredSignal = rawData?.let { estimateMgcReferenceSignal(
             rawData = it,
@@ -7655,6 +7663,8 @@ class RawDemosaicProcessor {
         // Photon does not carry MGC's unapplied gain; do not substitute display EV.
         val signal = measuredSignal ?: 0.18f
         val signalElapsedMs = (System.nanoTime() - signalStartNs) / 1_000_000L
+        val measured = if (needsDenoiseSignal && measuredSignal != null) copy(denoiseSignal = measuredSignal) else this
+        if (!needsSharpenSnr) return measured
         val noiseModel = when (noiseProfileLayout) {
             RawNoiseProfileLayout.CAMERA2_CFA ->
                 RawNoiseModel.fromCamera2NoiseProfile(channelNoiseProfile)
@@ -7692,7 +7702,7 @@ class RawDemosaicProcessor {
                     "signalSource=${if (measuredSignal != null) "NATIVE_OMP" else "MGC_MISSING_MEAN"} " +
                     "signalMs=$signalElapsedMs",
         )
-        return copy(mgcSharpenTuningSnr = snr)
+        return measured.copy(mgcSharpenTuningSnr = snr)
     }
 
     private fun RawMetadata.estimateMgcReferenceSignal(

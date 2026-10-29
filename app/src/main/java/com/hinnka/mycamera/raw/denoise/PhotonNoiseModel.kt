@@ -4,6 +4,7 @@ import com.hinnka.mycamera.processor.RawNoiseModel
 import com.hinnka.mycamera.raw.RawAppliedLensShading
 import com.hinnka.mycamera.raw.RawDenoiseHistory
 import com.hinnka.mycamera.raw.RawDenoisePipeline
+import com.hinnka.mycamera.raw.RawMergeVarianceMap
 import com.hinnka.mycamera.raw.RawMetadata
 import com.hinnka.mycamera.raw.RawNoiseProfileLayout
 import org.json.JSONArray
@@ -51,6 +52,8 @@ internal class PhotonDenoiseParams(
     val shot: FloatArray,
     val mergeRead: Float,
     val mergeShot: Float,
+    /** §2.2 per-pixel (m_r, m_s); null: [mergeRead] / [mergeShot] everywhere. */
+    val mergeMap: RawMergeVarianceMap?,
     /** §2.4 t² per level as (Y, Cb, Cr). */
     val residual: Array<FloatArray>,
     val kappaLuma: Array<FloatArray>,
@@ -65,6 +68,19 @@ internal class PhotonDenoiseParams(
     val bilateralLevels: Int,
     val bilateralLuma: Float,
     val bilateralChroma: Float,
+    /** §5.1 image SNR and the mean green signal it was computed at. */
+    val imageSnr: Float,
+    val signal: Float,
+    /** §5.1 caps of the per-image strength estimate per level at [imageSnr], luma and chroma. */
+    val strengthCapLuma: FloatArray,
+    val strengthCapChroma: FloatArray,
+    /**
+     * §5.1 strength table, [RawDenoiseHistory.STRENGTH_ENTRIES] values per level; null: estimated
+     * from the pixels before synthesis.
+     */
+    val strengthTable: FloatArray?,
+    /** Mean green signal recorded with the input's history, carried to the output history. */
+    val historySignal: Float?,
     val lumaStrength: Float,
     val chromaStrength: Float,
     val lensShading: PhotonLensShading?,
@@ -73,6 +89,12 @@ internal class PhotonDenoiseParams(
     val fullWidth: Int,
     val fullHeight: Int,
 ) {
+    val mergeMapWidth: Int get() = mergeMap?.width ?: 1
+    val mergeMapHeight: Int get() = mergeMap?.height ?: 1
+
+    /** (m_r, m_s) interleaved, row-major over [mergeMapWidth] × [mergeMapHeight]. */
+    fun mergeMapValues(): FloatArray = mergeMap?.values?.copyOf() ?: floatArrayOf(mergeRead, mergeShot)
+
     /** §8: residual ratio t_l(s). */
     fun lumaGrain(level: Int): Float {
         val t = grain[level]
@@ -89,9 +111,10 @@ internal class PhotonDenoiseParams(
     /**
      * §2.4: noise state of this pass's output. Flat-region worst case per level: luma keeps
      * t_l(s)² of its input variance where it is shrunk; chroma detail keeps (1 − min(s, 1))²
-     * (gate closed). Levels this pass does not process keep their input ratio.
+     * (gate closed). Levels this pass does not process keep their input ratio. [strength] is the
+     * table this pass applied, recorded for later passes over the output.
      */
-    fun outputHistory(): RawDenoiseHistory {
+    fun outputHistory(strength: FloatArray?): RawDenoiseHistory {
         val chromaKept = (1f - min(chromaStrength, 1f)).let { it * it }
         val residualOut = List(max(levels, residual.size)) { level ->
             val input = residual.getOrNull(level) ?: floatArrayOf(1f, 1f, 1f)
@@ -100,7 +123,7 @@ internal class PhotonDenoiseParams(
             val chroma = if (chromaStrength > 0f) chromaKept else 1f
             floatArrayOf(input[0] * luma, input[1] * chroma, input[2] * chroma)
         }
-        return RawDenoiseHistory(pipeline, mergeRead, mergeShot, residualOut)
+        return RawDenoiseHistory(pipeline, mergeRead, mergeShot, residualOut, mergeMap, historySignal, strength)
     }
 
     fun toJson(): JSONObject = JSONObject().apply {
@@ -112,6 +135,11 @@ internal class PhotonDenoiseParams(
         put("shot", JSONArray(shot.map(Float::toDouble)))
         put("mergeRead", mergeRead.toDouble())
         put("mergeShot", mergeShot.toDouble())
+        put("mergeMap", JSONObject().apply {
+            put("width", mergeMapWidth)
+            put("height", mergeMapHeight)
+            put("values", JSONArray(mergeMapValues().map(Float::toDouble)))
+        })
         put("residual", JSONArray(residual.map { row -> JSONArray(row.map(Float::toDouble)) }))
         put("kappaLuma", JSONArray(kappaLuma.map { row -> JSONArray(row.map(Float::toDouble)) }))
         put("kappaChroma", JSONArray(kappaChroma.map { row -> JSONArray(row.map(Float::toDouble)) }))
@@ -125,6 +153,11 @@ internal class PhotonDenoiseParams(
         put("bilateralLevels", bilateralLevels)
         put("bilateralLuma", bilateralLuma.toDouble())
         put("bilateralChroma", bilateralChroma.toDouble())
+        put("imageSnr", imageSnr.toDouble())
+        put("signal", signal.toDouble())
+        put("strengthCapLuma", JSONArray(strengthCapLuma.map(Float::toDouble)))
+        put("strengthCapChroma", JSONArray(strengthCapChroma.map(Float::toDouble)))
+        strengthTable?.let { put("strengthTable", JSONArray(it.map(Float::toDouble))) }
         put("lumaStrength", lumaStrength.toDouble())
         put("chromaStrength", chromaStrength.toDouble())
         put("originX", originX)
@@ -147,10 +180,13 @@ internal object PhotonNoiseModel {
     private const val MAX_WORKING_SIGNAL = 32768f
     private const val MAX_SCALE = 4096f
     private const val LSB_FRACTION = 0.25f
+    private const val MISSING_SIGNAL = 0.18f
     private const val MIN_LEVEL_SIZE = 4
 
     /**
      * RAW input. [history]: §2.2 merge ratios, §2.4 residual ratios and pipeline of the pixels.
+     * The §5.1 image SNR uses the mean green signal measured on these pixels, else the one
+     * recorded with the merge, else MGC EstimateSnr's missing-mean value 0.18.
      */
     fun build(
         metadata: RawMetadata,
@@ -173,13 +209,14 @@ internal object PhotonNoiseModel {
             1f,
             (if (gains.size >= 4) gains[3] else gains.getOrElse(2) { 1f }) / green,
         )
+        val signal = metadata.denoiseSignal ?: history.signal ?: MISSING_SIGNAL
         return build(noise.read, noise.shot, whiteBalance, width, height, originX, originY, fullWidth, fullHeight,
-            history, lumaStrength, chromaStrength, lensShading)
+            history, signal, lumaStrength, chromaStrength, lensShading)
     }
 
     /**
-     * §9 Bitmap input: linear sRGB with the nominal profile of the BITMAP table, no white
-     * balance, no LSC, no merge.
+     * §9 Bitmap input: sRGB-encoded values with the constant reference noise of the BITMAP table
+     * (blind strengths, no source noise model), no white balance, no LSC, no merge.
      */
     fun buildBitmap(width: Int, height: Int, lumaStrength: Float, chromaStrength: Float): PhotonDenoiseParams = build(
         read = FloatArray(3) { PhotonDenoiseTuning.BITMAP_READ },
@@ -192,6 +229,7 @@ internal object PhotonNoiseModel {
         fullWidth = width,
         fullHeight = height,
         history = RawDenoiseHistory.singleFrame(RawDenoisePipeline.BITMAP),
+        signal = MISSING_SIGNAL,
         lumaStrength = lumaStrength,
         chromaStrength = chromaStrength,
         lensShading = null,
@@ -228,6 +266,15 @@ internal object PhotonNoiseModel {
             if (RawMetadata.isQuadBayer(metadata.cfaPattern)) RawDenoisePipeline.QUAD else RawDenoisePipeline.VGN,
         )
 
+    /**
+     * §5.1 image SNR, MGC FinishRaw's definition with the §2.2 nominal merge ratios:
+     * S / √(m_s · s_G · S + m_r · r_G) at the mean green signal S.
+     */
+    fun imageSnr(read: FloatArray, shot: FloatArray, history: RawDenoiseHistory, signal: Float): Float {
+        val variance = history.mergeShot * shot[1] * signal + history.mergeRead * read[1]
+        return if (variance > 0f) signal / sqrt(variance) else 0f
+    }
+
     /** §5: n = √(m · v_Y(0.18)) / 0.18, v_Y the luma point variance without K. */
     fun noiseCoordinate(read: FloatArray, shot: FloatArray, whiteBalance: FloatArray, history: RawDenoiseHistory): Float {
         val luma = floatArrayOf(0.25f, 0.5f, 0.25f)
@@ -250,6 +297,7 @@ internal object PhotonNoiseModel {
         fullWidth: Int,
         fullHeight: Int,
         history: RawDenoiseHistory,
+        signal: Float,
         lumaStrength: Float,
         chromaStrength: Float,
         lensShading: PhotonLensShading?,
@@ -269,6 +317,16 @@ internal object PhotonNoiseModel {
         }
         val n = noiseCoordinate(read, shot, whiteBalance, history)
         val tuning = PhotonDenoiseTuning.at(history.pipeline, n)
+        val snr = imageSnr(read, shot, history, signal)
+        val entries = RawDenoiseHistory.STRENGTH_ENTRIES
+        val strengthTable = history.strength?.takeIf { it.size >= levels * entries }?.copyOf(levels * entries)
+        // §9: a Bitmap has no image SNR (its reference noise is nominal), so its estimate is uncapped.
+        val bitmap = history.pipeline == RawDenoisePipeline.BITMAP
+        fun cap(level: Int, luma: Boolean) = when {
+            bitmap -> PhotonDenoiseShaders.MAX_STRENGTH
+            luma -> PhotonDenoiseTuning.ESTIMATE_CAP.luma(level, snr)
+            else -> PhotonDenoiseTuning.ESTIMATE_CAP.chroma(level, snr)
+        }
         return PhotonDenoiseParams(
             pipeline = history.pipeline,
             noiseCoordinate = n,
@@ -278,6 +336,7 @@ internal object PhotonNoiseModel {
             shot = shot.copyOf(),
             mergeRead = mergeRead,
             mergeShot = mergeShot,
+            mergeMap = history.mergeMap,
             residual = Array(levels) { history.residualAt(it) },
             kappaLuma = rows(lumaTable),
             kappaChroma = rows(chromaTable),
@@ -291,6 +350,12 @@ internal object PhotonNoiseModel {
             bilateralLevels = tuning.bilateralLevels,
             bilateralLuma = tuning.bilateralLuma,
             bilateralChroma = tuning.bilateralChroma,
+            imageSnr = snr,
+            signal = signal,
+            strengthCapLuma = FloatArray(levels) { cap(it, luma = true) },
+            strengthCapChroma = FloatArray(levels) { cap(it, luma = false) },
+            strengthTable = strengthTable,
+            historySignal = history.signal,
             lumaStrength = lumaStrength,
             chromaStrength = chromaStrength,
             lensShading = lensShading,

@@ -518,6 +518,9 @@ internal class GlesMgcRawSpatialStacker(
     private var sabreCopyMaskProgram = 0
     private var sabreCopyAlphaProgram = 0
     private var sabreDehomogenizeProgram = 0
+
+    /** §2.2 merge variance accumulator of the merge in flight; released with the merge. */
+    private var mergeNoise: PhotonMergeNoise? = null
     private var sabreOutputTransformProgram = 0
     private var currentMergeCovariance = 0
     private var mergeRgbProgram = 0
@@ -820,11 +823,15 @@ internal class GlesMgcRawSpatialStacker(
                 RawDenoisePipeline.SPATIAL,
                 referenceCalibration.cameraRgbReadNoise,
                 referenceCalibration.cameraRgbShotNoise,
-            )
-            fun admitMergeNoise(calibration: FrameCalibration) = photonMergeNoise.add(
+                width,
+                height,
+            ).also { mergeNoise = it }
+            // [acceptance] is the weight texture the merge samples for this frame (0: none).
+            fun admitMergeNoise(calibration: FrameCalibration, acceptance: Int) = photonMergeNoise.add(
                 calibration.globalFrameWeight,
                 calibration.cameraRgbReadNoise,
                 calibration.cameraRgbShotNoise,
+                acceptance,
             )
             PLog.i(
                 TAG,
@@ -1539,18 +1546,19 @@ internal class GlesMgcRawSpatialStacker(
                         ),
                     )
                 }
-                admitMergeNoise(referenceCalibration)
+                val baseAcceptance = when {
+                    identityTemporalWeights -> identityWeight
+                    outputMode == MgcSpatialOutputMode.RGB -> bentoRgbBaseRejection
+                    else -> bentoBaseWeight
+                }
+                admitMergeNoise(referenceCalibration, baseAcceptance)
                 strengthCapture?.let { capture ->
                     captureStrengthFrame(
                         capture = capture,
                         frameIndex = capturedFrameIndex++,
                         calibration = referenceCalibration,
                         alignmentTexture = zeroFlow,
-                        rejectionTexture = when {
-                            identityTemporalWeights -> identityWeight
-                            outputMode == MgcSpatialOutputMode.RGB -> bentoRgbBaseRejection
-                            else -> bentoBaseWeight
-                        },
+                        rejectionTexture = baseAcceptance,
                         identityRejection = identityTemporalWeights,
                     )
                 }
@@ -1580,23 +1588,23 @@ internal class GlesMgcRawSpatialStacker(
                         ),
                     )
                 }
-                admitMergeNoise(checkNotNull(bentoCalibration))
+                val shortAcceptance = when {
+                    identityTemporalWeights -> identityWeight
+                    // bentoMask is on the RAW/2 guide domain. RGB AOT consumes an
+                    // exact RAW/4 rejection/acceptance plane, so use the already
+                    // resampled selected-short weight instead of cropping the RAW/2
+                    // texture through strengthRejection's exact-domain texelFetch.
+                    outputMode == MgcSpatialOutputMode.RGB -> diagnosticBentoShortWeight
+                    else -> bentoShortWeight
+                }
+                admitMergeNoise(checkNotNull(bentoCalibration), shortAcceptance)
                 strengthCapture?.let { capture ->
                     captureStrengthFrame(
                         capture = capture,
                         frameIndex = capturedFrameIndex++,
                         calibration = checkNotNull(bentoCalibration),
                         alignmentTexture = bentoBayerAlignmentTexture,
-                        rejectionTexture = when {
-                            identityTemporalWeights -> identityWeight
-                            // bentoMask is on the RAW/2 guide domain. RGB AOT consumes an
-                            // exact RAW/4 rejection/acceptance plane, so use the already
-                            // resampled selected-short weight instead of cropping the RAW/2
-                            // texture through strengthRejection's exact-domain texelFetch.
-                            outputMode == MgcSpatialOutputMode.RGB ->
-                                diagnosticBentoShortWeight
-                            else -> bentoShortWeight
-                        },
+                        rejectionTexture = shortAcceptance,
                         identityRejection = identityTemporalWeights,
                     )
                 }
@@ -1627,7 +1635,8 @@ internal class GlesMgcRawSpatialStacker(
                         ),
                     )
                 }
-                admitMergeNoise(referenceCalibration)
+                // Merged without a frame weight texture: acceptance 1 everywhere.
+                admitMergeNoise(referenceCalibration, 0)
                 strengthCapture?.let { capture ->
                     captureStrengthFrame(
                         capture = capture,
@@ -1806,18 +1815,19 @@ internal class GlesMgcRawSpatialStacker(
                             ),
                         )
                     }
-                    admitMergeNoise(prepared.calibration)
+                    val frameAcceptance = if (outputMode == MgcSpatialOutputMode.RGB) {
+                        rgbAotRejection
+                    } else {
+                        mergeWeight
+                    }
+                    admitMergeNoise(prepared.calibration, frameAcceptance)
                     strengthCapture?.let { capture ->
                         captureStrengthFrame(
                             capture = capture,
                             frameIndex = capturedFrameIndex++,
                             calibration = prepared.calibration,
                             alignmentTexture = prepared.bayerAlignmentTexture,
-                            rejectionTexture = if (outputMode == MgcSpatialOutputMode.RGB) {
-                                rgbAotRejection
-                            } else {
-                                mergeWeight
-                            },
+                            rejectionTexture = frameAcceptance,
                             identityRejection = identityTemporalWeights,
                         )
                     }
@@ -1971,7 +1981,10 @@ internal class GlesMgcRawSpatialStacker(
                 },
                 lensShadingCorrectionApplied = lensShadingCorrectionApplied,
                 mergedFrameCount = mergedFrames,
-                denoiseHistory = photonMergeNoise.history(outputExposure.normalizationScale),
+                denoiseHistory = photonMergeNoise.history(
+                    bayerKernelTuning.referenceSignal,
+                    outputExposure.normalizationScale,
+                ),
                 mgcSharpenTuningSnr = bayerKernelTuning.referenceSnr,
                 mgcSharpenAttenuationScale = finishRawSharpenAttenuationScale,
                 mgcSpatialReferenceOnlyDiagnostic = referenceOnly,
@@ -2155,8 +2168,11 @@ internal class GlesMgcRawSpatialStacker(
                 RawDenoisePipeline.SABRE,
                 referenceCalibration.cameraRgbReadNoise,
                 referenceCalibration.cameraRgbShotNoise,
-            ).apply {
-                add(1f, referenceCalibration.cameraRgbReadNoise, referenceCalibration.cameraRgbShotNoise)
+                width,
+                height,
+            ).also { mergeNoise = it }.apply {
+                // The reference merges without a frame weight texture (useFrameWeight = false).
+                add(1f, referenceCalibration.cameraRgbReadNoise, referenceCalibration.cameraRgbShotNoise, 0)
             }
             val sabreResolveFinalBlackLevel =
                 sabreResolveBlackLevel(referenceCalibration.blackLevels)
@@ -2229,7 +2245,6 @@ internal class GlesMgcRawSpatialStacker(
                     referenceExposure / validExposureProduct(frame.exposureProduct)
                     ).toFloat().coerceIn(MIN_EXPOSURE_SCALE, MAX_EXPOSURE_SCALE)
                 val calibration = calibrationForFrame(frame, exposureScale, kernelTuning)
-                photonMergeNoise.add(1f, calibration.cameraRgbReadNoise, calibration.cameraRgbShotNoise)
                 uploadRaw(images[index], currentRaw, "Sabre frame $index")
                 renderSabreExtract(currentRaw, currentExtracted, extractedWidth, extractedHeight)
                 val noiseTexture = createSabreNoiseLut(referenceCalibration, calibration)
@@ -2304,6 +2319,7 @@ internal class GlesMgcRawSpatialStacker(
                     coverageHeight,
                     accumulatedWeightScale,
                 )
+                photonMergeNoise.add(1f, calibration.cameraRgbReadNoise, calibration.cameraRgbShotNoise, frameWeight)
                 renderSabreMerge(
                     extracted = currentExtracted,
                     flow = flow,
@@ -2497,7 +2513,7 @@ internal class GlesMgcRawSpatialStacker(
                 },
                 lensShadingCorrectionApplied = hasLensShading(),
                 mergedFrameCount = frames.size,
-                denoiseHistory = photonMergeNoise.history(),
+                denoiseHistory = photonMergeNoise.history(kernelTuning.referenceSignal),
                 mgcSharpenTuningSnr = kernelTuning.referenceSnr,
                 mgcSharpenAttenuationScale = sabreResolveParameters.demosaicSharpness,
             )
@@ -9082,6 +9098,8 @@ internal class GlesMgcRawSpatialStacker(
 
     private fun release() {
         if (eglDisplay != EGL14.EGL_NO_DISPLAY) {
+            mergeNoise?.release()
+            mergeNoise = null
             noiseLutCache.clear()
             globalAlignment?.release()
             globalAlignment = null

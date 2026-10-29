@@ -32,7 +32,8 @@ internal object PhotonDenoiseDump {
             SystemPropertiesUtil.get("debug.photon.denoise.dump")?.toBooleanStrictOrNull() == true
 
     /**
-     * Dumps [inputTexture] (RGBA16F camera RGB as the denoiser receives it) with its metadata
+     * Dumps [inputTexture] (RGBA16F camera RGB, or linear sRGB for a Bitmap with [metadata] null,
+     * as the denoiser receives it) with its metadata
      * and the noise model [params] (`<stem>.params.json`, read by tools/photon_denoise), and,
      * when [parityEnabled], the pass-by-pass parity dump. [lensShadingSource] names where the
      * LSC gains in the pixels come from ("merge", "demosaic"). Must run on the GL thread that
@@ -44,7 +45,7 @@ internal object PhotonDenoiseDump {
         inputTexture: Int,
         width: Int,
         height: Int,
-        metadata: RawMetadata,
+        metadata: RawMetadata?,
         params: PhotonDenoiseParams,
         lensShadingSource: String?,
     ) {
@@ -101,21 +102,31 @@ internal object PhotonDenoiseDump {
         val denoiser = PhotonMultiScaleDenoiser()
         val startNs = System.nanoTime()
         runCatching {
-            val output = denoiser.denoise(inputTexture, width, height, params) { name, texture, w, h, float32 ->
-                val buffer = readTexture(texture, w, h, float32)
-                val suffix = if (float32) "f32" else "f16"
-                FileOutputStream(File(directory, "$stem.$name.$suffix")).use { Channels.newChannel(it).write(buffer) }
-                passes.put(JSONObject().apply {
-                    put("name", name)
-                    put("width", w)
-                    put("height", h)
-                    put("format", suffix)
-                })
-            } ?: error("Photon denoiser programs are unavailable")
+            var strength: FloatArray? = null
+            val sink = object : PhotonMultiScaleDenoiser.PassSink {
+                override fun onPass(name: String, textureId: Int, width: Int, height: Int, float32: Boolean) {
+                    val buffer = readTexture(textureId, width, height, float32)
+                    val suffix = if (float32) "f32" else "f16"
+                    FileOutputStream(File(directory, "$stem.$name.$suffix")).use { Channels.newChannel(it).write(buffer) }
+                    passes.put(JSONObject().apply {
+                        put("name", name)
+                        put("width", width)
+                        put("height", height)
+                        put("format", suffix)
+                    })
+                }
+
+                override fun onStrength(table: FloatArray) {
+                    strength = table
+                }
+            }
+            val output = denoiser.denoise(inputTexture, width, height, params, sink = sink)
+                ?: error("Photon denoiser programs are unavailable")
             GLES30.glDeleteTextures(1, intArrayOf(output), 0)
             File(directory, "$stem.photon.json").writeText(JSONObject().apply {
                 put("params", params.toJson())
                 put("passes", passes)
+                strength?.let { put("strength", JSONArray(it.map(Float::toDouble))) }
             }.toString(2))
             PLog.i(TAG, "Photon parity dumped: $stem passes=${passes.length()} " +
                 "ms=${(System.nanoTime() - startNs) / 1_000_000L}")
@@ -126,7 +137,7 @@ internal object PhotonDenoiseDump {
     private fun describe(
         width: Int,
         height: Int,
-        metadata: RawMetadata,
+        metadata: RawMetadata?,
         params: PhotonDenoiseParams,
         lensShadingSource: String?,
     ): JSONObject = JSONObject().apply {
@@ -138,12 +149,19 @@ internal object PhotonDenoiseDump {
         put("originY", params.originY)
         put("fullWidth", params.fullWidth)
         put("fullHeight", params.fullHeight)
-        put("cfaPattern", metadata.cfaPattern)
-        put("frameCount", metadata.frameCount)
-        put("iso", metadata.iso)
-        put("whiteBalanceGains", JSONArray(metadata.whiteBalanceGains.toList()))
-        put("noiseProfileLayout", metadata.noiseProfileLayout.name)
-        put("channelNoiseProfile", JSONArray(metadata.channelNoiseProfile.toList()))
+        // A Bitmap input (§9) has no RAW metadata: its pixels are linear sRGB and its profile is the
+        // nominal one in params.
+        if (metadata != null) {
+            put("cfaPattern", metadata.cfaPattern)
+            put("frameCount", metadata.frameCount)
+            put("iso", metadata.iso)
+            put("whiteBalanceGains", JSONArray(metadata.whiteBalanceGains.toList()))
+            put("noiseProfileLayout", metadata.noiseProfileLayout.name)
+            put("channelNoiseProfile", JSONArray(metadata.channelNoiseProfile.toList()))
+        } else {
+            put("frameCount", 1)
+            put("whiteBalanceGains", JSONArray(listOf(1.0, 1.0, 1.0, 1.0)))
+        }
         put("profileRgbRead", JSONArray(params.read.toList()))
         put("profileRgbShot", JSONArray(params.shot.toList()))
         val lensShading = params.lensShading

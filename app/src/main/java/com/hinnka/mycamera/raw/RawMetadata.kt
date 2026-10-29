@@ -162,6 +162,12 @@ data class RawMetadata(
     val denoiseHistory: RawDenoiseHistory? = null,
 
     /**
+     * 本次渲染测得的平均绿色信号（归一化、未白平衡，MGC EstimateSnr 的均值），用于降噪的整图 SNR，
+     * 见 docs/photon-multiscale-denoise.md §5.1。仅进程内；没有 CPU 像素时为 null。
+     */
+    val denoiseSignal: Float? = null,
+
+    /**
      * 数字增益 (Post RAW Boost)
      */
     val postRawSensitivityBoost: Float = 1.0f,
@@ -1172,6 +1178,7 @@ data class RawMetadata(
         if (!cameraWhite.contentEquals(other.cameraWhite)) return false
         if (appliedLensShading != other.appliedLensShading) return false
         if (denoiseHistory != other.denoiseHistory) return false
+        if (denoiseSignal != other.denoiseSignal) return false
         if (baselineExposure != other.baselineExposure) return false
         if (shadowScale != other.shadowScale) return false
         if (iso != other.iso) return false
@@ -1208,6 +1215,7 @@ data class RawMetadata(
         result = 31 * result + (lensShadingMapGrid?.contentHashCode() ?: 0)
         result = 31 * result + (appliedLensShading?.hashCode() ?: 0)
         result = 31 * result + (denoiseHistory?.hashCode() ?: 0)
+        result = 31 * result + (denoiseSignal?.hashCode() ?: 0)
         result = 31 * result + postRawSensitivityBoost.hashCode()
         result = 31 * result + baselineExposure.hashCode()
         result = 31 * result + shadowScale.hashCode()

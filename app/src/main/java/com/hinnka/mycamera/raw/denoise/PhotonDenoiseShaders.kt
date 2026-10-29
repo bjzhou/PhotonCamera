@@ -1,6 +1,7 @@
 package com.hinnka.mycamera.raw.denoise
 
 import com.hinnka.mycamera.processor.GlesComputeWorkGroup
+import com.hinnka.mycamera.raw.RawDenoiseHistory
 
 /**
  * GLES 3.1 compute passes of the Photon denoiser (docs/photon-multiscale-denoise.md §3–§8, §10).
@@ -11,6 +12,21 @@ import com.hinnka.mycamera.processor.GlesComputeWorkGroup
  */
 internal object PhotonDenoiseShaders {
     private const val LOCAL = GlesComputeWorkGroup.IMAGE_TILE_SIZE
+
+    // §5.1 strength table and estimate; mirrored by tools/photon_denoise/photon_denoise.py.
+    const val STRENGTH_BINS = RawDenoiseHistory.STRENGTH_BINS
+    const val HIST_BUCKETS = 64
+    const val ESTIMATE_BLOCK = 8
+    private const val STRENGTH_LOW = "-8.0"
+    private const val HIST_LOW = "-12.0"
+    private const val HIST_HIGH = "8.0"
+    private const val MIN_SAMPLES = 200
+    private const val CHI2_MEDIAN = "0.45493642"
+    const val MAX_STRENGTH = 4096f
+    const val ESTIMATE_PASSES = 3
+    private const val FLAT_GATE = "0.5"
+    private const val SPIKE = "1.5"
+    private const val MAX_GROWTH = "2.0"
 
     private val COMMON = """
         precision highp float;
@@ -80,6 +96,21 @@ internal object PhotonDenoiseShaders {
             return vec3(g.r, 0.5 * (g.g + g.b), g.a);
         }
 
+        // §2.2 merge variance ratios (m_r, m_s): manual bilinear (clamp to edge) of the whole-image map.
+        uniform sampler2D uMergeMap;
+        uniform ivec2 uMergeSize;
+
+        vec2 mergeRatio(vec2 globalCentre) {
+            vec2 mapSize = vec2(uMergeSize);
+            vec2 t = clamp(globalCentre / vec2(uFullSize) * mapSize - 0.5, vec2(0.0), mapSize - 1.0);
+            ivec2 i0 = ivec2(floor(t));
+            ivec2 i1 = min(i0 + 1, uMergeSize - 1);
+            vec2 f = t - vec2(i0);
+            vec2 top = mix(texelFetch(uMergeMap, i0, 0).rg, texelFetch(uMergeMap, ivec2(i1.x, i0.y), 0).rg, f.x);
+            vec2 bottom = mix(texelFetch(uMergeMap, ivec2(i0.x, i1.y), 0).rg, texelFetch(uMergeMap, i1, 0).rg, f.x);
+            return mix(top, bottom, f.y);
+        }
+
         // Level-l pixel centre in the full frame: origin + (p + 0.5) * 2^l.
         vec2 levelCentre(ivec2 p, int level) {
             return vec2(uOrigin) + (vec2(p) + 0.5) * float(1 << level);
@@ -94,6 +125,59 @@ internal object PhotonDenoiseShaders {
         vec3 working0(ivec2 p) {
             vec3 rgb = texelFetch(uInput, p, 0).rgb;
             return uScale * yccFromRgb(uWb * (rgb / lscGain(levelCentre(p, 0))));
+        }
+    """
+
+    /** ↑2 of a coarse level at a fine pixel (uCoarseSize is the coarse level's size). */
+    private val UPSAMPLE = """
+        vec3 upAt(sampler2D coarse, ivec2 p) {
+            float y = 0.0;
+            vec2 c = vec2(0.0);
+            for (int j = -3; j <= 3; ++j) {
+                if (((p.y - j) & 1) != 0) continue;
+                int cy = mirrorIndex((p.y - j) / 2, uCoarseSize.y);
+                for (int i = -3; i <= 3; ++i) {
+                    if (((p.x - i) & 1) != 0) continue;
+                    int cx = mirrorIndex((p.x - i) / 2, uCoarseSize.x);
+                    vec3 v = texelFetch(coarse, ivec2(cx, cy), 0).rgb;
+                    y += 4.0 * LUMA_TAPS[i + 3] * LUMA_TAPS[j + 3] * v.x;
+                    if (abs(i) <= 2 && abs(j) <= 2) c += 4.0 * CHROMA_TAPS[i + 2] * CHROMA_TAPS[j + 2] * v.yz;
+                }
+            }
+            return vec3(y, c);
+        }
+    """
+
+    /** §2.1 (with §2.2, §2.4) noise at signal base without the §5.1 strength, zero where clipped. */
+    private val MODEL_NOISE = """
+        uniform int uLevel;
+        uniform vec3 uRead;
+        uniform vec3 uShot;
+        uniform vec3 uResidual;
+        uniform float uKappaLuma[4];
+        uniform float uKappaChroma[4];
+
+        // (σ²_Y, σ²_Cb, σ²_Cr, σ_CbCr) at level pixel p; mu receives the camera signal.
+        vec4 modelNoise(ivec2 p, vec3 base, out vec3 mu) {
+            mu = max(rgbFromYcc(base) / uScale / uWb, vec3(0.0));
+            vec2 merge = mergeRatio(levelCentre(p, uLevel));
+            vec3 v = merge.x * uRead + merge.y * uShot * mu;
+            vec3 aY = uScale * vec3(0.25, 0.5, 0.25) * uWb;
+            vec3 aCb = uScale * vec3(0.0, -1.0, 1.0) * uWb;
+            vec3 aCr = uScale * vec3(1.0, -1.0, 0.0) * uWb;
+            int phase = (p.y & 1) * 2 + (p.x & 1);
+            float kl = uKappaLuma[phase];
+            float kc = uKappaChroma[phase];
+            vec3 t = sqrt(uResidual);
+            float pointLuma = dot(aY * aY, v);
+            vec4 noise = vec4(
+                kl * pointLuma * t.x * t.x,
+                kc * dot(aCb * aCb, v) * t.y * t.y,
+                kc * dot(aCr * aCr, v) * t.z * t.z,
+                kc * dot(aCb * aCr, v) * t.y * t.z);
+            vec3 camera = mu * lscGain(levelCentre(p, uLevel));
+            if (any(greaterThanEqual(camera, vec3(CLIP_LEVEL)))) noise = vec4(0.0);
+            return noise;
         }
     """
 
@@ -171,6 +255,229 @@ internal object PhotonDenoiseShaders {
             }
     """
 
+    /**
+     * §5.1 estimate, steps 1–3 at one level: a work group histograms ESTIMATE_BLOCK² samples per
+     * invocation into shared memory and adds its non-zero counts to the global histogram
+     * [level][bin][Y, Cb, Cr][bucket]. Samples: every uStride-th pixel, each 2×2 block of samples
+     * offset so that all four Bayer phases occur. After the first pass the flat gate's noise is
+     * scaled by the median luma strength of this level in the previous pass's table.
+     */
+    val ESTIMATE = """
+        #version 310 es
+        $COMMON
+        $LENS_SHADING
+        $WORKING
+        uniform sampler2D uFine;
+        uniform int uFineIsInput;
+        uniform sampler2D uCoarse;
+        uniform ivec2 uSize;
+        uniform ivec2 uCoarseSize;
+        uniform int uStride;
+        $UPSAMPLE
+        $MODEL_NOISE
+        layout(std430, binding = 0) buffer Histogram { uint uHistogram[]; };
+        layout(std430, binding = 1) readonly buffer PreviousTable { float uPrevious[]; };
+        uniform int uHasPrevious;
+
+        const int ENTRIES = $STRENGTH_BINS * 3 * $HIST_BUCKETS;
+        const int BLOCK = $ESTIMATE_BLOCK;
+        shared uint sHistogram[ENTRIES];
+
+        $MEDIAN8
+
+        float gateScale() {
+            if (uHasPrevious == 0) return 1.0;
+            float v[8];
+            for (int b = 0; b < 8; ++b) {
+                float value = uPrevious[(uLevel * $STRENGTH_BINS + b) * 3];
+                v[b] = value;
+            }
+            return median8(v);
+        }
+
+        void addSample(ivec2 p, float gate) {
+            vec3 fine = uFineIsInput == 1 ? working0(p) : texelFetch(uFine, p, 0).rgb;
+            vec3 base = upAt(uCoarse, p);
+            vec3 lap = fine - base;
+            vec3 mu;
+            vec4 noise = modelNoise(p, base, mu);
+            if (!(noise.x > 0.0 && noise.y > 0.0 && noise.z > 0.0 && mu.g > 0.0)) return;
+            ivec2 c = p / 2;
+            float gx = 0.25 * (texelFetch(uCoarse, ivec2(mirrorIndex(c.x + 1, uCoarseSize.x), c.y), 0).x -
+                texelFetch(uCoarse, ivec2(mirrorIndex(c.x - 1, uCoarseSize.x), c.y), 0).x);
+            float gy = 0.25 * (texelFetch(uCoarse, ivec2(c.x, mirrorIndex(c.y + 1, uCoarseSize.y)), 0).x -
+                texelFetch(uCoarse, ivec2(c.x, mirrorIndex(c.y - 1, uCoarseSize.y)), 0).x);
+            if (!(sqrt(gx * gx + gy * gy) < $FLAT_GATE * sqrt(gate * noise.x))) return;
+            int bin = clamp(int(floor(log2(max(base.x / uScale, 1e-12)) - $STRENGTH_LOW)), 0, $STRENGTH_BINS - 1);
+            const float BUCKET_SCALE = float($HIST_BUCKETS) / ($HIST_HIGH - $HIST_LOW);
+            for (int ch = 0; ch < 3; ++ch) {
+                float v = lap[ch] * lap[ch] / noise[ch];
+                int k = clamp(int(floor((log2(max(v, 1e-30)) - $HIST_LOW) * BUCKET_SCALE)), 0, $HIST_BUCKETS - 1);
+                atomicAdd(sHistogram[(bin * 3 + ch) * $HIST_BUCKETS + k], 1u);
+            }
+        }
+
+        void main() {
+            int lid = int(gl_LocalInvocationIndex);
+            for (int i = lid; i < ENTRIES; i += $LOCAL * $LOCAL) sHistogram[i] = 0u;
+            memoryBarrierShared();
+            barrier();
+            ivec2 sampleSize = (uSize + uStride - 1) / uStride;
+            ivec2 origin = ivec2(gl_WorkGroupID.xy) * ($LOCAL * BLOCK);
+            ivec2 lane = ivec2(gl_LocalInvocationID.xy);
+            float gate = gateScale();
+            for (int by = 0; by < BLOCK; ++by) {
+                for (int bx = 0; bx < BLOCK; ++bx) {
+                    ivec2 q = origin + ivec2(bx, by) * $LOCAL + lane;
+                    if (any(greaterThanEqual(q, sampleSize))) continue;
+                    ivec2 p = uStride > 1 ? q * uStride + ivec2(q.y & 1, q.x & 1) : q;
+                    if (any(greaterThanEqual(p, uSize))) continue;
+                    addSample(p, gate);
+                }
+            }
+            memoryBarrierShared();
+            barrier();
+            for (int i = lid; i < ENTRIES; i += $LOCAL * $LOCAL) {
+                uint n = sHistogram[i];
+                if (n != 0u) atomicAdd(uHistogram[uLevel * ENTRIES + i], n);
+            }
+        }
+    """.trimIndent()
+
+    /** Median of eight values (sorted copy, mean of the middle pair). */
+    private const val MEDIAN8 = """
+        float median8(float v[8]) {
+            for (int i = 1; i < 8; ++i) {
+                float x = v[i];
+                int j = i - 1;
+                while (j >= 0 && v[j] > x) {
+                    v[j + 1] = v[j];
+                    --j;
+                }
+                v[j + 1] = x;
+            }
+            return (v[3] + v[4]) * 0.5;
+        }
+    """
+
+    /**
+     * §5.1 estimate, step 4: one lane per channel turns the histograms into the table — medians,
+     * fill across bins, bound against the 5-bin neighbourhood median, growth continuation for an
+     * unmeasured level, clamp and cap.
+     */
+    val RESOLVE = """
+        #version 310 es
+        precision highp float;
+        precision highp int;
+        layout(local_size_x = 128) in;
+        layout(std430, binding = 0) readonly buffer Histogram { uint uHistogram[]; };
+        layout(std430, binding = 1) writeonly buffer StrengthTable { float uStrength[]; };
+        uniform int uLevels;
+        uniform float uCapLuma[${PhotonDenoiseTuning.MAX_LEVELS}];
+        uniform float uCapChroma[${PhotonDenoiseTuning.MAX_LEVELS}];
+
+        const int BINS = $STRENGTH_BINS;
+        const int BUCKETS = $HIST_BUCKETS;
+        const float WIDTH = ($HIST_HIGH - $HIST_LOW) / float(BUCKETS);
+
+        $MEDIAN8
+
+        // Median of filled[lo..hi] (at most five values).
+        float windowMedian(float filled[BINS], int lo, int hi) {
+            float w[5];
+            int n = 0;
+            for (int i = lo; i <= hi; ++i) {
+                float x = filled[i];
+                int j = n - 1;
+                while (j >= 0 && w[j] > x) {
+                    w[j + 1] = w[j];
+                    --j;
+                }
+                w[j + 1] = x;
+                ++n;
+            }
+            return (n & 1) == 1 ? w[n / 2] : (w[n / 2 - 1] + w[n / 2]) * 0.5;
+        }
+
+        void main() {
+            int ch = int(gl_LocalInvocationID.x);
+            if (ch >= 3) return;
+            float upper[BINS];
+            float upper2[BINS];
+            for (int level = 0; level < uLevels; ++level) {
+                float measured[BINS];
+                int first = -1;
+                int last = -1;
+                for (int b = 0; b < BINS; ++b) {
+                    int offset = ((level * BINS + b) * 3 + ch) * BUCKETS;
+                    uint n = 0u;
+                    for (int k = 0; k < BUCKETS; ++k) {
+                        uint h = uHistogram[offset + k];
+                        n += h;
+                    }
+                    measured[b] = -1.0;
+                    if (n >= ${MIN_SAMPLES}u) {
+                        float target = 0.5 * float(n);
+                        uint cumulative = 0u;
+                        for (int k = 0; k < BUCKETS; ++k) {
+                            uint h = uHistogram[offset + k];
+                            if (float(cumulative + h) >= target) {
+                                float f = (target - float(cumulative)) / float(h);
+                                measured[b] = exp2($HIST_LOW + (float(k) + f) * WIDTH) / $CHI2_MEDIAN;
+                                break;
+                            }
+                            cumulative += h;
+                        }
+                    }
+                    if (measured[b] >= 0.0) {
+                        if (first < 0) first = b;
+                        last = b;
+                    }
+                }
+                float row[BINS];
+                if (first < 0) {
+                    // A level without samples continues the growth of the two levels above.
+                    float growth = 1.0;
+                    if (level >= 2) {
+                        float ratios[8];
+                        for (int b = 0; b < BINS; ++b) ratios[b] = upper2[b] > 0.0 ? upper[b] / upper2[b] : 1.0;
+                        growth = clamp(median8(ratios), 1.0, $MAX_GROWTH);
+                    }
+                    for (int b = 0; b < BINS; ++b) row[b] = level == 0 ? 1.0 : upper[b] * growth;
+                } else {
+                    float filled[BINS];
+                    for (int b = 0; b < BINS; ++b) {
+                        if (measured[b] >= 0.0) {
+                            filled[b] = measured[b];
+                        } else if (b <= first) {
+                            filled[b] = measured[first];
+                        } else if (b >= last) {
+                            filled[b] = measured[last];
+                        } else {
+                            int lo = b - 1;
+                            while (measured[lo] < 0.0) --lo;
+                            int hi = b + 1;
+                            while (measured[hi] < 0.0) ++hi;
+                            float f = float(b - lo) / float(hi - lo);
+                            filled[b] = measured[lo] + f * (measured[hi] - measured[lo]);
+                        }
+                    }
+                    for (int b = 0; b < BINS; ++b) {
+                        float m = windowMedian(filled, max(b - 2, 0), min(b + 2, BINS - 1));
+                        row[b] = min(max(filled[b], m / $SPIKE), m * $SPIKE);
+                    }
+                }
+                float cap = min(${MAX_STRENGTH}, ch == 0 ? uCapLuma[level] : uCapChroma[level]);
+                for (int b = 0; b < BINS; ++b) {
+                    float value = clamp(row[b], 0.0, cap);
+                    uStrength[(level * BINS + b) * 3 + ch] = value;
+                    upper2[b] = level > 0 ? upper[b] : 0.0;
+                    upper[b] = value;
+                }
+            }
+        }
+    """.trimIndent()
+
     fun synthesize(debugOutputs: Boolean): String = """
         #version 310 es
         $COMMON
@@ -182,14 +489,10 @@ internal object PhotonDenoiseShaders {
         uniform sampler2D uDenoisedCoarse;
         uniform ivec2 uSize;
         uniform ivec2 uCoarseSize;
-        uniform int uLevel;
-        uniform vec3 uRead;
-        uniform vec3 uShot;
-        uniform float uMergeRead;
-        uniform float uMergeShot;
-        uniform vec3 uResidual;
-        uniform float uKappaLuma[4];
-        uniform float uKappaChroma[4];
+        $UPSAMPLE
+        $MODEL_NOISE
+        // §5.1 strength table: per level, STRENGTH_BINS luma bins of (S_Y, S_Cb, S_Cr).
+        layout(std430, binding = 0) readonly buffer StrengthTable { float uStrength[]; };
         uniform float uOutlier;
         uniform float uAlpha;
         uniform int uLumaEnabled;
@@ -222,44 +525,27 @@ internal object PhotonDenoiseShaders {
         int bandIndex(ivec2 c) { ivec2 r = c - (tileOrigin() - BAND_BORDER); return r.y * BAND_SIDE + r.x; }
         int pilotIndex(ivec2 c) { ivec2 r = c - (tileOrigin() - PILOT_BORDER); return r.y * PILOT_SIDE + r.x; }
 
-        vec3 upAt(sampler2D coarse, ivec2 p) {
-            float y = 0.0;
-            vec2 c = vec2(0.0);
-            for (int j = -3; j <= 3; ++j) {
-                if (((p.y - j) & 1) != 0) continue;
-                int cy = mirrorIndex((p.y - j) / 2, uCoarseSize.y);
-                for (int i = -3; i <= 3; ++i) {
-                    if (((p.x - i) & 1) != 0) continue;
-                    int cx = mirrorIndex((p.x - i) / 2, uCoarseSize.x);
-                    vec3 v = texelFetch(coarse, ivec2(cx, cy), 0).rgb;
-                    y += 4.0 * LUMA_TAPS[i + 3] * LUMA_TAPS[j + 3] * v.x;
-                    if (abs(i) <= 2 && abs(j) <= 2) c += 4.0 * CHROMA_TAPS[i + 2] * CHROMA_TAPS[j + 2] * v.yz;
-                }
-            }
-            return vec3(y, c);
+        // §5.1 (S_Y, S_Cb, S_Cr) of this level at base luma y: bins interpolated in log2(y / K).
+        vec3 strengthAt(float y) {
+            float x = clamp(log2(max(y / uScale, 1e-12)) - $STRENGTH_LOW - 0.5, 0.0, float($STRENGTH_BINS - 1));
+            int i0 = int(floor(x));
+            int i1 = min(i0 + 1, $STRENGTH_BINS - 1);
+            float f = x - float(i0);
+            int o0 = (uLevel * $STRENGTH_BINS + i0) * 3;
+            int o1 = (uLevel * $STRENGTH_BINS + i1) * 3;
+            vec3 s0 = vec3(uStrength[o0], uStrength[o0 + 1], uStrength[o0 + 2]);
+            vec3 s1 = vec3(uStrength[o1], uStrength[o1 + 1], uStrength[o1 + 2]);
+            return s0 + f * (s1 - s0);
         }
 
-        // Band at image pixel p: L = G_l − ↑G_{l+1}, base = ↑G̃_{l+1}, noise = §2.1.
+        // Band at image pixel p: L = G_l − ↑G_{l+1}, base = ↑G̃_{l+1}, noise = §2.1 × §5.1.
         void computeBand(ivec2 p) {
             vec3 fine = uFineIsInput == 1 ? working0(p) : texelFetch(uFine, p, 0).rgb;
             vec3 base = upAt(uDenoisedCoarse, p);
             vec3 lap = fine - upAt(uNoisyCoarse, p);
-            vec3 mu = max(rgbFromYcc(base) / uScale / uWb, vec3(0.0));
-            vec3 v = uMergeRead * uRead + uMergeShot * uShot * mu;
-            vec3 aY = uScale * vec3(0.25, 0.5, 0.25) * uWb;
-            vec3 aCb = uScale * vec3(0.0, -1.0, 1.0) * uWb;
-            vec3 aCr = uScale * vec3(1.0, -1.0, 0.0) * uWb;
-            int phase = (p.y & 1) * 2 + (p.x & 1);
-            float kl = uKappaLuma[phase];
-            float kc = uKappaChroma[phase];
-            vec3 t = sqrt(uResidual);
-            vec4 noise = vec4(
-                kl * dot(aY * aY, v) * t.x * t.x,
-                kc * dot(aCb * aCb, v) * t.y * t.y,
-                kc * dot(aCr * aCr, v) * t.z * t.z,
-                kc * dot(aCb * aCr, v) * t.y * t.z);
-            vec3 camera = mu * lscGain(levelCentre(p, uLevel));
-            if (any(greaterThanEqual(camera, vec3(CLIP_LEVEL)))) noise = vec4(0.0);
+            vec3 mu;
+            vec3 s = strengthAt(base.x);
+            vec4 noise = modelNoise(p, base, mu) * vec4(s, sqrt(s.y * s.z));
             int index = bandIndex(p);
             sLapBase[index] = uvec3(packHalf2x16(lap.xy), packHalf2x16(vec2(lap.z, base.x)), packHalf2x16(base.yz));
             sNoise[index] = noise;
