@@ -84,6 +84,30 @@ internal class GlesMgcRawFusion(
             frames.forEach { it.image.close() }
             return null
         }
+        val fastMomentsSubmission = baseFrameSelection.fastMomentsSubmission
+        return try {
+            processSelectedFrames(
+                frames = frames,
+                normalIndicesBeforeSelection = normalIndicesBeforeSelection,
+                baseFrameSelection = baseFrameSelection,
+                canReuseSpatialReferenceUpload = canReuseSpatialReferenceUpload,
+            )?.let { result ->
+                // Collected after the merge so the statistics never stall it.
+                fastMomentsSubmission?.let { submission ->
+                    result.copy(fastMomentsRawStats = submission.collect())
+                } ?: result
+            }
+        } finally {
+            fastMomentsSubmission?.release()
+        }
+    }
+
+    private fun processSelectedFrames(
+        frames: List<RawStackFrame>,
+        normalIndicesBeforeSelection: List<Int>,
+        baseFrameSelection: GlesMgcRawBaseFrameSelection,
+        canReuseSpatialReferenceUpload: Boolean,
+    ): RawStackResult? {
         val selectedBaseIndex = baseFrameSelection.referenceIndex
         val referenceFirstFrames = if (selectedBaseIndex == 0) {
             frames

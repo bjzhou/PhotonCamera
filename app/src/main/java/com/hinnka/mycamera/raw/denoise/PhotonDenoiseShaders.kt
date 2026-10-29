@@ -35,6 +35,9 @@ internal object PhotonDenoiseShaders {
 
         layout(local_size_x = $LOCAL, local_size_y = $LOCAL) in;
 
+        ivec2 groupId() { return ivec2(gl_WorkGroupID.xy); }
+        ivec2 globalId() { return groupId() * $LOCAL + ivec2(gl_LocalInvocationID.xy); }
+
         const float LUMA_TAPS[7] = float[7](
             -1.0 / 32.0, 0.0, 9.0 / 32.0, 16.0 / 32.0, 9.0 / 32.0, 0.0, -1.0 / 32.0);
         const float CHROMA_TAPS[5] = float[5](
@@ -198,7 +201,7 @@ internal object PhotonDenoiseShaders {
         }
 
         void main() {
-            ivec2 q = ivec2(gl_GlobalInvocationID.xy);
+            ivec2 q = globalId();
             if (any(greaterThanEqual(q, uCoarseSize))) return;
             float y = 0.0;
             vec2 c = vec2(0.0);
@@ -323,7 +326,7 @@ internal object PhotonDenoiseShaders {
             memoryBarrierShared();
             barrier();
             ivec2 sampleSize = (uSize + uStride - 1) / uStride;
-            ivec2 origin = ivec2(gl_WorkGroupID.xy) * ($LOCAL * BLOCK);
+            ivec2 origin = groupId() * ($LOCAL * BLOCK);
             ivec2 lane = ivec2(gl_LocalInvocationID.xy);
             float gate = gateScale();
             for (int by = 0; by < BLOCK; ++by) {
@@ -521,7 +524,7 @@ internal object PhotonDenoiseShaders {
         shared vec4 sNoise[BAND_SIDE * BAND_SIDE];
         shared uvec2 sPilot[PILOT_SIDE * PILOT_SIDE];
 
-        ivec2 tileOrigin() { return ivec2(gl_WorkGroupID.xy) * TILE; }
+        ivec2 tileOrigin() { return groupId() * TILE; }
         int bandIndex(ivec2 c) { ivec2 r = c - (tileOrigin() - BAND_BORDER); return r.y * BAND_SIDE + r.x; }
         int pilotIndex(ivec2 c) { ivec2 r = c - (tileOrigin() - PILOT_BORDER); return r.y * PILOT_SIDE + r.x; }
 
@@ -718,7 +721,7 @@ internal object PhotonDenoiseShaders {
             memoryBarrierShared();
             barrier();
 
-            ivec2 p = ivec2(gl_GlobalInvocationID.xy);
+            ivec2 p = globalId();
             if (any(greaterThanEqual(p, uSize))) return;
             ${if (debugOutputs) DEBUG_STORE else RESULT_STORE}
         }

@@ -8,6 +8,9 @@
 #include <jni.h>
 #include <limits>
 #include <memory>
+#include <new>
+#include <sys/mman.h>
+#include <unistd.h>
 #include <vector>
 
 namespace {
@@ -15,9 +18,43 @@ using Clock = std::chrono::steady_clock;
 double Milliseconds(Clock::time_point begin, Clock::time_point end) {
   return std::chrono::duration<double, std::milli>(end - begin).count();
 }
+// Anonymous mapping for the full-resolution planar Q14 YUV. Pages are zero-filled lazily on
+// first write, so there is no separate clearing pass; once BoxDownsample has consumed U/V their
+// pages are unmapped and the Y plane remains in place as the guide, without a copy.
+class PlanarYuvMapping {
+public:
+  explicit PlanarYuvMapping(size_t plane_samples)
+      : bytes_(plane_samples * 3 * sizeof(int16_t)) {
+    void *base = mmap(nullptr, bytes_, PROT_READ | PROT_WRITE,
+                      MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    if (base == MAP_FAILED)
+      throw std::bad_alloc();
+    base_ = static_cast<int16_t *>(base);
+  }
+  ~PlanarYuvMapping() {
+    if (base_)
+      munmap(base_, bytes_);
+  }
+  PlanarYuvMapping(const PlanarYuvMapping &) = delete;
+  PlanarYuvMapping &operator=(const PlanarYuvMapping &) = delete;
+  int16_t *data() const { return base_; }
+  void RetainFirstPlane(size_t plane_samples) {
+    const size_t page = size_t(sysconf(_SC_PAGESIZE));
+    const size_t keep =
+        (plane_samples * sizeof(int16_t) + page - 1) / page * page;
+    if (keep < bytes_ &&
+        munmap(reinterpret_cast<uint8_t *>(base_) + keep, bytes_ - keep) == 0)
+      bytes_ = keep;
+  }
+
+private:
+  int16_t *base_ = nullptr;
+  size_t bytes_;
+};
 struct GuidedInputs {
   int width, height, padded_width, padded_height, scale;
-  std::vector<int16_t> guide, low_guide;
+  std::unique_ptr<PlanarYuvMapping> guide;
+  std::vector<int16_t> low_guide;
 };
 void OutOfMemory(JNIEnv *env) {
   auto type = env->FindClass("java/lang/OutOfMemoryError");
@@ -62,18 +99,17 @@ Java_com_hinnka_mycamera_raw_MgcGuidedUpsample_nativePrepare(
     state->scale = scale;
     Clock::time_point allocated, converted, boxed, guides;
     std::vector<int16_t> low(ln * 3);
-    {
-      std::vector<int16_t> yuv(n * 3);
-      allocated = Clock::now();
-      if (!GuidedFloatRgbaToLinearYuv(rgba, width, height, pw, ph, wb, yuv.data()))
-        return 0;
-      converted = Clock::now();
-      if (RunGuidedBoxDownsample(yuv.data(), pw, ph, log2_scale, low.data()) != 0)
-        return 0;
-      boxed = Clock::now();
-      state->guide.assign(yuv.begin(), yuv.begin() + n);
-      // Release the two unused chroma planes before allocating low RGB.
-    }
+    state->guide = std::make_unique<PlanarYuvMapping>(n);
+    int16_t *yuv = state->guide->data();
+    allocated = Clock::now();
+    if (!GuidedFloatRgbaToLinearYuv(rgba, width, height, pw, ph, wb, yuv))
+      return 0;
+    converted = Clock::now();
+    if (RunGuidedBoxDownsample(yuv, pw, ph, log2_scale, low.data()) != 0)
+      return 0;
+    boxed = Clock::now();
+    // Release the two unused chroma planes before allocating low RGB.
+    state->guide->RetainFirstPlane(n);
     state->low_guide.assign(low.begin(), low.begin() + ln);
     guides = Clock::now();
     // The low color branch starts before CCM/DCP/tone; never downsample an
@@ -105,7 +141,7 @@ Java_com_hinnka_mycamera_raw_MgcGuidedUpsample_nativePrepare(
 extern "C" JNIEXPORT jint JNICALL
 Java_com_hinnka_mycamera_raw_MgcGuidedUpsample_nativeRender(
     JNIEnv *env, jobject, jlong handle, jobject buffer, jfloat attenuation,
-    jfloatArray points) {
+    jfloatArray points, jboolean u12_rgb_output) {
   using namespace photon::mgc_denoise;
   auto *state = reinterpret_cast<GuidedInputs *>(handle);
   if (!state || !buffer || !points || env->GetArrayLength(points) != 30 ||
@@ -114,8 +150,12 @@ Java_com_hinnka_mycamera_raw_MgcGuidedUpsample_nativeRender(
   auto *rgba = static_cast<float *>(env->GetDirectBufferAddress(buffer));
   const size_t n = size_t(state->width) * state->height;
   const size_t ln = state->low_guide.size();
+  const size_t output_samples =
+      size_t(state->width) * ((state->height + 1) & ~1) * 3;
   if (!rgba ||
-      env->GetDirectBufferCapacity(buffer) < jlong(std::max(n, ln) * 16))
+      env->GetDirectBufferCapacity(buffer) < jlong(std::max(n, ln) * 16) ||
+      env->GetDirectBufferCapacity(buffer) <
+          jlong(output_samples * sizeof(uint16_t)))
     return -1;
   float curves[30];
   env->GetFloatArrayRegion(points, 0, 30, curves);
@@ -132,26 +172,35 @@ Java_com_hinnka_mycamera_raw_MgcGuidedUpsample_nativeRender(
     }
   try {
     const auto start = Clock::now();
-    std::vector<int16_t> yuv(ln * 3);
-    std::vector<uint16_t> output(size_t(state->width) *
-                                 ((state->height + 1) & ~1) * 3);
-    if (!SharpenFloatRgbaToYuv(rgba, ln, yuv.data()))
+    // Every element below is written by its producer before it is read; skip value-init.
+    std::unique_ptr<int16_t[]> yuv(new int16_t[ln * 3]);
+    if (!SharpenFloatRgbaToYuv(rgba, ln, yuv.get()))
       return -1;
     const auto converted = Clock::now();
+    // The low-resolution input has been fully consumed, so the U12 RGB result can be written
+    // straight into the mapped transfer buffer and expanded on the GPU at upload.
+    std::unique_ptr<uint16_t[]> float_staging;
+    uint16_t *output = reinterpret_cast<uint16_t *>(rgba);
+    if (!u12_rgb_output) {
+      float_staging.reset(new uint16_t[output_samples]);
+      output = float_staging.get();
+    }
     const int result = RunGuidedUpsampleTo16Bit(
-        state->guide.data(), state->padded_width, state->padded_height,
-        state->low_guide.data(), yuv.data(), state->scale, state->width,
-        state->height, curves, attenuation, output.data());
+        state->guide->data(), state->padded_width, state->padded_height,
+        state->low_guide.data(), yuv.get(), state->scale, state->width,
+        state->height, curves, attenuation, output);
     if (result)
       return result;
     const auto reconstructed = Clock::now();
-    SharpenRgbToFloatRgba(output.data(), n, rgba);
+    if (!u12_rgb_output)
+      SharpenRgbToFloatRgba(output, n, rgba);
     const auto finish = Clock::now();
     __android_log_print(ANDROID_LOG_INFO, "PLog_MgcGuidedUpsample",
-        "render %dx%d scale=%d yuvMs=%.1f guidedMs=%.1f rgbaMs=%.1f totalNativeMs=%.1f",
-        state->width, state->height, state->scale, Milliseconds(start, converted),
-        Milliseconds(converted, reconstructed), Milliseconds(reconstructed, finish),
-        Milliseconds(start, finish));
+        "render %dx%d scale=%d output=%s yuvMs=%.1f guidedMs=%.1f rgbaMs=%.1f "
+        "totalNativeMs=%.1f",
+        state->width, state->height, state->scale, u12_rgb_output ? "u12" : "float",
+        Milliseconds(start, converted), Milliseconds(converted, reconstructed),
+        Milliseconds(reconstructed, finish), Milliseconds(start, finish));
     return 0;
   } catch (const std::bad_alloc &) {
     OutOfMemory(env);

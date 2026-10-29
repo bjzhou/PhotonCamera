@@ -25,6 +25,7 @@ internal class RawFloatTextureTransfer(private val layout: Layout = Layout.FLOAT
     private var framebuffer = 0
     private var program = 0
     private var uploadProgram = 0
+    private var uploadU12Program = 0
     private var initialized = false
     private var maxSsboBytes = 0L
     private var ssboOffsetAlignment = 1
@@ -210,17 +211,61 @@ internal class RawFloatTextureTransfer(private val layout: Layout = Layout.FLOAT
             "stripeRows=$stripeRows uploadSubmitMs=${elapsedMs(start)}")
     }
 
-    private fun dispatchStripes(computeProgram: Int, width: Int, height: Int, stripeRows: Int) {
+    /** Whether [uploadU12Rgb] can expand the mapped buffer's interleaved U12 RGB on the GPU. */
+    fun supportsU12RgbUpload(width: Int, height: Int): Boolean {
+        initialize()
+        return uploadU12Program != 0 &&
+            RawFloatTransferLayout.stripeRows(width, height, maxSsboBytes, ssboOffsetAlignment,
+                U12_RGB_BYTES_PER_PIXEL) > 0
+    }
+
+    /**
+     * Uploads interleaved uint16 RGB (U12 range, as written by the MGC 16-bit AOTs) from the
+     * transfer buffer into immutable RGBA16F storage, expanding to [0, 1] in the shader. This
+     * moves 6 instead of 16 bytes per pixel and skips the CPU float conversion.
+     */
+    fun uploadU12Rgb(texture: Int, width: Int, height: Int) {
+        require(width > 0 && height > 0 && width.toLong() * height * U12_RGB_BYTES_PER_PIXEL <= capacity)
+        val stripeRows = RawFloatTransferLayout.stripeRows(width, height, maxSsboBytes, ssboOffsetAlignment,
+            U12_RGB_BYTES_PER_PIXEL)
+        check(uploadU12Program != 0 && stripeRows > 0) { "U12 RGB upload requires compute image store" }
+        val start = System.nanoTime()
+        uploadSourcesBuffer = true
+        try {
+            GLES31.glUseProgram(uploadU12Program)
+            GLES31.glBindImageTexture(0, texture, 0, false, 0, GLES31.GL_WRITE_ONLY, GLES30.GL_RGBA16F)
+            dispatchStripes(uploadU12Program, width, height, stripeRows, U12_RGB_BYTES_PER_PIXEL)
+            GLES31.glMemoryBarrier(GLES31.GL_TEXTURE_FETCH_BARRIER_BIT or
+                GLES31.GL_FRAMEBUFFER_BARRIER_BIT or GLES31.GL_SHADER_IMAGE_ACCESS_BARRIER_BIT or
+                GLES31.GL_SHADER_STORAGE_BARRIER_BIT)
+            checkGl("upload U12 RGB texture via image store")
+        } finally {
+            GLES31.glBindImageTexture(0, 0, 0, false, 0, GLES31.GL_WRITE_ONLY, GLES30.GL_RGBA16F)
+            GLES31.glBindBufferBase(GLES31.GL_SHADER_STORAGE_BUFFER, 0, 0)
+        }
+        PLog.i(TAG, "upload layout=U12_RGB size=${width}x$height transfer=SSBO_IMAGE " +
+            "stripeRows=$stripeRows uploadSubmitMs=${elapsedMs(start)}")
+    }
+
+    private fun dispatchStripes(
+        computeProgram: Int,
+        width: Int,
+        height: Int,
+        stripeRows: Int,
+        bytesPerPixel: Int = layout.bytesPerPixel,
+    ) {
         GLES31.glUniform2i(GLES31.glGetUniformLocation(computeProgram, "uSize"), width, height)
         val rowOffsetLocation = GLES31.glGetUniformLocation(computeProgram, "uRowOffset")
         val rowsLocation = GLES31.glGetUniformLocation(computeProgram, "uRows")
-        val rowBytes = width * layout.bytesPerPixel
+        val rowBytes = width * bytesPerPixel
         for (row in 0 until height step stripeRows) {
             val rows = minOf(stripeRows, height - row)
             GLES31.glUniform1i(rowOffsetLocation, row)
             GLES31.glUniform1i(rowsLocation, rows)
+            // Word-addressed layouts need whole 32-bit words; the extra bytes stay in the buffer.
+            val rangeBytes = minOf((rows * rowBytes + 3) and 3.inv(), capacity - row * rowBytes)
             GLES31.glBindBufferRange(GLES31.GL_SHADER_STORAGE_BUFFER, 0, buffer,
-                row * rowBytes, rows * rowBytes)
+                row * rowBytes, rangeBytes)
             GLES31.glDispatchCompute((width + 7) / 8, (rows + 7) / 8, 1)
         }
     }
@@ -252,7 +297,9 @@ internal class RawFloatTextureTransfer(private val layout: Layout = Layout.FLOAT
         releaseBuffers()
         if (program != 0) GLES30.glDeleteProgram(program)
         if (uploadProgram != 0) GLES30.glDeleteProgram(uploadProgram)
-        program = 0; uploadProgram = 0; initialized = false; maxSsboBytes = 0L; ssboOffsetAlignment = 1
+        if (uploadU12Program != 0) GLES30.glDeleteProgram(uploadU12Program)
+        program = 0; uploadProgram = 0; uploadU12Program = 0
+        initialized = false; maxSsboBytes = 0L; ssboOffsetAlignment = 1
     }
 
     private fun initialize() {
@@ -278,6 +325,7 @@ internal class RawFloatTextureTransfer(private val layout: Layout = Layout.FLOAT
             if (imageUnits[0] > 0 && computeImages[0] > 0) {
                 uploadProgram = RawGlesProgram.compileCompute(
                     if (layout == Layout.HALF) UNPACK_HALF else UNPACK, "Mgc${layout}Upload")
+                uploadU12Program = RawGlesProgram.compileCompute(UNPACK_U12_RGB, "MgcU12RgbUpload")
             }
         }
     }
@@ -286,6 +334,7 @@ internal class RawFloatTextureTransfer(private val layout: Layout = Layout.FLOAT
 
     companion object {
         private const val TAG = "RawFloatTextureTransfer"
+        private const val U12_RGB_BYTES_PER_PIXEL = 6
         init { System.loadLibrary("my-native-lib") }
         private fun elapsedMs(start: Long) = (System.nanoTime() - start) / 1_000_000.0
         private fun checkGl(label: String) {
@@ -324,6 +373,31 @@ internal class RawFloatTextureTransfer(private val layout: Layout = Layout.FLOAT
                 if (p.x >= uSize.x || p.y >= uRows) return;
                 vec4 value = pixels[p.y * uSize.x + p.x];
                 imageStore(uOutput, p + ivec2(0, uRowOffset), value);
+            }
+        """.trimIndent()
+
+        // Interleaved little-endian uint16 RGB, three samples per pixel; matches the CPU
+        // SharpenRgbToFloatRgba boundary (clamp to 4095, divide by 4095, alpha 1).
+        internal val UNPACK_U12_RGB = """
+            #version 310 es
+            precision highp float;
+            precision highp int;
+            layout(local_size_x = 8, local_size_y = 8) in;
+            layout(std430, binding = 0) readonly buffer Pixels { uint words[]; };
+            layout(rgba16f, binding = 0) writeonly uniform highp image2D uOutput;
+            uniform ivec2 uSize;
+            uniform int uRowOffset;
+            uniform int uRows;
+            uint sample16(uint index) {
+                uint word = words[index >> 1u];
+                return (index & 1u) == 0u ? (word & 0xffffu) : (word >> 16u);
+            }
+            void main() {
+                ivec2 p = ivec2(gl_GlobalInvocationID.xy);
+                if (p.x >= uSize.x || p.y >= uRows) return;
+                uint base = uint(p.y * uSize.x + p.x) * 3u;
+                uvec3 rgb = min(uvec3(sample16(base), sample16(base + 1u), sample16(base + 2u)), uvec3(4095u));
+                imageStore(uOutput, p + ivec2(0, uRowOffset), vec4(vec3(rgb) / 4095.0, 1.0));
             }
         """.trimIndent()
 

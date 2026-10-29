@@ -43,6 +43,11 @@ constexpr float kMaximumInitialStepEv = 2.0f;
 constexpr float kRobustCorrectionToleranceEv = 0.025f;
 constexpr float kMinimumUsefulResponseSlope = 0.05f;
 constexpr int kMaximumSampleCount = 6;
+// HDRNet renormalizes local brightness, so output luma responds to input EV with a slope well
+// below 1 and the per-cell match rate stays low and noisy. Accept the best sample once its
+// robust correction is this small, and let the secant extrapolate further per step.
+constexpr float kHdrNetConvergedCorrectionEv = 0.05f;
+constexpr float kHdrNetExtrapolationWidths = 3.0f;
 constexpr float kScoreEqualityEpsilon = 0.000001f;
 constexpr float kSrgbTransferThreshold = 0.04045f;
 constexpr float kSrgbLinearScale = 12.92f;
@@ -600,7 +605,10 @@ public:
 
     bool HasConverged() const {
         if (!HasResult()) return false;
-        return HasRequiredGridMatchRate(BestSample().match);
+        const MatchResult& best = BestSample().match;
+        if (HasRequiredGridMatchRate(best)) return true;
+        return hdrnet_priority_configured_ && samples_.size() > 1 &&
+            std::abs(best.recommended_exposure_correction_ev) <= kHdrNetConvergedCorrectionEv;
     }
 
     const Sample& BestSample() const {
@@ -901,10 +909,13 @@ private:
                     lower.exposure_ev,
                     upper.exposure_ev);
             } else {
+                const float reach = hdrnet_priority_configured_
+                    ? width * kHdrNetExtrapolationWidths
+                    : width;
                 candidate_ev = std::clamp(
                     candidate_ev,
-                    lower.exposure_ev - width,
-                    upper.exposure_ev + width);
+                    lower.exposure_ev - reach,
+                    upper.exposure_ev + reach);
             }
             const float acquisition =
                 (brackets_optimum ? 4.0f : 3.0f) +

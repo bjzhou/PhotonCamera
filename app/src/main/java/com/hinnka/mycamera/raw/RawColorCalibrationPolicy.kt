@@ -3,6 +3,8 @@ package com.hinnka.mycamera.raw
 import android.hardware.camera2.CameraCharacteristics
 import android.hardware.camera2.params.ColorSpaceTransform
 import com.hinnka.mycamera.utils.PLog
+import java.util.Collections
+import java.util.WeakHashMap
 import kotlin.math.abs
 import kotlin.math.roundToInt
 
@@ -54,7 +56,14 @@ internal object RawColorCalibrationPolicy {
         return Selection(useForward = false, keepSlot2 = isUsableColorMatrix(colorMatrix2, illuminant2))
     }
 
-    fun fromCharacteristics(characteristics: CameraCharacteristics): CameraCalibration {
+    // CameraCharacteristics is immutable; one capture resolves the same instance many times.
+    private val characteristicsCache =
+        Collections.synchronizedMap(WeakHashMap<CameraCharacteristics, CameraCalibration>())
+
+    fun fromCharacteristics(characteristics: CameraCharacteristics): CameraCalibration =
+        characteristicsCache.getOrPut(characteristics) { resolveCharacteristics(characteristics) }
+
+    private fun resolveCharacteristics(characteristics: CameraCharacteristics): CameraCalibration {
         val illuminant1 = characteristics.get(CameraCharacteristics.SENSOR_REFERENCE_ILLUMINANT1) ?: 0
         val illuminant2 = characteristics.get(CameraCharacteristics.SENSOR_REFERENCE_ILLUMINANT2)?.toInt() ?: 0
         val cm1 = characteristics.get(CameraCharacteristics.SENSOR_COLOR_TRANSFORM1)

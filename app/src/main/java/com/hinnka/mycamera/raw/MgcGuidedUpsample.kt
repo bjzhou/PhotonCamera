@@ -72,12 +72,17 @@ internal class MgcGuidedUpsample(private val transfer: RawFloatTextureTransfer) 
     fun render(source: Int, target: Int, width: Int, height: Int, attenuation: Float, curves: FloatArray) {
         check(isPrepared && width == fullWidth && height == fullHeight)
         try {
+            val u12RgbOutput = transfer.supportsU12RgbUpload(width, height)
             transfer.read(source, lowWidth, lowHeight,
                 maxOf(width.toLong() * height, lowWidth.toLong() * lowHeight), label = "guidedRender") { rgba ->
-                val result = nativeRender(handle, rgba, attenuation, curves)
+                val result = nativeRender(handle, rgba, attenuation, curves, u12RgbOutput)
                 check(result == 0) { "MGC GuidedUpsample failed: $result" }
             }
-            transfer.upload(target, width, height)
+            if (u12RgbOutput) {
+                transfer.uploadU12Rgb(target, width, height)
+            } else {
+                transfer.upload(target, width, height)
+            }
         } finally { releaseInputs() }
     }
 
@@ -116,7 +121,8 @@ internal class MgcGuidedUpsample(private val transfer: RawFloatTextureTransfer) 
 
     private external fun nativePrepare(rgba: ByteBuffer, width: Int, height: Int,
                                       log2Downsample: Int, gains: FloatArray): Long
-    private external fun nativeRender(handle: Long, rgba: ByteBuffer, attenuation: Float, curves: FloatArray): Int
+    private external fun nativeRender(handle: Long, rgba: ByteBuffer, attenuation: Float, curves: FloatArray,
+                                      u12RgbOutput: Boolean): Int
     private external fun nativeRelease(handle: Long)
 
     companion object {

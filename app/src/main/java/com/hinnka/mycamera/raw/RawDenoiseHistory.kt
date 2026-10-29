@@ -35,6 +35,12 @@ data class RawMergeVarianceMap(
         result = 31 * result + height
         return result
     }
+    // Summary only: the full grid is thousands of floats and floods logcat.
+    override fun toString(): String {
+        if (values.isEmpty()) return "RawMergeVarianceMap(${width}x$height, empty)"
+        return "RawMergeVarianceMap(${width}x$height, min=${values.min()}, max=${values.max()}, " +
+            "mean=${values.average().toFloat()})"
+    }
 }
 
 /**
@@ -95,6 +101,11 @@ data class RawDenoiseHistory(
         result = 31 * result + (strength?.contentHashCode() ?: 0)
         return result
     }
+
+    override fun toString(): String =
+        "RawDenoiseHistory(pipeline=$pipeline, mergeRead=$mergeRead, mergeShot=$mergeShot, " +
+            "residual=${residual?.joinToString(";", "[", "]") { it.joinToString(",") }}, " +
+            "mergeMap=$mergeMap, signal=$signal, strength=${strength?.size?.let { "$it values" }})"
 
     companion object {
         /** §5.1 luma bins × (Y, Cb, Cr) per level of [strength]. */

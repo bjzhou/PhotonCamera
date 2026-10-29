@@ -1,5 +1,7 @@
 package com.hinnka.mycamera.processor
 
+import android.opengl.EGL14
+import android.opengl.EGLContext
 import android.opengl.GLES30
 import android.opengl.GLES31
 import com.hinnka.mycamera.raw.RawSceneExposureMath
@@ -37,10 +39,26 @@ internal class GlesRawAEStats(
     private val buffers = mutableListOf<Int>()
     private val uniformLocations = HashMap<Pair<Int, String>, Int>()
 
-    fun build(rawTexture: Int): GlesRawAEStatsResult {
+    private var submission: Submission? = null
+
+    /** Submits and immediately collects the statistics; owns every GL object it creates. */
+    fun build(rawTexture: Int): GlesRawAEStatsResult =
+        try {
+            submit(rawTexture)
+            collect()
+        } finally {
+            release()
+        }
+
+    /**
+     * Queues both statistics passes behind a fence without waiting for the GPU. [rawTexture] must
+     * stay alive until [collect] or [release]; every other GL object stays owned by this instance.
+     */
+    fun submit(rawTexture: Int) {
         require(rawTexture != 0)
         require(width > 0 && height > 0 && cfaPattern in 0..3 && whiteLevel > 0)
         require(blackLevel.all(Float::isFinite))
+        check(submission == null) { "GPU statistics were already submitted" }
         val buildStartNs = System.nanoTime()
         val downsample = RawSceneExposureMath.FAST_MOMENTS_RAW_STATS_DOWNSAMPLE
         check(downsample > 0 && downsample % 2 == 0) {
@@ -54,9 +72,10 @@ internal class GlesRawAEStats(
             STATS_CELL_BYTES,
             "Fast Moments block surface",
         )
+        // Read back on the CPU, so request cached host memory instead of a write-combined mapping.
         val fastBuffer = createBuffer(
             fastBufferBytes,
-            GLES30.GL_DYNAMIC_DRAW,
+            GLES30.GL_STREAM_READ,
             "Fast Moments block surface",
         )
 
@@ -73,7 +92,7 @@ internal class GlesRawAEStats(
         } else {
             0
         }
-        return try {
+        try {
             val fastProgram = linkComputeProgram(
                 GlesRawAEStatsShaders.FAST_MOMENTS,
                 "Fast Moments selected-base block reduction",
@@ -147,53 +166,21 @@ internal class GlesRawAEStats(
                 GLES31.GL_SHADER_STORAGE_BARRIER_BIT or
                     GLES31.GL_BUFFER_UPDATE_BARRIER_BIT,
             )
-            GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, 0)
-            GLES31.glBindBufferBase(GLES31.GL_SHADER_STORAGE_BUFFER, 0, 0)
-            GLES31.glBindBufferBase(GLES31.GL_SHADER_STORAGE_BUFFER, 1, 0)
-            GLES31.glUseProgram(0)
             checkGlError("submit selected-base GPU statistics")
-            val submitMs = elapsedMs(buildStartNs)
-            val gpuWaitMs = GlesGpuCompletion.awaitSubmittedWork(
-                "selected-base GPU statistics",
-                ::checkGlError,
-            )
-
-            val mapStartNs = System.nanoTime()
-            val fastReadback = mapBuffer(
-                fastBuffer,
-                fastBufferBytes,
-                "Fast Moments block surface",
-            ) { mapped -> readFastStats(mapped, statsPixelCount) }
-            val baseSensorRgb = if (meteringBuffer != 0) {
-                mapBuffer(
-                    meteringBuffer,
-                    meteringPixelCount * VEC4_BYTES,
-                    "base metering",
-                ) { mapped -> readBaseFrameSensorRgb(mapped, meteringPixelCount) }
-            } else {
-                null
-            }
-            val mapMs = elapsedMs(mapStartNs)
-            val stats = RawSceneAERawStats(
-                width = statsWidth,
-                height = statsHeight,
-                sourceWidth = width,
-                sourceHeight = height,
-                channelMax = fastReadback,
-                sensorNormalized = true,
-                sourceBounds = floatArrayOf(0f, 0f, 1f, 1f),
-                sourceRotationDegrees = 0,
-                baseFrameMetering = baseSensorRgb?.let { sensorRgb ->
-                    RawSceneFastMomentsMeteringFrame(
-                        sensorRgb = sensorRgb,
-                    )
-                },
-            )
-            GlesRawAEStatsResult(
-                stats = stats,
-                submitMs = submitMs,
-                gpuWaitMs = gpuWaitMs,
-                mapMs = mapMs,
+            val fence = GLES30.glFenceSync(GLES30.GL_SYNC_GPU_COMMANDS_COMPLETE, 0)
+            check(fence != 0L) { "Unable to create selected-base GPU statistics fence" }
+            GLES30.glFlush()
+            submission = Submission(
+                context = EGL14.eglGetCurrentContext(),
+                fence = fence,
+                fastBuffer = fastBuffer,
+                fastBufferBytes = fastBufferBytes,
+                meteringBuffer = meteringBuffer,
+                meteringPixelCount = meteringPixelCount,
+                statsWidth = statsWidth,
+                statsHeight = statsHeight,
+                statsPixelCount = statsPixelCount,
+                submitMs = elapsedMs(buildStartNs),
             )
         } finally {
             GLES30.glActiveTexture(GLES30.GL_TEXTURE0)
@@ -202,44 +189,101 @@ internal class GlesRawAEStats(
             GLES31.glBindBufferBase(GLES31.GL_SHADER_STORAGE_BUFFER, 1, 0)
             GLES31.glBindBuffer(GLES31.GL_SHADER_STORAGE_BUFFER, 0)
             GLES31.glUseProgram(0)
+        }
+    }
+
+    /** Waits for the submitted fence and reads both surfaces; requires the submitting context. */
+    fun collect(): GlesRawAEStatsResult {
+        val pending = checkNotNull(submission) { "GPU statistics were not submitted" }
+        check(EGL14.eglGetCurrentContext() == pending.context) {
+            "GPU statistics must be collected on the submitting EGL context"
+        }
+        val gpuWaitMs = GlesGpuCompletion.awaitSync(pending.fence, "selected-base GPU statistics")
+        checkGlError("GPU completion fence selected-base GPU statistics")
+
+        val mapStartNs = System.nanoTime()
+        val fastReadback = mapBuffer(
+            pending.fastBuffer,
+            pending.fastBufferBytes,
+            "Fast Moments block surface",
+        ) { mapped -> readFastStats(mapped, pending.statsPixelCount) }
+        val baseSensorRgb = if (pending.meteringBuffer != 0) {
+            mapBuffer(
+                pending.meteringBuffer,
+                pending.meteringPixelCount * VEC4_BYTES,
+                "base metering",
+            ) { mapped -> readBaseFrameSensorRgb(mapped, pending.meteringPixelCount) }
+        } else {
+            null
+        }
+        val mapMs = elapsedMs(mapStartNs)
+        val stats = RawSceneAERawStats(
+            width = pending.statsWidth,
+            height = pending.statsHeight,
+            sourceWidth = width,
+            sourceHeight = height,
+            channelMax = fastReadback,
+            sensorNormalized = true,
+            sourceBounds = floatArrayOf(0f, 0f, 1f, 1f),
+            sourceRotationDegrees = 0,
+            baseFrameMetering = baseSensorRgb?.let { sensorRgb ->
+                RawSceneFastMomentsMeteringFrame(
+                    sensorRgb = sensorRgb,
+                )
+            },
+        )
+        return GlesRawAEStatsResult(
+            stats = stats,
+            submitMs = pending.submitMs,
+            gpuWaitMs = gpuWaitMs,
+            mapMs = mapMs,
+        )
+    }
+
+    /**
+     * Deletes the fence, programs and buffers. Idempotent. Off the submitting context the GL names
+     * cannot be addressed, so they are left to that context's own teardown.
+     */
+    fun release() {
+        val pending = submission
+        submission = null
+        val current = EGL14.eglGetCurrentContext()
+        val canDelete = current != EGL14.EGL_NO_CONTEXT &&
+            (pending == null || current == pending.context)
+        if (canDelete) {
+            pending?.let { GLES30.glDeleteSync(it.fence) }
             programs.forEach { GLES31.glDeleteProgram(it) }
             if (buffers.isNotEmpty()) {
                 GLES31.glDeleteBuffers(buffers.size, buffers.toIntArray(), 0)
             }
-            programs.clear()
-            buffers.clear()
-            uniformLocations.clear()
         }
+        programs.clear()
+        buffers.clear()
+        uniformLocations.clear()
     }
 
     private fun readFastStats(mapped: ByteBuffer, pixelCount: Int): FloatArray {
+        // One bulk copy out of the mapping; per-element reads of GPU-visible memory are slow.
+        val cells = FloatArray(pixelCount * STATS_CELL_FLOATS)
+        mapped.asFloatBuffer().get(cells)
         val channelMax = FloatArray(pixelCount * 4)
         for (pixel in 0 until pixelCount) {
-            val inputOffset = pixel * STATS_CELL_BYTES
-            val outputOffset = pixel * 4
-            for (channel in 0..3) {
-                channelMax[outputOffset + channel] = mapped.getFloat(
-                    inputOffset + channel * Float.SIZE_BYTES,
-                )
-            }
+            System.arraycopy(cells, pixel * STATS_CELL_FLOATS, channelMax, pixel * 4, 4)
         }
         check(channelMax.all { it.isFinite() && it >= 0f })
         return channelMax
     }
 
-    private fun readBaseFrameSensorRgb(mapped: ByteBuffer, pixelCount: Int): FloatArray =
-        FloatArray(pixelCount * 3).also { output ->
+    private fun readBaseFrameSensorRgb(mapped: ByteBuffer, pixelCount: Int): FloatArray {
+        val texels = FloatArray(pixelCount * 4)
+        mapped.asFloatBuffer().get(texels)
+        return FloatArray(pixelCount * 3).also { output ->
             for (pixel in 0 until pixelCount) {
-                val inputOffset = pixel * VEC4_BYTES
-                val outputOffset = pixel * 3
-                for (channel in 0..2) {
-                    output[outputOffset + channel] = mapped.getFloat(
-                        inputOffset + channel * Float.SIZE_BYTES,
-                    )
-                }
+                System.arraycopy(texels, pixel * 4, output, pixel * 3, 3)
             }
             check(output.all { it.isFinite() && it >= 0f })
         }
+    }
 
     private inline fun <T> mapBuffer(
         buffer: Int,
@@ -337,8 +381,22 @@ internal class GlesRawAEStats(
     private fun elapsedMs(startNs: Long): Long =
         (System.nanoTime() - startNs) / 1_000_000L
 
+    private class Submission(
+        val context: EGLContext,
+        val fence: Long,
+        val fastBuffer: Int,
+        val fastBufferBytes: Int,
+        val meteringBuffer: Int,
+        val meteringPixelCount: Int,
+        val statsWidth: Int,
+        val statsHeight: Int,
+        val statsPixelCount: Int,
+        val submitMs: Long,
+    )
+
     private companion object {
         const val VEC4_BYTES = 4 * Float.SIZE_BYTES
         const val STATS_CELL_BYTES = 2 * VEC4_BYTES
+        const val STATS_CELL_FLOATS = STATS_CELL_BYTES / Float.SIZE_BYTES
     }
 }

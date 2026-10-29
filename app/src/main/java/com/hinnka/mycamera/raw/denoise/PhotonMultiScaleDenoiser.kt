@@ -3,6 +3,7 @@ package com.hinnka.mycamera.raw.denoise
 import android.opengl.GLES30
 import android.opengl.GLES31
 import com.hinnka.mycamera.processor.GlesComputeWorkGroup
+import com.hinnka.mycamera.processor.GlesGpuScheduler
 import com.hinnka.mycamera.raw.RawDenoiseHistory
 import com.hinnka.mycamera.raw.RawGlesProgram
 import java.nio.ByteBuffer
@@ -97,7 +98,8 @@ internal class PhotonMultiScaleDenoiser {
                 uniform2i(analyzeProgram, "uFineSize", sizes[level])
                 uniform2i(analyzeProgram, "uCoarseSize", coarse)
                 bindImage(0, gaussians[level + 1], GLES30.GL_RGBA16F)
-                dispatch(coarse)
+                dispatch(analyzeProgram, coarse)
+                GlesGpuScheduler.yieldToUiRenderer()
                 sink?.onPass("G${level + 1}", gaussians[level + 1], coarse[0], coarse[1], false)
             }
 
@@ -135,7 +137,7 @@ internal class PhotonMultiScaleDenoiser {
                     bindImage(1, base, GLES30.GL_RGBA16F)
                     bindImage(2, noise, GLES30.GL_RGBA32F)
                     bindImage(3, pilot, GLES30.GL_RGBA16F)
-                    dispatch(size)
+                    dispatch(synthesizeDebugProgram, size)
                     sink.onPass("band$level", band, size[0], size[1], false)
                     sink.onPass("base$level", base, size[0], size[1], false)
                     sink.onPass("noise$level", noise, size[0], size[1], true)
@@ -151,7 +153,8 @@ internal class PhotonMultiScaleDenoiser {
                 bindSynthesize(synthesizeProgram, inputTexture, lscTexture, mergeTexture, gaussians,
                     denoisedCoarse, sizes, level, lumaEnabled, params)
                 bindImage(0, result, GLES30.GL_RGBA16F)
-                dispatch(size)
+                dispatch(synthesizeProgram, size)
+                GlesGpuScheduler.yieldToUiRenderer()
                 sink?.onPass(if (level == 0) "output" else "denoised$level", result, size[0], size[1], false)
 
                 if (denoisedCoarse != gaussians[params.levels]) {
@@ -231,6 +234,7 @@ internal class PhotonMultiScaleDenoiser {
             GLES31.glUniform1fv(location(resolveProgram, "uCapChroma"), capChroma.size, capChroma, 0)
             GLES31.glDispatchCompute(1, 1, 1)
             GLES31.glMemoryBarrier(GLES31.GL_SHADER_STORAGE_BARRIER_BIT or GLES31.GL_BUFFER_UPDATE_BARRIER_BIT)
+            GlesGpuScheduler.yieldToUiRenderer()
         }
         GLES31.glBindBufferBase(GLES31.GL_SHADER_STORAGE_BUFFER, 1, 0)
     }
@@ -364,12 +368,14 @@ internal class PhotonMultiScaleDenoiser {
         return texture
     }
 
-    private fun dispatch(size: IntArray) {
-        GLES31.glDispatchCompute(
-            GlesComputeWorkGroup.imageGroupCount(size[0]),
-            GlesComputeWorkGroup.imageGroupCount(size[1]),
-            1,
-        )
+    /**
+     * One whole-level dispatch. As in GlesMgcRawSpatialStacker, the UI renderer is kept responsive
+     * by the low-priority EGL context and a flush + yield between levels, never by fence waits
+     * inside a level: those drain the GPU and leave it idle until this thread wakes up.
+     */
+    private fun dispatch(program: Int, size: IntArray) {
+        GLES31.glDispatchCompute(GlesComputeWorkGroup.imageGroupCount(size[0]),
+            GlesComputeWorkGroup.imageGroupCount(size[1]), 1)
         GLES31.glMemoryBarrier(
             GLES31.GL_SHADER_IMAGE_ACCESS_BARRIER_BIT or GLES31.GL_TEXTURE_FETCH_BARRIER_BIT or
                 GLES31.GL_FRAMEBUFFER_BARRIER_BIT,

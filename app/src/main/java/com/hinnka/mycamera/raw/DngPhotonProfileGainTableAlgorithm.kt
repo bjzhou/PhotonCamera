@@ -1633,9 +1633,10 @@ internal class DngPhotonProfileGainTableAlgorithm {
             // A candidate owns all data derived from its input exposure. In particular,
             // scaling an already-clipped tensor or reusing the previous inference/Dehaze
             // would evaluate a different response from the one baked into the selected PGTM.
-            var cachedCandidate: HdrNetExposureCandidate? = null
+            // Every candidate is kept: the solver's best sample is not necessarily its last one.
+            val cachedCandidates = HashMap<Float, HdrNetExposureCandidate>()
             fun candidate(inputExposureEv: Float): HdrNetExposureCandidate? {
-                cachedCandidate?.takeIf { it.inputExposureEv == inputExposureEv }?.let { return it }
+                cachedCandidates[inputExposureEv]?.let { return it }
                 if (!inputExposureEv.isFinite() || inputExposureEv !in
                     MeteringSystem.RAW_EXPOSURE_MIN_EV..MeteringSystem.RAW_EXPOSURE_MAX_EV
                 ) return null
@@ -1723,7 +1724,7 @@ internal class DngPhotonProfileGainTableAlgorithm {
                 ) ?: return null
                 return HdrNetExposureCandidate(
                     inputExposureEv, plan, modelInput, coefficients, evaluation,
-                ).also { cachedCandidate = it }
+                ).also { cachedCandidates[inputExposureEv] = it }
             }
             val restoredInputExposureEv = input.hdrNetInputExposureEv
                 ?.takeIf { it.isFinite() && it in
