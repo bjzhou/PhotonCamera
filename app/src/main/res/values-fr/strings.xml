@@ -1472,4 +1472,5 @@
     <string name="gallery_ai_criterion_aesthetic_technical">Esthétique et technique</string>
     <string name="gallery_ai_scale_note">Inspiré des principes récurrents des recommandations des jurés LensCulture ; il s\'agit d\'une critique IA indépendante, et non d\'une note officielle LensCulture.</string>
     <string name="gallery_bokeh_processing">Application du bokeh…</string>
+    <string name="gallery_denoise_processing">Réduction du bruit en cours…</string>
 </resources>

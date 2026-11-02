@@ -138,8 +138,6 @@ object GalleryManager {
     private const val VIDEO_FILE = "video.mp4"
     private const val DNG_FILE = "original.dng"
     private const val AI_DENOISE_FILE = "ai_denoise.jpg"
-    private const val PHOTON_DENOISE_FILE = "photon_denoise.jpg"
-    private const val PHOTON_DENOISE_KEY_FILE = "photon_denoise.key"
     private const val THUMBNAIL_FILE = "thumbnail.jpg"
     private const val BOKEH_FILE = "bokeh.jpg"
     private const val DETAIL_HDR_FILE = "detail_hdr.jpg"
@@ -602,12 +600,9 @@ object GalleryManager {
         return File(getPhotoDir(context, photoId), AI_DENOISE_FILE)
     }
 
-    fun getPhotonDenoiseFile(context: Context, photoId: String): File {
-        return File(getPhotoDir(context, photoId), PHOTON_DENOISE_FILE)
-    }
-
-    fun getPhotonDenoiseKeyFile(context: Context, photoId: String): File {
-        return File(getPhotoDir(context, photoId), PHOTON_DENOISE_KEY_FILE)
+    /** Photon 降噪基底条目所在目录（PhotoProcessor.updatePhotonDenoiseBase 管理条目）。 */
+    fun getPhotonDenoiseDir(context: Context, photoId: String): File {
+        return getPhotoDir(context, photoId)
     }
 
     fun getDepthFile(context: Context, photoId: String): File {
@@ -1422,8 +1417,6 @@ object GalleryManager {
                     metadata
                 }
                 val bitmapSharpeningValue = if (isRawPhoto) 0f else sharpeningValue
-                val bitmapNoiseReductionValue = if (isRawPhoto) 0f else noiseReductionValue
-                val bitmapChromaNoiseReductionValue = if (isRawPhoto) 0f else chromaNoiseReductionValue
                 var gainmapResult: GainmapResult? = preparedGainmapResult
                 if (preparedGainmapResult == null) {
                     val gainmapElapsed = measureTimeMillis {
@@ -1452,8 +1445,6 @@ object GalleryManager {
                         input = exportInputBitmap,
                         metadata = bitmapPostMetadata,
                         sharpening = bitmapSharpeningValue,
-                        noiseReduction = bitmapNoiseReductionValue,
-                        chromaNoiseReduction = bitmapChromaNoiseReductionValue,
                         useComputationalAperture = !bitmapComputationalBokehApplied,
                     )
                 } ?: photoProcessor.process(
@@ -2136,8 +2127,6 @@ object GalleryManager {
                 processedSdr = checkNotNull(bokehBitmap),
                 metadata = metadata,
                 sharpening = sharpeningValue,
-                noiseReduction = noiseReductionValue,
-                chromaNoiseReduction = chromaNoiseReductionValue,
             )
             val preparedGainmapResult = preparedUltraHdrSource?.let { source ->
                 gainmapProducer.build(source, HdrGainmapStrength.coerce(metadata.hdrEffectStrength))
@@ -5302,8 +5291,6 @@ object GalleryManager {
                     input = originalBitmap,
                     metadata = thumbnailMetadata,
                     sharpening = 0f,
-                    noiseReduction = 0f,
-                    chromaNoiseReduction = 0f,
                     useComputationalAperture = false
                 )
 

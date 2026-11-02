@@ -46,10 +46,13 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import java.io.File
+import java.util.zip.CRC32
 import kotlin.math.abs
 import kotlin.math.roundToInt
 
 private const val RAW_HDR_REFERENCE_ASPECT_TOLERANCE = 0.0015f
+private const val PHOTON_DENOISE_PREFIX = "photon_denoise_"
+private const val PHOTON_DENOISE_MAX_ENTRIES = 2
 
 /**
  * 照片处理器
@@ -66,6 +69,7 @@ class PhotoProcessor(
 ) {
     private val colorCorrectionPipelineResolver = ColorCorrectionPipelineResolver(lutManager)
     private val photonDenoiseBaseMutex = Mutex()
+    private val photonDenoiseSourceCrc = java.util.concurrent.ConcurrentHashMap<String, Long>()
 
     data class HdrFrameOutput(
         val bitmap: Bitmap,
@@ -90,8 +94,11 @@ class PhotoProcessor(
 
     /**
      * 非 RAW 照片的降噪基底（对应 RAW 烘焙进 original.jpg 的降噪）：对 [source] 全分辨率跑一次
-     * Photon 降噪并持久化为 photon_denoise.jpg，预览/导出直接加载基底并以 0 强度走 LUT。
-     * key 绑定源文件与强度；两个强度都为 0 时删除基底。返回基底文件是否发生了变化。
+     * Photon 降噪并持久化，预览/导出直接加载基底并以 0 强度走 LUT。
+     *
+     * 每个条目以源文件内容与强度为 key，最多保留 [PHOTON_DENOISE_MAX_ENTRIES] 个、按最近使用淘汰：
+     * 已保存的强度与编辑中（未保存）的强度各占一个条目，互不覆盖。真正开始重建前调用 [onBuild]。
+     * 两个强度都为 0 时无需基底，返回 false；否则返回是否新建了条目。
      */
     suspend fun updatePhotonDenoiseBase(
         context: Context,
@@ -99,23 +106,16 @@ class PhotoProcessor(
         source: File,
         noiseReduction: Float,
         chromaNoiseReduction: Float,
+        onBuild: () -> Unit = {},
     ): Boolean {
         val luma = DenoiseStrength.clamp(noiseReduction)
         val chroma = DenoiseStrength.clamp(chromaNoiseReduction)
-        val baseFile = GalleryManager.getPhotonDenoiseFile(context, photoId)
-        val keyFile = GalleryManager.getPhotonDenoiseKeyFile(context, photoId)
-        val key = "${photonDenoiseSourceKey(source)}|$luma|$chroma"
+        if (luma <= 0f && chroma <= 0f) return false
+        val dir = GalleryManager.getPhotonDenoiseDir(context, photoId)
         photonDenoiseBaseMutex.withLock {
-            if (luma <= 0f && chroma <= 0f) {
-                return withContext(Dispatchers.IO) {
-                    val existed = baseFile.exists()
-                    keyFile.delete()
-                    baseFile.delete()
-                    existed
-                }
-            }
-            if (withContext(Dispatchers.IO) { readPhotonDenoiseKey(baseFile, keyFile) == key }) return false
-            withContext(Dispatchers.IO) { keyFile.delete() }
+            val key = withContext(Dispatchers.IO) { photonDenoiseKey(source, luma, chroma) }
+            if (withContext(Dispatchers.IO) { findPhotonDenoiseEntry(dir, key)?.touch() } != null) return false
+            onBuild()
             val input = GalleryManager.loadBitmap(context, Uri.fromFile(source)) ?: return false
             val denoised = try {
                 lutImageProcessor.applyBitmapDenoise(input, luma, chroma)
@@ -126,14 +126,19 @@ class PhotoProcessor(
             input.recycle()
             if (denoised === input) return false
             val written = withContext(Dispatchers.IO) {
-                val tmp = File(baseFile.parentFile, "${baseFile.name}.tmp")
+                val entry = PhotonDenoiseEntry.of(dir, key)
+                val tmp = File(dir, "${entry.image.name}.tmp")
                 try {
                     tmp.outputStream().use { denoised.compress(Bitmap.CompressFormat.JPEG, 95, it) }
                 } finally {
                     denoised.recycle()
                 }
-                (tmp.renameTo(baseFile) || run { tmp.delete(); false }).also {
-                    if (it) keyFile.writeText(key)
+                entry.keyFile.delete()
+                (tmp.renameTo(entry.image) || run { tmp.delete(); false }).also {
+                    if (it) {
+                        entry.keyFile.writeText(key)
+                        prunePhotonDenoiseEntries(dir)
+                    }
                 }
             }
             if (written) PLog.d("PhotoProcessor", "Photon denoise base rebuilt: $photoId luma=$luma chroma=$chroma")
@@ -142,46 +147,80 @@ class PhotoProcessor(
     }
 
     /**
-     * 加载 [source] 的降噪基底，不可用时返回 null（调用方按原路径处理）。给出强度时缺失或过期的
-     * 基底会先重建；强度为 null（编辑预览）只读取已有基底，和 RAW 一样在松手时才由
-     * [updatePhotonDenoiseBase] 按新强度生成，拖动过程中保持旧结果。
+     * 加载 [source] 在给定强度下的降噪基底，没有时返回 null（不降噪）。只读取：基底只在
+     * 编辑页降噪滑块松手时由 [updatePhotonDenoiseBase] 生成，其他入口从不跑降噪。
      */
     suspend fun loadPhotonDenoiseBase(
         context: Context,
         photoId: String,
         source: File,
-        noiseReduction: Float?,
-        chromaNoiseReduction: Float?,
+        noiseReduction: Float,
+        chromaNoiseReduction: Float,
         maxEdge: Int? = null,
     ): Bitmap? {
-        if (noiseReduction != null && chromaNoiseReduction != null) {
-            if (DenoiseStrength.clamp(noiseReduction) <= 0f && DenoiseStrength.clamp(chromaNoiseReduction) <= 0f) {
-                return null
-            }
-            updatePhotonDenoiseBase(context, photoId, source, noiseReduction, chromaNoiseReduction)
-        }
-        val baseFile = GalleryManager.getPhotonDenoiseFile(context, photoId)
-        val keyFile = GalleryManager.getPhotonDenoiseKeyFile(context, photoId)
+        val luma = DenoiseStrength.clamp(noiseReduction)
+        val chroma = DenoiseStrength.clamp(chromaNoiseReduction)
+        if (luma <= 0f && chroma <= 0f) return null
+        val dir = GalleryManager.getPhotonDenoiseDir(context, photoId)
         return photonDenoiseBaseMutex.withLock {
             withContext(Dispatchers.IO) {
-                val key = readPhotonDenoiseKey(baseFile, keyFile) ?: return@withContext null
-                val expected = if (noiseReduction != null && chromaNoiseReduction != null) {
-                    "${photonDenoiseSourceKey(source)}|${DenoiseStrength.clamp(noiseReduction)}|" +
-                        "${DenoiseStrength.clamp(chromaNoiseReduction)}"
-                } else {
-                    null
+                findPhotonDenoiseEntry(dir, photonDenoiseKey(source, luma, chroma))?.touch()?.let {
+                    GalleryManager.loadBitmap(context, Uri.fromFile(it.image), maxEdge)
                 }
-                val matches = expected?.let { key == it } ?: key.startsWith("${photonDenoiseSourceKey(source)}|")
-                if (matches) GalleryManager.loadBitmap(context, Uri.fromFile(baseFile), maxEdge) else null
             }
         }
     }
 
-    private fun photonDenoiseSourceKey(source: File) =
-        "v1|${source.name}|${source.lastModified()}|${source.length()}"
+    private class PhotonDenoiseEntry(val image: File, val keyFile: File) {
+        fun touch() = apply { image.setLastModified(System.currentTimeMillis()) }
 
-    private fun readPhotonDenoiseKey(baseFile: File, keyFile: File): String? =
-        if (baseFile.exists() && keyFile.exists()) keyFile.readText() else null
+        companion object {
+            fun of(dir: File, key: String): PhotonDenoiseEntry {
+                val stem = "$PHOTON_DENOISE_PREFIX${Integer.toHexString(key.hashCode())}"
+                return PhotonDenoiseEntry(File(dir, "$stem.jpg"), File(dir, "$stem.key"))
+            }
+        }
+    }
+
+    private fun findPhotonDenoiseEntry(dir: File, key: String): PhotonDenoiseEntry? =
+        PhotonDenoiseEntry.of(dir, key).takeIf {
+            it.image.exists() && it.keyFile.exists() && it.keyFile.readText() == key
+        }
+
+    private fun prunePhotonDenoiseEntries(dir: File) {
+        val files = dir.listFiles { file -> file.name.startsWith(PHOTON_DENOISE_PREFIX) } ?: return
+        val stems = files.groupBy { it.nameWithoutExtension }
+        stems.entries
+            .sortedByDescending { (_, group) -> group.firstOrNull { it.extension == "jpg" }?.lastModified() ?: 0L }
+            .drop(PHOTON_DENOISE_MAX_ENTRIES)
+            .forEach { (_, group) -> group.forEach(File::delete) }
+        // 旧版单槽基底
+        File(dir, "photon_denoise.jpg").delete()
+        File(dir, "photon_denoise.key").delete()
+    }
+
+    /**
+     * 源文件以内容 CRC32 标识（按路径、修改时间、大小缓存）：bokeh.jpg 等派生文件会被原样重写，
+     * 只看修改时间会让内容未变的基底失效。
+     */
+    private fun photonDenoiseKey(source: File, luma: Float, chroma: Float): String {
+        val stamp = "${source.absolutePath}|${source.lastModified()}|${source.length()}"
+        val crc = photonDenoiseSourceCrc[stamp] ?: CRC32().run {
+            source.inputStream().use { input ->
+                val buffer = ByteArray(1 shl 16)
+                while (true) {
+                    val read = input.read(buffer)
+                    if (read < 0) break
+                    update(buffer, 0, read)
+                }
+            }
+            value
+        }.also {
+            if (photonDenoiseSourceCrc.size > 64) photonDenoiseSourceCrc.clear()
+            photonDenoiseSourceCrc[stamp] = it
+        }
+        return "v2|${source.name}|${source.length()}|$crc|$luma|$chroma"
+    }
 
     private fun resolveNoiseReduction(metadata: MediaMetadata, fallback: Float): Float {
         return metadata.noiseReduction ?: (if (metadata.isImported) 0f else fallback)
@@ -244,10 +283,7 @@ class PhotoProcessor(
                 val bitmap = BitmapFactory.decodeFile(aiFile.absolutePath)
                 if (bitmap != null) {
                     val finalSharpening = metadata.sharpening ?: (if (metadata.isImported) 0f else sharpening)
-                    val finalNoiseReduction = metadata.noiseReduction ?: (if (metadata.isImported) 0f else noiseReduction)
-                    val finalChromaNoiseReduction =
-                        metadata.chromaNoiseReduction ?: (if (metadata.isImported) 0f else chromaNoiseReduction)
-                        
+
                     var lutLuminanceGainBitmap: Bitmap? = null
                     val sdrBitmap = processBitmap(
                         context = context,
@@ -255,8 +291,6 @@ class PhotoProcessor(
                         input = bitmap,
                         metadata = metadata,
                         sharpening = finalSharpening,
-                        noiseReduction = finalNoiseReduction,
-                        chromaNoiseReduction = finalChromaNoiseReduction,
                         useComputationalAperture = true,
                         applyFrameWatermark = false,
                         onLutLuminanceGainMap = { lutLuminanceGainBitmap = it },
@@ -289,24 +323,18 @@ class PhotoProcessor(
         }
 
 
-        val fallbackBitmap = if (metadata.hasAiDenoisedBase) {
-            val aiFile = GalleryManager.getAiDenoiseFile(context, photoId)
-            if (aiFile.exists()) BitmapFactory.decodeFile(aiFile.absolutePath) else null
+        val fallbackFile = if (metadata.hasAiDenoisedBase) {
+            GalleryManager.getAiDenoiseFile(context, photoId).takeIf { it.exists() }
         } else {
-            GalleryManager.loadOriginalBitmap(context, photoId)
+            GalleryManager.getOriginalImageFile(context, photoId)
         }
-        if (fallbackBitmap != null) {
-            val sdrBitmap = processBitmap(
-                context = context,
-                photoId = photoId,
-                input = fallbackBitmap,
-                metadata = metadata,
-                sharpening = sharpening,
-                noiseReduction = noiseReduction,
-                chromaNoiseReduction = chromaNoiseReduction,
-                useComputationalAperture = true,
-                applyFrameWatermark = false
-            )
+        val sdrBitmap = fallbackFile?.let { file ->
+            processBitmapSource(context, photoId, file, metadata, sharpening, applyFrameWatermark = false) {
+                if (metadata.hasAiDenoisedBase) BitmapFactory.decodeFile(file.absolutePath)
+                else GalleryManager.loadOriginalBitmap(context, photoId)
+            }
+        }
+        if (sdrBitmap != null) {
             return GainmapSourceSet(
                 sdrBase = sdrBitmap,
                 hdrReference = null,
@@ -330,8 +358,6 @@ class PhotoProcessor(
         processedSdr: Bitmap,
         metadata: MediaMetadata,
         sharpening: Float = 0f,
-        noiseReduction: Float = 0f,
-        chromaNoiseReduction: Float = 0f,
     ): GainmapSourceSet? {
         if (!metadata.manualHdrEffectEnabled) return null
 
@@ -341,8 +367,6 @@ class PhotoProcessor(
             input = processedSdr,
             metadata = metadata,
             sharpening = sharpening,
-            noiseReduction = noiseReduction,
-            chromaNoiseReduction = chromaNoiseReduction,
             useComputationalAperture = false,
             applyFrameWatermark = false,
         )
@@ -616,8 +640,9 @@ class PhotoProcessor(
         if (metadata.hasAiDenoisedBase) {
             val aiFile = GalleryManager.getAiDenoiseFile(context, photoId)
             if (aiFile.exists()) {
-                return processBitmapSource(context, photoId, aiFile, metadata, sharpening, noiseReduction,
-                    chromaNoiseReduction) { GalleryManager.loadBitmap(context, Uri.fromFile(aiFile)) }
+                return processBitmapSource(context, photoId, aiFile, metadata, sharpening) {
+                    GalleryManager.loadBitmap(context, Uri.fromFile(aiFile))
+                }
             }
             return null
         }
@@ -635,15 +660,17 @@ class PhotoProcessor(
             )
         } else {
             val originalFile = GalleryManager.getOriginalImageFile(context, photoId) ?: return null
-            return processBitmapSource(context, photoId, originalFile, metadata, sharpening, noiseReduction,
-                chromaNoiseReduction) { GalleryManager.loadOriginalBitmap(context, photoId) }
+            return processBitmapSource(context, photoId, originalFile, metadata, sharpening) {
+                GalleryManager.loadOriginalBitmap(context, photoId)
+            }
         }
     }
 
     /**
-     * [processBitmap] of a non-RAW source file through its Photon denoise base when one applies.
-     * With a computational aperture the bokeh pass would persist the denoised pixels into
-     * bokeh.jpg, which is denoised again on its own base, so that case keeps the in-LUT denoise.
+     * [processBitmap] of a non-RAW source file (original or AI base): the Photon denoise base of the
+     * saved strengths replaces it when one exists, otherwise the photo renders without denoise.
+     * With a computational aperture the preview's base is that of bokeh.jpg, so the export uses it
+     * as is instead of re-running the bokeh pass on the undenoised source.
      */
     private suspend fun processBitmapSource(
         context: Context,
@@ -651,30 +678,27 @@ class PhotoProcessor(
         source: File,
         metadata: MediaMetadata,
         sharpening: Float,
-        noiseReduction: Float,
-        chromaNoiseReduction: Float,
+        applyFrameWatermark: Boolean = true,
         loadSource: () -> Bitmap?,
     ): Bitmap? {
-        val base = if ((metadata.computationalAperture ?: 0f) <= 0f) {
-            loadPhotonDenoiseBase(
-                context = context,
-                photoId = photoId,
-                source = source,
-                noiseReduction = resolveNoiseReduction(metadata, noiseReduction),
-                chromaNoiseReduction = resolveChromaNoiseReduction(metadata, chromaNoiseReduction),
-            )
-        } else {
-            null
-        }
-        if (base != null) {
-            return processBitmap(
-                context, photoId, base,
-                metadata.copy(noiseReduction = 0f, chromaNoiseReduction = 0f),
-                sharpening, 0f, 0f, true
-            )
-        }
-        val bitmap = loadSource() ?: return null
-        return processBitmap(context, photoId, bitmap, metadata, sharpening, noiseReduction, chromaNoiseReduction, true)
+        val bokehFile = GalleryManager.getBokehFile(context, photoId)
+        val bokehBaked = (metadata.computationalAperture ?: 0f) > 0f && bokehFile.exists()
+        val base = loadPhotonDenoiseBase(
+            context = context,
+            photoId = photoId,
+            source = if (bokehBaked) bokehFile else source,
+            noiseReduction = resolveNoiseReduction(metadata, 0f),
+            chromaNoiseReduction = resolveChromaNoiseReduction(metadata, 0f),
+        )
+        return processBitmap(
+            context = context,
+            photoId = photoId,
+            input = base ?: loadSource() ?: return null,
+            metadata = metadata,
+            sharpening = sharpening,
+            useComputationalAperture = base == null || !bokehBaked,
+            applyFrameWatermark = applyFrameWatermark,
+        )
     }
 
     private suspend fun processDngForUltraHdr(
@@ -859,9 +883,10 @@ class PhotoProcessor(
      * @param input 输入 Bitmap
      * @param metadata 照片元数据（包含编辑配置和拍摄信息）
      * @param sharpening 锐化强度
-     * @param noiseReduction 降噪强度
-     * @param chromaNoiseReduction 减少杂色强度
      * @return 处理后的 Bitmap
+     *
+     * 不做降噪：非 RAW 照片的降噪只来自滑块松手时生成的降噪基底（[loadPhotonDenoiseBase]），
+     * 由调用方作为 [input] 传入；RAW 的降噪在 RAW 开发中完成。
      */
     suspend fun processBitmap(
         context: Context,
@@ -869,17 +894,12 @@ class PhotoProcessor(
         input: Bitmap,
         metadata: MediaMetadata,
         sharpening: Float = 0f,
-        noiseReduction: Float = 0f,
-        chromaNoiseReduction: Float = 0f,
         useComputationalAperture: Boolean = false,
         applyFrameWatermark: Boolean = true,
         onLutLuminanceGainMap: ((Bitmap?) -> Unit)? = null,
         lutLuminanceGainDownsample: Int = 1,
     ): Bitmap = withContext(Dispatchers.IO) {
         var result = input
-        val finalNoiseReduction = metadata.noiseReduction ?: (if (metadata.isImported) 0f else noiseReduction)
-        val finalChromaNoiseReduction =
-            metadata.chromaNoiseReduction ?: (if (metadata.isImported) 0f else chromaNoiseReduction)
 
         val colorCorrection = resolveColorCorrection(metadata)
 
@@ -900,8 +920,8 @@ class PhotoProcessor(
                 result,
                 colorCorrection.baselineLayer,
                 colorCorrection.creativeLayer,
-                finalNoiseReduction,
-                finalChromaNoiseReduction,
+                noiseReductionValue = 0f,
+                chromaNoiseReductionValue = 0f,
                 luminanceGainDownsample = lutLuminanceGainDownsample,
             )
             result = lutStackResult.bitmap
@@ -911,8 +931,8 @@ class PhotoProcessor(
                 result,
                 colorCorrection.baselineLayer,
                 colorCorrection.creativeLayer,
-                finalNoiseReduction,
-                finalChromaNoiseReduction
+                noiseReductionValue = 0f,
+                chromaNoiseReductionValue = 0f
             )
         }
 

@@ -300,6 +300,7 @@ fun GalleryEditScreen(
     val editComputationalAperture by viewModel.editComputationalAperture.collectAsState()
     val editBokehStyle by viewModel.editBokehStyle.collectAsState()
     val isBokehProcessing by viewModel.isBokehProcessing.collectAsState()
+    val isPhotonDenoising by viewModel.isPhotonDenoising.collectAsState()
     val editFocusX by viewModel.editFocusPointX.collectAsState()
     val editFocusY by viewModel.editFocusPointY.collectAsState()
 
@@ -544,12 +545,6 @@ fun GalleryEditScreen(
 
     LaunchedEffect(editSourcePhoto?.id, refreshKey) {
         cropPreviewBitmap = null
-    }
-
-    // 进入编辑或底图（虚化 / AI 降噪）变化后，按当前强度补齐 JPG 降噪基底；无变化时不会刷新。
-    LaunchedEffect(editSourcePhoto?.id, refreshKey, isRaw) {
-        val photo = editSourcePhoto ?: return@LaunchedEffect
-        if (!isRaw) viewModel.refreshPhotonDenoiseBase(photo)
     }
 
     LaunchedEffect(editSourcePhoto?.id, refreshKey) {
@@ -1135,9 +1130,9 @@ fun GalleryEditScreen(
                     )
                 }
 
-                // 虚化处理中提示
+                // 虚化 / 降噪基底处理中提示
                 AnimatedVisibility(
-                    visible = isBokehProcessing && !currentPhoto.isVideo,
+                    visible = (isBokehProcessing || isPhotonDenoising) && !currentPhoto.isVideo,
                     enter = fadeIn(),
                     exit = fadeOut(),
                     modifier = Modifier
@@ -1157,7 +1152,10 @@ fun GalleryEditScreen(
                         )
                         Spacer(modifier = Modifier.width(8.dp))
                         Text(
-                            text = stringResource(R.string.gallery_bokeh_processing),
+                            text = stringResource(
+                                if (isBokehProcessing) R.string.gallery_bokeh_processing
+                                else R.string.gallery_denoise_processing
+                            ),
                             color = Color.White,
                             fontSize = 13.sp
                         )

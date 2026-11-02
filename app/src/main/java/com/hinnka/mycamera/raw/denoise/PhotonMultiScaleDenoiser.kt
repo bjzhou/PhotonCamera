@@ -18,14 +18,8 @@ import java.nio.ByteOrder
  * the LSC gains restored. Only the Gaussian levels and two adjacent denoised levels are held
  * (§10.2). A [PassSink] receives every pass output for parity checks; it adds a parity dispatch
  * per level that emits the fused pass's band, base, noise and pilot tiles.
- *
- * [sliceBudgetPixels] > 0 splits every Analyze/Synthesize dispatch into row slices of about that
- * many pixels with a GPU checkpoint after each. Callers that hand over a whole image in one call
- * (the Bitmap edit path) need it: a full-image dispatch chain cannot be preempted on many GPUs,
- * so the compositor starves (black, frozen screen) or the driver watchdog resets the GPU. The
- * tiled RAW pipelines already checkpoint between tiles and keep whole-level dispatches.
  */
-internal class PhotonMultiScaleDenoiser(private val sliceBudgetPixels: Int = 0) {
+internal class PhotonMultiScaleDenoiser {
     /** Receives pass outputs while their textures are alive (debug parity, §12.4). */
     fun interface PassSink {
         fun onPass(name: String, textureId: Int, width: Int, height: Int, float32: Boolean)
@@ -377,33 +371,15 @@ internal class PhotonMultiScaleDenoiser(private val sliceBudgetPixels: Int = 0) 
     /**
      * One whole-level dispatch. As in GlesMgcRawSpatialStacker, the UI renderer is kept responsive
      * by the low-priority EGL context and a flush + yield between levels, never by fence waits
-     * inside a level: those drain the GPU and leave it idle until this thread wakes up. With a
-     * [sliceBudgetPixels] the level is dispatched in row slices instead, each followed by a
-     * checkpoint, trading that idle time for bounded GPU occupancy.
+     * inside a level: those drain the GPU and leave it idle until this thread wakes up.
      */
     private fun dispatch(program: Int, size: IntArray) {
-        val groupsX = GlesComputeWorkGroup.imageGroupCount(size[0])
-        val groupsY = GlesComputeWorkGroup.imageGroupCount(size[1])
-        val offset = location(program, "uGroupOffset")
-        val sliceRows = if (sliceBudgetPixels > 0) {
-            maxOf(1, sliceBudgetPixels / (groupsX * GlesComputeWorkGroup.IMAGE_TILE_SIZE * GlesComputeWorkGroup.IMAGE_TILE_SIZE))
-        } else {
-            groupsY
-        }
-        var row = 0
-        while (row < groupsY) {
-            val rows = minOf(sliceRows, groupsY - row)
-            GLES31.glUniform2i(offset, 0, row)
-            GLES31.glDispatchCompute(groupsX, rows, 1)
-            row += rows
-            if (row < groupsY) GlesGpuScheduler.waitForGpuCheckpoint(TAG, "slice")
-        }
-        GLES31.glUniform2i(offset, 0, 0)
+        GLES31.glDispatchCompute(GlesComputeWorkGroup.imageGroupCount(size[0]),
+            GlesComputeWorkGroup.imageGroupCount(size[1]), 1)
         GLES31.glMemoryBarrier(
             GLES31.GL_SHADER_IMAGE_ACCESS_BARRIER_BIT or GLES31.GL_TEXTURE_FETCH_BARRIER_BIT or
                 GLES31.GL_FRAMEBUFFER_BARRIER_BIT,
         )
-        if (sliceRows < groupsY) GlesGpuScheduler.waitForGpuCheckpoint(TAG, "level")
     }
 
     private fun bindImage(unit: Int, texture: Int, format: Int) {
@@ -424,16 +400,12 @@ internal class PhotonMultiScaleDenoiser(private val sliceBudgetPixels: Int = 0) 
     private fun uniform3f(program: Int, name: String, v: FloatArray) =
         GLES31.glUniform3f(location(program, name), v[0], v[1], v[2])
 
-    companion object {
-        /** [sliceBudgetPixels] for whole-image callers: about 1 MP of work per GPU submission. */
-        const val UI_SLICE_PIXELS = 1 shl 20
-
-        private const val TAG = "PhotonMultiScaleDenoiser"
-        private const val UNIT_INPUT = 0
-        private const val UNIT_LSC = 1
-        private const val UNIT_FINE = 2
-        private const val UNIT_NOISY_COARSE = 3
-        private const val UNIT_DENOISED_COARSE = 4
-        private const val UNIT_MERGE = 5
+    private companion object {
+        const val UNIT_INPUT = 0
+        const val UNIT_LSC = 1
+        const val UNIT_FINE = 2
+        const val UNIT_NOISY_COARSE = 3
+        const val UNIT_DENOISED_COARSE = 4
+        const val UNIT_MERGE = 5
     }
 }

@@ -87,7 +87,7 @@ class LutImageProcessor(context: Context? = null) {
     private var bitmapDenoisePassthroughProgram = 0
     private var computeCapabilitiesChecked = false
     private var computeCapabilitiesSupported = false
-    private val bitmapPhotonDenoiser = PhotonMultiScaleDenoiser(PhotonMultiScaleDenoiser.UI_SLICE_PIXELS)
+    private val bitmapPhotonDenoiser = PhotonMultiScaleDenoiser()
     private var lutSharpenProgram = 0
     private var lutLuminanceGainProgram = 0
 

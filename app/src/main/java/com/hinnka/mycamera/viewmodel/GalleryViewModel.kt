@@ -421,6 +421,9 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
         private set
     var editNoiseReduction = MutableStateFlow(0f)
         private set
+
+    /** 编辑中 JPG 降噪基底对应的强度：进入编辑时取已保存的值，之后由松手确认，编辑预览只读取这一组。 */
+    private val photonDenoiseEditStrengths = java.util.concurrent.ConcurrentHashMap<String, Pair<Float, Float>>()
     var editChromaNoiseReduction = MutableStateFlow(0f)
         private set
     var editRawExposureCompensation = MutableStateFlow(0f)
@@ -1500,6 +1503,9 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
             editSharpening.value = m.sharpening ?: 0f
             editNoiseReduction.value = DenoiseStrength.clamp(m.noiseReduction)
             editChromaNoiseReduction.value = DenoiseStrength.clamp(m.chromaNoiseReduction)
+            photo?.let {
+                photonDenoiseEditStrengths[it.id] = editNoiseReduction.value to editChromaNoiseReduction.value
+            }
             editRawExposureCompensation.value = m.rawExposureCompensation ?: 0f
             editRawAutoExposure.value = RawAdaptiveExposureMode.resolve(
                 usePhotonHdr = m.rawToneMappingParameters.usePhotonHdr,
@@ -3392,25 +3398,31 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
     }
 
     private var photonDenoiseBaseJob: Job? = null
+    private val _isPhotonDenoising = MutableStateFlow(false)
+    val isPhotonDenoising = _isPhotonDenoising.asStateFlow()
 
     /**
-     * 按当前编辑强度生成非 RAW 照片的降噪基底（松手、进入编辑、源图变化时调用），
-     * 基底有变化时刷新预览。RAW 照片的降噪在 RAW 开发中烘焙，不走这里。
+     * 按当前编辑强度生成非 RAW 照片的降噪基底，并确认为编辑预览使用的强度。JPG 降噪的唯一
+     * 入口：只在编辑页降噪滑块松手时调用。RAW 照片的降噪在 RAW 开发中烘焙，不走这里。
      */
     fun refreshPhotonDenoiseBase(photo: MediaData) {
         if (photo.isVideo || isRawInGallery(photo.id)) return
         val noiseReduction = editNoiseReduction.value
         val chromaNoiseReduction = editChromaNoiseReduction.value
         photonDenoiseBaseJob?.cancel()
-        photonDenoiseBaseJob = viewModelScope.launch(Dispatchers.IO) {
+        // LAZY 启动保证 photonDenoiseBaseJob 已赋值，被新任务取消的旧任务不会清掉新任务的处理中状态
+        val job = viewModelScope.launch(Dispatchers.IO, start = CoroutineStart.LAZY) {
             val context = getApplication<Application>()
             try {
                 val metadata = currentMediaMetadata ?: photo.metadata ?: MediaMetadata()
                 val source = photonDenoiseSource(context, photo.id, metadata) ?: return@launch
-                val changed = contentRepository.photoProcessor.updatePhotonDenoiseBase(
+                val built = contentRepository.photoProcessor.updatePhotonDenoiseBase(
                     context, photo.id, source, noiseReduction, chromaNoiseReduction,
+                    onBuild = { _isPhotonDenoising.value = true },
                 )
-                if (changed) {
+                val strengths = noiseReduction to chromaNoiseReduction
+                val strengthsChanged = photonDenoiseEditStrengths.put(photo.id, strengths) != strengths
+                if (built || strengthsChanged) {
                     invalidatePreviewCache(photo.id)
                     photoRefreshKeys[photo.id] = System.currentTimeMillis()
                 }
@@ -3418,8 +3430,12 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                 throw e
             } catch (e: Exception) {
                 PLog.e(TAG, "Failed to build Photon denoise base", e)
+            } finally {
+                if (photonDenoiseBaseJob === coroutineContext[Job]) _isPhotonDenoising.value = false
             }
         }
+        photonDenoiseBaseJob = job
+        job.start()
     }
 
     fun invalidatePreviewCache(photoId: String) {
@@ -3597,18 +3613,19 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                 val canLoadExternalUri = isSystemExternal || sourceBackedUri != null
                 val externalUri = sourceBackedUri ?: photo.uri
                 val preserveExternalHdr = isSystemExternal && showOrigin && !useGlobalEdit
-                val skipPreviewDenoise = maxEdge < FULL_QUALITY_PREVIEW_MAX_EDGE
 
-                // 非 RAW 照片的降噪基底（同 RAW 烘焙的降噪）：编辑中只读取松手时生成的基底，拖动时保持旧结果，
-                // 不在预览渲染里跑降噪；编辑之外按元数据强度惰性生成。
-                val photonDenoiseBase = if (bitmap == null && !showOrigin && !isRawPhoto &&
-                    (useGlobalEdit || !skipPreviewDenoise)
-                ) {
-                    photonDenoiseSource(context, photo.id, finalMetadata)?.let { source ->
+                // 非 RAW 照片的降噪只来自降噪基底（编辑页滑块松手时生成，同 RAW 烘焙的降噪），预览只读取、
+                // 从不跑降噪；没有匹配的基底就不降噪。
+                val photonDenoiseBase = if (bitmap == null && !showOrigin && !isRawPhoto) {
+                    // 编辑中按最后一次松手（或进入编辑）时确认的强度读取，拖动中的滑块值不参与。
+                    val strengths = if (useGlobalEdit) photonDenoiseEditStrengths[photo.id] else finalNR to finalCNR
+                    val source = photonDenoiseSource(context, photo.id, finalMetadata)
+                    if (strengths != null && source != null) {
                         contentRepository.photoProcessor.loadPhotonDenoiseBase(
-                            context, photo.id, source,
-                            finalNR.takeUnless { useGlobalEdit }, finalCNR.takeUnless { useGlobalEdit }, maxEdge,
+                            context, photo.id, source, strengths.first, strengths.second, maxEdge,
                         )
+                    } else {
+                        null
                     }
                 } else {
                     null
@@ -3644,24 +3661,17 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                     currentBitmap
                 } else {
                     val applyBitmapSharpening = !isRawPhoto
-                    val applyBitmapDenoise = !isRawPhoto && !skipPreviewDenoise && !useGlobalEdit && photonDenoiseBase == null
-                    val previewMetadata = if (!applyBitmapSharpening || !applyBitmapDenoise) {
-                        finalMetadata.copy(
-                            sharpening = if (applyBitmapSharpening) finalMetadata.sharpening else 0f,
-                            noiseReduction = 0f,
-                            chromaNoiseReduction = 0f
-                        )
-                    } else {
+                    val previewMetadata = if (applyBitmapSharpening) {
                         finalMetadata
+                    } else {
+                        finalMetadata.copy(sharpening = 0f)
                     }
                     val previewSharpening = if (applyBitmapSharpening) finalS else 0f
-                    val previewNoiseReduction = if (applyBitmapDenoise) finalNR else 0f
-                    val previewChromaNoiseReduction = if (applyBitmapDenoise) finalCNR else 0f
 
                     // 预览生成
                     val result = contentRepository.photoProcessor.processBitmap(
                         context, photo.id, currentBitmap, previewMetadata,
-                        previewSharpening, previewNoiseReduction, previewChromaNoiseReduction,
+                        previewSharpening,
                         false
                     )
                     // 只在全分辨率路径下更新亮度估计（结果更准确）

@@ -30,8 +30,6 @@ class PhotoTransformation(
             input,
             metadata.copy(sharpening = 0f, noiseReduction = 0f, chromaNoiseReduction = 0f),
             0f,
-            0f,
-            0f
         )
     }
 }
