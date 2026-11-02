@@ -24,11 +24,33 @@ internal data class PreviewColorShaderVariant(
     val includeChromaticAberration: Boolean = false,
     val includeColorRecipe: Boolean = true,
     /**
+     * Compiles the highlights / shadows tone map only while it acts: its arrays, loops and
+     * samplers raise register pressure for the whole shader even when the uniform branch skips it.
+     */
+    val includeShadowsHighlights: Boolean = false,
+    /** Preview-only single-pass stand-ins for the multi-pass effects, see [PreviewLiteEffectsGl]. */
+    val includeLiteShadowsHighlights: Boolean = false,
+    val includeLiteClarity: Boolean = false,
+    val includeLiteSoftLight: Boolean = false,
+    val includeLiteBloom: Boolean = false,
+    val includeLiteRedHalation: Boolean = false,
+    /** Cheap film grain after the LUT, in place of the separate grain pass. */
+    val includeFinalFilmGrain: Boolean = false,
+    /**
+     * [RecipeOps] bits of the recipe steps that are not identity. Only these are emitted, so a
+     * single slider costs one step rather than the whole recipe chain.
+     */
+    val recipeOps: Int = RecipeOps.ALL,
+    /**
      * Writes the colour as it enters highlights / shadows and stops there: the source of the
      * tone-map mask, so that mask and colour pass share one input chain.
      */
     val toneMapSource: Boolean = false,
 ) {
+    val includePreviewBlur: Boolean
+        get() = includeLiteShadowsHighlights || includeLiteClarity || includeLiteSoftLight ||
+            includeLiteBloom || includeLiteRedHalation
+
     companion object {
         fun forPass(
             textureSource: PreviewColorTextureSource,
@@ -36,8 +58,13 @@ internal data class PreviewColorShaderVariant(
             lutConfig: LutConfig?,
             lutEnabled: Boolean,
             videoLogEnabled: Boolean,
+            previewLite: Boolean = false,
         ): PreviewColorShaderVariant {
             val lutCurve = lutConfig?.curve ?: TransferCurve.SRGB
+            val recipe = !params.isDefault()
+            val shadowsHighlights = recipe && ShadowsHighlightsShader.isActive(params.highlights, params.shadows)
+            val preLogFilmGrain = videoLogEnabled && !lutEnabled && params.filmGrain > EPSILON
+            val lite = previewLite && recipe
             return PreviewColorShaderVariant(
                 textureSource = textureSource,
                 includeExtendedLutCurves = videoLogEnabled ||
@@ -45,14 +72,20 @@ internal data class PreviewColorShaderVariant(
                 includeOklchDensity = abs(params.color) > EPSILON,
                 includeLchMixer = params.hasLchAdjustments(),
                 // A custom Log recording has no display LUT, so bake grain before encoding.
-                includePreLogFilmGrain = videoLogEnabled &&
-                    !lutEnabled &&
-                    params.filmGrain > EPSILON,
+                includePreLogFilmGrain = preLogFilmGrain,
                 includeVideoLog = videoLogEnabled,
                 // Match the shader's activation threshold, including negative (softening) values.
                 includeSharpening = abs(params.sharpness) > 0.0001f,
                 includeChromaticAberration = params.chromaticAberration > 0.001f,
-                includeColorRecipe = !params.isDefault(),
+                includeColorRecipe = recipe,
+                includeShadowsHighlights = shadowsHighlights && !previewLite,
+                includeLiteShadowsHighlights = shadowsHighlights && previewLite,
+                includeLiteClarity = lite && abs(params.clarity) > EPSILON,
+                includeLiteSoftLight = lite && params.softLight > EPSILON,
+                includeLiteBloom = lite && params.bloom > EPSILON,
+                includeLiteRedHalation = lite && params.redHalation > EPSILON,
+                includeFinalFilmGrain = lite && !preLogFilmGrain && params.filmGrain > EPSILON,
+                recipeOps = if (recipe) RecipeOps.of(params) else 0,
             )
         }
 
@@ -89,4 +122,48 @@ private fun ColorRecipeParams.hasLchAdjustments(): Boolean {
         abs(magentaHue) > 0.001f ||
         abs(magentaChroma) > 0.001f ||
         abs(magentaLightness) > 0.001f
+}
+
+/** Recipe steps of the colour pass; each bit set means the step changes the image. */
+internal object RecipeOps {
+    const val EXPOSURE = 1 shl 0
+    const val CONTRAST = 1 shl 1
+    const val BASIC_TONE = 1 shl 2
+    const val WHITE_BALANCE = 1 shl 3
+    const val SATURATION = 1 shl 4
+    const val PRIMARY_CALIBRATION = 1 shl 5
+    const val GRADING = 1 shl 6
+    const val FADE = 1 shl 7
+    const val BLEACH_BYPASS = 1 shl 8
+    const val FLASH = 1 shl 9
+    const val VIGNETTE = 1 shl 10
+    const val NOISE = 1 shl 11
+    const val LOW_RES = 1 shl 12
+    const val ALL = (1 shl 13) - 1
+
+    // Thresholds match the shader's own early-outs.
+    fun of(params: ColorRecipeParams): Int {
+        var ops = 0
+        if (abs(params.exposure) > 0.001f) ops = ops or EXPOSURE
+        if (abs(params.contrast.coerceIn(0.5f, 1.5f) - 1f) > 0f) ops = ops or CONTRAST
+        if (abs(params.tonality) >= 0.001f) ops = ops or BASIC_TONE
+        if (params.temperature != 0f || params.tint != 0f) ops = ops or WHITE_BALANCE
+        if (abs(params.saturation - 1f) > 0.001f) ops = ops or SATURATION
+        if (params.primaryRedHue != 0f || params.primaryRedSaturation != 0f ||
+            params.primaryGreenHue != 0f || params.primaryGreenSaturation != 0f ||
+            params.primaryBlueHue != 0f || params.primaryBlueSaturation != 0f
+        ) {
+            ops = ops or PRIMARY_CALIBRATION
+        }
+        if (maxOf(params.gradingShadowAmount, params.gradingMidtoneAmount, params.gradingHighlightAmount) > 0.0001f) {
+            ops = ops or GRADING
+        }
+        if (params.fade > 0.001f) ops = ops or FADE
+        if (params.bleachBypass > 0.001f) ops = ops or BLEACH_BYPASS
+        if (params.flash > 0.001f) ops = ops or FLASH
+        if (abs(params.vignette) > 0.001f) ops = ops or VIGNETTE
+        if (params.noise > 0.001f) ops = ops or NOISE
+        if (params.lowRes > 0.005f) ops = ops or LOW_RES
+        return ops
+    }
 }

@@ -196,6 +196,7 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
     private var clarityOutputHeight: Int = 0
     private val filmGrainGl = FilmGrainGl(TAG)
     private val highlightDiffusionGl = HighlightDiffusionGl(TAG)
+    private val previewLiteEffects = PreviewLiteEffectsGl(TAG)
     private var filmGrainSourceTextureId: Int = 0
     private var filmGrainSourceFboId: Int = 0
     private var filmGrainSourceWidth: Int = 0
@@ -358,6 +359,14 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
     // 色彩配方参数
     @Volatile
     var colorRecipeEnabled: Boolean = false
+
+    /**
+     * Replaces the multi-pass preview effects (highlights / shadows tone map, clarity pyramid,
+     * soft light, bloom, red halation, film grain pass) with single-pass approximations inside the
+     * colour pass. Capture and video keep the full implementations.
+     */
+    @Volatile
+    var previewLiteEffectsEnabled: Boolean = true
 
     @Volatile
     var baselineColorRecipeEnabled: Boolean = false
@@ -579,6 +588,7 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
         colorProgramCache.reset()
         shadowsHighlightsPreview.reset()
         shadowsHighlightsStackPreview.reset()
+        previewLiteEffects.reset()
         enginePreview.reset()
         mgcEisHardwareBufferRenderer.resetAfterContextLoss()
         mgcEisYuvRenderer.resetAfterContextLoss()
@@ -793,6 +803,7 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
             lutConfig = lutConfig,
             lutEnabled = lutEnabled && lutConfig != null,
             videoLogEnabled = enableVideoLog && videoLogProfile.isEnabled,
+            previewLite = previewLiteEffectsEnabled,
         )
         return colorProgramCache.get(
             variant.copy(includeEnginePreview = includeEnginePreview, toneMapSource = toneMapSource)
@@ -804,6 +815,7 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
         params: com.hinnka.mycamera.model.ColorRecipeParams,
         locations: () -> ColorPassLocations?,
     ): ColorPassLocations? {
+        if (previewLiteEffectsEnabled) return null
         if (params.isDefault() || !ShadowsHighlightsShader.isActive(params.highlights, params.shadows)) return null
         return locations()
     }
@@ -857,10 +869,31 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
         } else {
             null
         }
+        val previewBlurTextureId = if (locations.previewBlur) {
+            val oesSource = sourceTextureTarget == GLES11Ext.GL_TEXTURE_EXTERNAL_OES
+            previewLiteEffects.render(
+                sourceTarget = sourceTextureTarget,
+                sourceTextureId = sourceTextureId,
+                sourceWidth = if (oesSource) previewWidth else width,
+                sourceHeight = if (oesSource) previewHeight else height,
+                drawQuad = ::drawSimpleQuad,
+            )
+        } else {
+            0
+        }
         GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, targetFboId)
         GLES30.glViewport(0, 0, width, height)
         GLES30.glClear(GLES30.GL_COLOR_BUFFER_BIT)
         GLES30.glUseProgram(locations.programId)
+        if (locations.previewBlur) {
+            GLES30.glActiveTexture(GLES30.GL_TEXTURE0 + PreviewLiteEffectsGl.TEXTURE_UNIT)
+            GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, previewBlurTextureId)
+            GLES30.glUniform1i(locations.uPreviewBlurLocation, PreviewLiteEffectsGl.TEXTURE_UNIT)
+            GLES30.glUniform1f(locations.uPreviewClarityLocation, params.clarity.coerceIn(-1f, 1f))
+            GLES30.glUniform1f(locations.uPreviewSoftLightLocation, params.softLight)
+            GLES30.glUniform1f(locations.uPreviewBloomLocation, params.bloom)
+            GLES30.glUniform1f(locations.uPreviewRedHalationLocation, params.redHalation)
+        }
         (shadowsHighlights ?: shadowsHighlightsPreview).bind(locations, shadowsHighlightsResult)
         colorProgramCache.bindLogInput(locations)
         enginePreview.bind(locations.uEnginePreviewLutLocation)
@@ -908,11 +941,12 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
             GLES30.glUniform1f(locations.uTintLocation, params.tint)
             GLES30.glUniform1f(locations.uFadeLocation, params.fade)
             GLES30.glUniform1f(locations.uVibranceLocation, params.color)
+            val shadowsHighlightsApplied = shadowsHighlightsResult != null || locations.liteShadowsHighlights
             ShadowsHighlightsShader.bindUniformLocations(
                 highlightsLocation = locations.uHighlightsLocation,
                 shadowsLocation = locations.uShadowsLocation,
-                highlights = if (shadowsHighlightsResult != null) params.highlights else 0f,
-                shadows = if (shadowsHighlightsResult != null) params.shadows else 0f,
+                highlights = if (shadowsHighlightsApplied) params.highlights else 0f,
+                shadows = if (shadowsHighlightsApplied) params.shadows else 0f,
             )
             GLES30.glUniform1f(locations.uSharpeningLocation, params.sharpness.coerceIn(-1f, 1f))
             GLES30.glUniform1f(locations.uFilmGrainLocation, params.filmGrain)
@@ -1098,15 +1132,17 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
         }
 
         val liveRecorder = livePhotoRecorder
-        val hdfEnabled = halation > 0.001f
-        val halationEnabled = redHalation > 0.001f
-        val bloomEnabled = bloom > 0.001f
-        val softLightEnabled = softLight > 0.001f
-        val clarityEnabled = abs(clarity) > 0.001f
+        // Lite mode renders these inside the colour pass instead of as separate passes.
+        val fullPostProcess = !previewLiteEffectsEnabled
+        val hdfEnabled = fullPostProcess && halation > 0.001f
+        val halationEnabled = fullPostProcess && redHalation > 0.001f
+        val bloomEnabled = fullPostProcess && bloom > 0.001f
+        val softLightEnabled = fullPostProcess && softLight > 0.001f
+        val clarityEnabled = fullPostProcess && abs(clarity) > 0.001f
         val preLogFilmGrainEnabled = filmGrain > 0.001f &&
             videoLogProfile.isEnabled &&
             !(lutEnabled && currentLutConfig != null)
-        val filmGrainEnabled = filmGrain > 0.001f && !preLogFilmGrainEnabled
+        val filmGrainEnabled = fullPostProcess && filmGrain > 0.001f && !preLogFilmGrainEnabled
         val postProcessEffectEnabled = hdfEnabled || halationEnabled || bloomEnabled || softLightEnabled
         val eyeFocusSamplingNeeded = onEyeFocusInputAvailable != null && !isEyeFocusBusy
         val suppressBaselineLayerForVideoLog = videoLogProfile.isEnabled
@@ -3237,6 +3273,7 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
         releaseClarityPreviewFramebuffers()
         shadowsHighlightsPreview.release()
         shadowsHighlightsStackPreview.release()
+        previewLiteEffects.release()
         filmGrainGl.release()
         highlightDiffusionGl.release()
         releaseFilmGrainSourceFramebuffer()

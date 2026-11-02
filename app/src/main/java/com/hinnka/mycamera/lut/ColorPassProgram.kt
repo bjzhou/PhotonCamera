@@ -61,8 +61,15 @@ internal data class ColorPassLocations(
     val uShadowsHighlightsStatsLocation: Int,
     val uShadowsHighlightsCurveLocation: Int,
     val uShadowsHighlightsAmountsLocation: Int,
+    val uPreviewBlurLocation: Int,
+    val uPreviewClarityLocation: Int,
+    val uPreviewSoftLightLocation: Int,
+    val uPreviewBloomLocation: Int,
+    val uPreviewRedHalationLocation: Int,
     val aPositionLocation: Int,
     val aTexCoordLocation: Int,
+    val previewBlur: Boolean,
+    val liteShadowsHighlights: Boolean,
 )
 
 internal class PreviewColorProgramCache {
@@ -175,8 +182,15 @@ internal class PreviewColorProgramCache {
             uShadowsHighlightsStatsLocation = GLES30.glGetUniformLocation(program, "uShadowsHighlightsStats"),
             uShadowsHighlightsCurveLocation = GLES30.glGetUniformLocation(program, "uShadowsHighlightsCurve"),
             uShadowsHighlightsAmountsLocation = GLES30.glGetUniformLocation(program, "uShadowsHighlightsAmounts"),
+            uPreviewBlurLocation = GLES30.glGetUniformLocation(program, "uPreviewBlur"),
+            uPreviewClarityLocation = GLES30.glGetUniformLocation(program, "uPreviewClarity"),
+            uPreviewSoftLightLocation = GLES30.glGetUniformLocation(program, "uPreviewSoftLight"),
+            uPreviewBloomLocation = GLES30.glGetUniformLocation(program, "uPreviewBloom"),
+            uPreviewRedHalationLocation = GLES30.glGetUniformLocation(program, "uPreviewRedHalation"),
             aPositionLocation = GLES30.glGetAttribLocation(program, "aPosition"),
             aTexCoordLocation = GLES30.glGetAttribLocation(program, "aTexCoord"),
+            previewBlur = variant.includePreviewBlur && !variant.toneMapSource,
+            liteShadowsHighlights = variant.includeLiteShadowsHighlights && !variant.toneMapSource,
         )
     }
 

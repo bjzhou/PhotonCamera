@@ -16,6 +16,7 @@ internal object PreviewColorShader {
         val needsClassifiers = variant.includeLchMixer || variant.includeLutMask
         val needsLogInput = variant.includeVideoLog ||
             variant.includeExtendedLutCurves
+        fun op(bit: Int, code: String) = if (variant.recipeOps and bit != 0) code else ""
         return """
             #version 300 es
             ${extension}
@@ -54,7 +55,7 @@ internal object PreviewColorShader {
             uniform float uHighlights;
             uniform float uShadows;
             ${if (variant.includeSharpening) "uniform float uSharpening;" else ""}
-            ${if (variant.includePreLogFilmGrain) """
+            ${if (variant.includePreLogFilmGrain || variant.includeFinalFilmGrain) """
             uniform float uFilmGrain;
             uniform float uFilmGrainSeed;
             uniform float uFilmGrainPixelScale;
@@ -130,7 +131,7 @@ internal object PreviewColorShader {
                 return dot(color, W);
             }
 
-            ${if (variant.includeColorRecipe && !variant.toneMapSource) """
+            ${if (variant.includeShadowsHighlights && !variant.toneMapSource) """
             uniform highp sampler2D uShadowsHighlightsMask;
             uniform highp sampler2D uShadowsHighlightsStats;
             uniform highp sampler2D uShadowsHighlightsCurve;
@@ -154,6 +155,8 @@ internal object PreviewColorShader {
             ${if (variant.includeLutMask) PreviewColorShaderModules.LUT_MASK else PreviewColorShaderModules.LUT_MASK_STUB}
             ${if (variant.includeExtendedLutCurves) PreviewColorShaderModules.EXTENDED_LUT_CURVES else PreviewColorShaderModules.SIMPLE_LUT_CURVES}
             ${if (variant.includePreLogFilmGrain) FilmGrainShaders.FUNCTIONS else ""}
+            ${if (variant.includeFinalFilmGrain) PreviewLiteEffectsGl.GRAIN_GLSL else ""}
+            ${if (variant.includePreviewBlur) PreviewLiteEffectsGl.GLSL else ""}
 
             ${PreviewColorShaderModules.PRIMARY_CALIBRATION}
             ${PreviewColorShaderModules.LUT_COLOR_SPACE}
@@ -170,7 +173,7 @@ internal object PreviewColorShader {
                 // The vertex stage already applies crop and the SurfaceTexture transform.
                 // Only effects that change raw coordinates need a fragment-stage transform.
                 vec2 uvCoord = vTexCoord;
-                if (uLowRes > 0.005) {
+                if (${if (variant.recipeOps and RecipeOps.LOW_RES != 0) "uLowRes > 0.005" else "false"}) {
                     float blocksX = mix(512.0, 32.0, uLowRes);
                     vec2 gridSize = vec2(1.0 / blocksX, 1.0 / (blocksX / uAspectRatio));
                     vec2 gridRC = floor(rcCoord / gridSize) * gridSize + gridSize * 0.5;
@@ -201,35 +204,47 @@ internal object PreviewColorShader {
                 color.rgb = applyJpegInputToneCurve(color.rgb);
                 color.rgb = sanitizeColor(color.rgb);
                 """ else ""}
+                ${if (variant.includeLiteClarity) "float previewSourceLuma = getLuma(color.rgb);" else ""}
 
                 if (${if (variant.includeColorRecipe) "uColorRecipeEnabled" else "false"}) {
+                    ${op(RecipeOps.EXPOSURE, """
                     if (abs(uExposure) > 0.001) {
                         color.rgb = applyExposureInLinearSpace(color.rgb, uExposure);
                         color.rgb = sanitizeColor(color.rgb);
                     }
+                    """)}
 
                     ${if (variant.toneMapSource) """
                     fragColor = vec4(color.rgb, 1.0);
                     return;
-                    """ else if (variant.includeColorRecipe) """
+                    """ else if (variant.includeShadowsHighlights) """
                     color.rgb = applyShadowsHighlights(color.rgb, vOutputCoord);
+                    color.rgb = sanitizeColor(color.rgb);
+                    """ else if (variant.includeLiteShadowsHighlights) """
+                    color.rgb = applyPreviewShadowsHighlights(color.rgb, uvCoord);
                     color.rgb = sanitizeColor(color.rgb);
                     """ else ""}
 
                     float luma = getLuma(color.rgb);
 
+                    ${op(RecipeOps.CONTRAST, """
                     color.rgb = applyContrastSCurve(color.rgb, uContrast);
                     color.rgb = sanitizeColor(color.rgb);
+                    """)}
 
+                    ${op(RecipeOps.BASIC_TONE, """
                     color.rgb = applyBasicToneLut(color.rgb);
                     color.rgb = sanitizeColor(color.rgb);
+                    """)}
 
+                    ${op(RecipeOps.WHITE_BALANCE, """
                     color.r += uTemperature * 0.1;
                     color.b -= uTemperature * 0.1;
                     color.g -= uTint * 0.05;
                     color.rgb = sanitizeColor(color.rgb);
+                    """)}
 
-                    if (abs(uSaturation - 1.0) > 0.001) {
+                    if (${if (variant.recipeOps and RecipeOps.SATURATION != 0) "abs(uSaturation - 1.0) > 0.001" else "false"}) {
                         luma = dot(color.rgb, W);
                         color.rgb = mix(vec3(luma), color.rgb, uSaturation);
                         color.rgb = sanitizeColor(color.rgb);
@@ -240,12 +255,17 @@ internal object PreviewColorShader {
                         color.rgb = sanitizeColor(color.rgb);
                     }
 
+                    ${op(RecipeOps.PRIMARY_CALIBRATION, """
                     color.rgb = applyPrimaryCalibration(color.rgb);
                     color.rgb = sanitizeColor(color.rgb);
+                    """)}
 
+                    ${if (variant.includeLchMixer) """
                     color.rgb = applyLchColorMixer(color.rgb);
                     color.rgb = sanitizeColor(color.rgb);
+                    """ else ""}
 
+                    ${op(RecipeOps.GRADING, """
                     color.rgb = applyThreeWayColorGrading(
                         color.rgb,
                         uGradingHues,
@@ -256,13 +276,17 @@ internal object PreviewColorShader {
                         W
                     );
                     color.rgb = sanitizeColor(color.rgb);
+                    """)}
 
+                    ${op(RecipeOps.FADE, """
                     if (uFade > 0.001) {
                         float fadeAmount = uFade * 0.3;
                         color.rgb = mix(color.rgb, vec3(0.5), fadeAmount) + fadeAmount * 0.1;
                         color.rgb = sanitizeColor(color.rgb);
                     }
+                    """)}
 
+                    ${op(RecipeOps.BLEACH_BYPASS, """
                     if (uBleachBypass > 0.001) {
                         luma = dot(color.rgb, W);
                         vec3 desaturated = mix(color.rgb, vec3(luma), 0.6);
@@ -273,12 +297,16 @@ internal object PreviewColorShader {
                         color.rgb = mix(color.rgb, desaturated, uBleachBypass);
                         color.rgb = sanitizeColor(color.rgb);
                     }
+                    """)}
 
+                    ${op(RecipeOps.FLASH, """
                     if (uFlash > 0.001) {
                         color.rgb = applyDirectFlash(color.rgb, vTexCoord, uAspectRatio, uFlash);
                         color.rgb = sanitizeColor(color.rgb);
                     }
+                    """)}
 
+                    ${op(RecipeOps.VIGNETTE, """
                     if (abs(uVignette) > 0.001) {
                         float dist = distance(vTexCoord, vec2(0.5));
                         float vignetteMask = smoothstep(0.8, 0.3, dist);
@@ -289,7 +317,9 @@ internal object PreviewColorShader {
                         }
                         color.rgb = sanitizeColor(color.rgb);
                     }
+                    """)}
 
+                    ${op(RecipeOps.NOISE, """
                     if (uNoise > 0.001) {
                         vec2 seedOffset = vec2(fract(uNoiseSeed * 1.234), fract(uNoiseSeed * 3.456));
                         vec2 noiseCoord = uvCoord * 800.0 + seedOffset * 100.0;
@@ -305,6 +335,7 @@ internal object PreviewColorShader {
                         color.rgb += finalNoise * uNoise * max(0.0, noiseMask);
                         color.rgb = sanitizeColor(color.rgb);
                     }
+                    """)}
 
                     color.rgb = sanitizeColor(color.rgb);
                 }
@@ -400,6 +431,31 @@ internal object PreviewColorShader {
                         ? uSharpening * 2.0
                         : uSharpening;
                     color.rgb = sanitizeColor(color.rgb + vec3(detail * sharpeningStrength));
+                }
+                """ else ""}
+
+                // Preview-only stand-ins, in the order of the full post-process chain.
+                ${if (variant.includeLiteClarity) """
+                color.rgb = sanitizeColor(applyPreviewClarity(color.rgb, previewSourceLuma, uvCoord));
+                """ else ""}
+                ${if (variant.includeLiteSoftLight) """
+                color.rgb = sanitizeColor(applyPreviewSoftLight(clamp(color.rgb, 0.0, 1.0), uvCoord));
+                """ else ""}
+                ${if (variant.includeLiteBloom) """
+                color.rgb = sanitizeColor(applyPreviewBloom(clamp(color.rgb, 0.0, 1.0), uvCoord));
+                """ else ""}
+                ${if (variant.includeLiteRedHalation) """
+                color.rgb = sanitizeColor(applyPreviewRedHalation(clamp(color.rgb, 0.0, 1.0), uvCoord));
+                """ else ""}
+                ${if (variant.includeFinalFilmGrain) """
+                if (uFilmGrain > 0.001) {
+                    color.rgb = applyPreviewFilmGrain(
+                        clamp(color.rgb, 0.0, 1.0),
+                        gl_FragCoord.xy,
+                        uFilmGrain,
+                        uFilmGrainSeed,
+                        uFilmGrainPixelScale
+                    );
                 }
                 """ else ""}
 
