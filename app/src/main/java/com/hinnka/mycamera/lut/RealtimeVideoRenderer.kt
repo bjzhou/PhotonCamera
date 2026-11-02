@@ -107,6 +107,14 @@ class RealtimeVideoRenderer(
         return layers.lastOrNull { select(it.params) > 0.001f }?.params?.let(select) ?: 0f
     }
     private val identityMatrix = FloatArray(16).also { Matrix.setIdentityM(it, 0) }
+
+    /** One highlights / shadows state per colour layer, indexed like `layers`. */
+    private val shadowsHighlightsSlots = mutableListOf<ShadowsHighlightsPreviewGl>()
+
+    private fun shadowsHighlightsSlot(index: Int): ShadowsHighlightsPreviewGl {
+        while (shadowsHighlightsSlots.size <= index) shadowsHighlightsSlots += ShadowsHighlightsPreviewGl(TAG)
+        return shadowsHighlightsSlots[index]
+    }
     private val firstPassMvpMatrix = FloatArray(16).also {
         Matrix.setIdentityM(it, 0)
         if (mirrorHorizontally || mirrorVertically) {
@@ -282,6 +290,7 @@ class RealtimeVideoRenderer(
             mvpMatrix = firstPassMvpMatrix,
             enableVideoLog = videoLogProfile.isEnabled,
             presentationTimeNs = timestampNs,
+            shadowsHighlights = shadowsHighlightsSlot(0),
         )
 
         if (layers.size > 1) {
@@ -302,6 +311,7 @@ class RealtimeVideoRenderer(
                     mvpMatrix = identityMatrix,
                     enableVideoLog = false,
                     presentationTimeNs = timestampNs,
+                    shadowsHighlights = shadowsHighlightsSlot(index + 1),
                 )
             }
         }
@@ -439,6 +449,10 @@ class RealtimeVideoRenderer(
         mvpMatrix: FloatArray,
         enableVideoLog: Boolean,
         presentationTimeNs: Long,
+        width: Int = encoderOutputSize.width,
+        height: Int = encoderOutputSize.height,
+        toneMapSource: Boolean = false,
+        shadowsHighlights: ShadowsHighlightsPreviewGl? = null,
     ) {
         val lutEnabled = layer.lutConfig != null && layer.lutTextureId != 0
         val variant = PreviewColorShaderVariant.forPass(
@@ -448,15 +462,42 @@ class RealtimeVideoRenderer(
             lutEnabled = lutEnabled,
             videoLogEnabled = enableVideoLog,
         )
-        val locations = colorProgramCache.get(variant)
+        val locations = colorProgramCache.get(variant.copy(toneMapSource = toneMapSource))
             ?: throw IllegalStateException("Cannot create realtime video color shader: $variant")
 
+        // Highlights / shadows: render the tone-map source with the same inputs, then build the mask.
+        val params = layer.params
+        val shadowsHighlightsResult = if (shadowsHighlights != null && !params.isDefault() &&
+            ShadowsHighlightsShader.isActive(params.highlights, params.shadows)
+        ) {
+            shadowsHighlights.prepare(width, height, params.highlights, params.shadows) { framebuffer, w, h ->
+                drawLayer(
+                    layer = layer,
+                    targetFboId = framebuffer,
+                    textureSource = textureSource,
+                    textureTarget = textureTarget,
+                    textureId = textureId,
+                    sourceStMatrix = sourceStMatrix,
+                    cropRect = cropRect,
+                    mvpMatrix = identityMatrix,
+                    enableVideoLog = enableVideoLog,
+                    presentationTimeNs = presentationTimeNs,
+                    width = w,
+                    height = h,
+                    toneMapSource = true,
+                )
+            }
+        } else {
+            null
+        }
+
         GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, targetFboId)
-        GLES30.glViewport(0, 0, encoderOutputSize.width, encoderOutputSize.height)
+        GLES30.glViewport(0, 0, width, height)
         GLES30.glClearColor(0f, 0f, 0f, 1f)
         GLES30.glClear(GLES30.GL_COLOR_BUFFER_BIT)
         GLES30.glUseProgram(locations.programId)
         colorProgramCache.bindLogInput(locations)
+        (shadowsHighlights ?: shadowsHighlightsSlot(0)).bind(locations, shadowsHighlightsResult)
 
         GLES30.glActiveTexture(GLES30.GL_TEXTURE0)
         GLES30.glBindTexture(textureTarget, textureId)
@@ -511,6 +552,7 @@ class RealtimeVideoRenderer(
             locations = locations,
             params = layer.params,
             presentationTimeNs = presentationTimeNs,
+            shadowsHighlightsActive = shadowsHighlightsResult != null,
         )
 
         val curveEnabled = layer.curveTextureId != 0
@@ -532,8 +574,8 @@ class RealtimeVideoRenderer(
 
         GLES30.glUniform2f(
             locations.uTexelSizeLocation,
-            1f / max(1, encoderOutputSize.width).toFloat(),
-            1f / max(1, encoderOutputSize.height).toFloat(),
+            1f / max(1, width).toFloat(),
+            1f / max(1, height).toFloat(),
         )
 
         val positions = vertexBuffer ?: return
@@ -567,6 +609,7 @@ class RealtimeVideoRenderer(
         locations: ColorPassLocations,
         params: ColorRecipeParams,
         presentationTimeNs: Long,
+        shadowsHighlightsActive: Boolean,
     ) {
         val enabled = !params.isDefault()
         GLES30.glUniform1i(locations.uColorRecipeEnabledLocation, if (enabled) 1 else 0)
@@ -590,8 +633,8 @@ class RealtimeVideoRenderer(
         ShadowsHighlightsShader.bindUniformLocations(
             highlightsLocation = locations.uHighlightsLocation,
             shadowsLocation = locations.uShadowsLocation,
-            highlights = params.highlights,
-            shadows = params.shadows,
+            highlights = if (shadowsHighlightsActive) params.highlights else 0f,
+            shadows = if (shadowsHighlightsActive) params.shadows else 0f,
         )
         GLES30.glUniform1f(locations.uSharpeningLocation, params.sharpness.coerceIn(-1f, 1f))
         GLES30.glUniform1f(locations.uFilmGrainLocation, params.filmGrain)
@@ -980,6 +1023,8 @@ class RealtimeVideoRenderer(
         mgcEisHardwareBufferRenderer.release()
         mgcEisYuvRenderer.release()
         colorProgramCache.release()
+        shadowsHighlightsSlots.forEach { it.release() }
+        shadowsHighlightsSlots.clear()
         basicToneTextures.release()
 
         if (eglDisplay != EGL14.EGL_NO_DISPLAY) {

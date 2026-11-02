@@ -57,6 +57,10 @@ internal data class ColorPassLocations(
     val uTexelSizeLocation: Int,
     val uCurveTextureLocation: Int,
     val uCurveEnabledLocation: Int,
+    val uShadowsHighlightsMaskLocation: Int,
+    val uShadowsHighlightsStatsLocation: Int,
+    val uShadowsHighlightsCurveLocation: Int,
+    val uShadowsHighlightsAmountsLocation: Int,
     val aPositionLocation: Int,
     val aTexCoordLocation: Int,
 )
@@ -167,6 +171,10 @@ internal class PreviewColorProgramCache {
             uTexelSizeLocation = GLES30.glGetUniformLocation(program, "uTexelSize"),
             uCurveTextureLocation = GLES30.glGetUniformLocation(program, "uCurveTexture"),
             uCurveEnabledLocation = GLES30.glGetUniformLocation(program, "uCurveEnabled"),
+            uShadowsHighlightsMaskLocation = GLES30.glGetUniformLocation(program, "uShadowsHighlightsMask"),
+            uShadowsHighlightsStatsLocation = GLES30.glGetUniformLocation(program, "uShadowsHighlightsStats"),
+            uShadowsHighlightsCurveLocation = GLES30.glGetUniformLocation(program, "uShadowsHighlightsCurve"),
+            uShadowsHighlightsAmountsLocation = GLES30.glGetUniformLocation(program, "uShadowsHighlightsAmounts"),
             aPositionLocation = GLES30.glGetAttribLocation(program, "aPosition"),
             aTexCoordLocation = GLES30.glGetAttribLocation(program, "aTexCoord"),
         )

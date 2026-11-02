@@ -1,9 +1,9 @@
 package com.hinnka.mycamera.raw
 
 import android.opengl.GLES30
+import com.hinnka.mycamera.lut.ShadowsHighlightsMaskGl
 import com.hinnka.mycamera.lut.ShadowsHighlightsShader
 import com.hinnka.mycamera.utils.PLog
-import kotlin.math.max
 
 /** Applies the optional linear-domain shadows/highlights and black/white adjustments. */
 internal class RawAdjustmentPass(
@@ -28,6 +28,7 @@ internal class RawAdjustmentPass(
     )
 
     private var program = 0
+    private val shadowsHighlightsMask = ShadowsHighlightsMaskGl(TAG)
     private var loggedUniformLocations = false
 
     fun render(input: Input): Output? {
@@ -44,6 +45,22 @@ internal class RawAdjustmentPass(
                 "source=${input.textureId} target=${input.targetTextureId} " +
                 "size=${input.width}x${input.height}",
         )
+        val maskResult = if (ShadowsHighlightsShader.isActive(input.highlights, input.shadows)) {
+            shadowsHighlightsMask.render(
+                sourceTextureId = input.textureId,
+                sourceWidth = input.width,
+                sourceHeight = input.height,
+                encoding = ShadowsHighlightsMaskGl.SourceEncoding.Linear,
+                exposureEv = 0f,
+            )?.takeIf { shadowsHighlightsMask.renderAmounts(input.highlights, input.shadows) }.also {
+                if (it == null) {
+                    PLog.e(TAG, "Unable to build RAW shadows/highlights mask")
+                    return null
+                }
+            }
+        } else {
+            null
+        }
         GLES30.glUseProgram(activeProgram)
         GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, input.targetFramebufferId)
         GLES30.glViewport(0, 0, input.width, input.height)
@@ -54,10 +71,16 @@ internal class RawAdjustmentPass(
             GLES30.glGetUniformLocation(activeProgram, "uInputTexture"),
             0,
         )
-        GLES30.glUniform2f(
-            GLES30.glGetUniformLocation(activeProgram, "uTexelSize"),
-            1f / max(1, input.width),
-            1f / max(1, input.height),
+        shadowsHighlightsMask.bind(
+            result = maskResult,
+            maskUnit = 1,
+            maskLocation = GLES30.glGetUniformLocation(activeProgram, "uShadowsHighlightsMask"),
+            statsUnit = 2,
+            statsLocation = GLES30.glGetUniformLocation(activeProgram, "uShadowsHighlightsStats"),
+            curveUnit = 3,
+            curveLocation = GLES30.glGetUniformLocation(activeProgram, "uShadowsHighlightsCurve"),
+            amountsUnit = 4,
+            amountsLocation = GLES30.glGetUniformLocation(activeProgram, "uShadowsHighlightsAmounts"),
         )
 
         val highlightsLocation = GLES30.glGetUniformLocation(activeProgram, "uHighlights")
@@ -91,6 +114,7 @@ internal class RawAdjustmentPass(
     }
 
     fun release() {
+        shadowsHighlightsMask.release()
         if (program != 0) {
             GLES30.glDeleteProgram(program)
             program = 0
@@ -116,30 +140,21 @@ internal class RawAdjustmentPass(
             out vec4 fragColor;
 
             uniform sampler2D uInputTexture;
-            uniform vec2 uTexelSize;
+            uniform highp sampler2D uShadowsHighlightsMask;
+            uniform highp sampler2D uShadowsHighlightsStats;
+            uniform highp sampler2D uShadowsHighlightsCurve;
+            uniform highp sampler2D uShadowsHighlightsAmounts;
             uniform float uHighlights;
             uniform float uShadows;
             uniform float uBlacks;
             uniform float uWhites;
 
-            vec3 sampleToneSource(vec2 uv) {
-                return texture(uInputTexture, clamp(uv, vec2(0.0), vec2(1.0))).rgb;
+            vec3 shToLinear(vec3 rgb) {
+                return rgb;
             }
 
-            vec3 shRgbToXyz(vec3 rgb) {
-                return mat3(
-                    0.4360747, 0.2225045, 0.0139322,
-                    0.3850649, 0.7168786, 0.0971045,
-                    0.1430804, 0.0606169, 0.7141733
-                ) * rgb;
-            }
-
-            vec3 shXyzToRgb(vec3 xyz) {
-                return mat3(
-                     3.1338561, -0.9787684,  0.0719453,
-                    -1.6168667,  1.9161415, -0.2289914,
-                    -0.4906146,  0.0334540,  1.4052427
-                ) * xyz;
+            vec3 shFromLinear(vec3 linearRgb) {
+                return linearRgb;
             }
 
             ${ShadowsHighlightsShader.GLSL}

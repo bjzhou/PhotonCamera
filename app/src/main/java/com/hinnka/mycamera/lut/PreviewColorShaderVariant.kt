@@ -23,6 +23,11 @@ internal data class PreviewColorShaderVariant(
     val includeEnginePreview: Boolean = false,
     val includeChromaticAberration: Boolean = false,
     val includeColorRecipe: Boolean = true,
+    /**
+     * Writes the colour as it enters highlights / shadows and stops there: the source of the
+     * tone-map mask, so that mask and colour pass share one input chain.
+     */
+    val toneMapSource: Boolean = false,
 ) {
     companion object {
         fun forPass(

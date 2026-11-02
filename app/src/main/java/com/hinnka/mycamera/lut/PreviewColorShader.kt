@@ -130,7 +130,22 @@ internal object PreviewColorShader {
                 return dot(color, W);
             }
 
-            ${PreviewShadowsHighlightsShader.GLSL}
+            ${if (variant.includeColorRecipe && !variant.toneMapSource) """
+            uniform highp sampler2D uShadowsHighlightsMask;
+            uniform highp sampler2D uShadowsHighlightsStats;
+            uniform highp sampler2D uShadowsHighlightsCurve;
+            uniform highp sampler2D uShadowsHighlightsAmounts;
+
+            vec3 shToLinear(vec3 color) {
+                return srgbToLinear(color);
+            }
+
+            vec3 shFromLinear(vec3 color) {
+                return linearToSrgb(color);
+            }
+
+            ${ShadowsHighlightsShader.GLSL}
+            """ else ""}
 
             ${if (needsOklab) PreviewColorShaderModules.OKLAB else ""}
             ${if (needsClassifiers) PreviewColorShaderModules.LCH_CLASSIFIERS else ""}
@@ -193,8 +208,13 @@ internal object PreviewColorShader {
                         color.rgb = sanitizeColor(color.rgb);
                     }
 
-                    color.rgb = applyPreviewShadowsHighlights(color.rgb);
+                    ${if (variant.toneMapSource) """
+                    fragColor = vec4(color.rgb, 1.0);
+                    return;
+                    """ else if (variant.includeColorRecipe) """
+                    color.rgb = applyShadowsHighlights(color.rgb, vOutputCoord);
                     color.rgb = sanitizeColor(color.rgb);
+                    """ else ""}
 
                     float luma = getLuma(color.rgb);
 
