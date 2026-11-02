@@ -414,8 +414,9 @@ fun GalleryEditScreen(
             editFrameId = editFrameId,
             editFrameCustomProperties = editFrameCustomProperties.toMap(),
             editSharpening = if (rawDevelopIsBaked) 0f else editSharpening,
-            editNoiseReduction = if (fast || rawDevelopIsBaked) 0f else editNoiseReduction,
-            editChromaNoiseReduction = if (fast || rawDevelopIsBaked) 0f else editChromaNoiseReduction,
+            // 降噪烘焙在底图里（RAW 开发 / JPG 降噪基底），松手后通过 refreshKey 刷新。
+            editNoiseReduction = 0f,
+            editChromaNoiseReduction = 0f,
             editRawExposureCompensation = if (fast || rawDevelopIsBaked) 0f else editRawExposureCompensation,
             editRawAutoExposure = if (fast || rawDevelopIsBaked) false else editRawAutoExposure,
             editRawHighlightsAdjustment = if (fast || rawDevelopIsBaked) 0f else editRawHighlightsAdjustment,
@@ -543,6 +544,12 @@ fun GalleryEditScreen(
 
     LaunchedEffect(editSourcePhoto?.id, refreshKey) {
         cropPreviewBitmap = null
+    }
+
+    // 进入编辑或底图（虚化 / AI 降噪）变化后，按当前强度补齐 JPG 降噪基底；无变化时不会刷新。
+    LaunchedEffect(editSourcePhoto?.id, refreshKey, isRaw) {
+        val photo = editSourcePhoto ?: return@LaunchedEffect
+        if (!isRaw) viewModel.refreshPhotonDenoiseBase(photo)
     }
 
     LaunchedEffect(editSourcePhoto?.id, refreshKey) {
@@ -1788,6 +1795,8 @@ fun GalleryEditScreen(
                                                 viewModel.persistCurrentRawEditMetadata(currentEditSourcePhoto) { success ->
                                                     if (success) requestRawPreviewRefresh()
                                                 }
+                                            } else {
+                                                viewModel.refreshPhotonDenoiseBase(currentEditSourcePhoto)
                                             }
                                         }
                                     )
@@ -1802,6 +1811,8 @@ fun GalleryEditScreen(
                                                 viewModel.persistCurrentRawEditMetadata(currentEditSourcePhoto) { success ->
                                                     if (success) requestRawPreviewRefresh()
                                                 }
+                                            } else {
+                                                viewModel.refreshPhotonDenoiseBase(currentEditSourcePhoto)
                                             }
                                         }
                                     )

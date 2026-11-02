@@ -1,6 +1,7 @@
 package com.hinnka.mycamera.viewmodel
 
 import android.app.Application
+import android.content.Context
 import android.content.Intent
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
@@ -3380,6 +3381,47 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
     /**
      * 清除指定照片的预览缓存
      */
+    /** 非 RAW 照片降噪基底的源图：与预览底图同序（虚化 > AI 降噪 > 原图）。 */
+    private fun photonDenoiseSource(context: Context, photoId: String, metadata: MediaMetadata): File? {
+        val bokehFile = GalleryManager.getBokehFile(context, photoId)
+        return when {
+            bokehFile.exists() -> bokehFile
+            metadata.hasAiDenoisedBase -> GalleryManager.getAiDenoiseFile(context, photoId).takeIf { it.exists() }
+            else -> GalleryManager.getOriginalImageFile(context, photoId)
+        }
+    }
+
+    private var photonDenoiseBaseJob: Job? = null
+
+    /**
+     * 按当前编辑强度生成非 RAW 照片的降噪基底（松手、进入编辑、源图变化时调用），
+     * 基底有变化时刷新预览。RAW 照片的降噪在 RAW 开发中烘焙，不走这里。
+     */
+    fun refreshPhotonDenoiseBase(photo: MediaData) {
+        if (photo.isVideo || isRawInGallery(photo.id)) return
+        val noiseReduction = editNoiseReduction.value
+        val chromaNoiseReduction = editChromaNoiseReduction.value
+        photonDenoiseBaseJob?.cancel()
+        photonDenoiseBaseJob = viewModelScope.launch(Dispatchers.IO) {
+            val context = getApplication<Application>()
+            try {
+                val metadata = currentMediaMetadata ?: photo.metadata ?: MediaMetadata()
+                val source = photonDenoiseSource(context, photo.id, metadata) ?: return@launch
+                val changed = contentRepository.photoProcessor.updatePhotonDenoiseBase(
+                    context, photo.id, source, noiseReduction, chromaNoiseReduction,
+                )
+                if (changed) {
+                    invalidatePreviewCache(photo.id)
+                    photoRefreshKeys[photo.id] = System.currentTimeMillis()
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                PLog.e(TAG, "Failed to build Photon denoise base", e)
+            }
+        }
+    }
+
     fun invalidatePreviewCache(photoId: String) {
         val snapshot = previewBitmapCache.snapshot()
         snapshot.keys.filter { it.startsWith("${photoId}_") }.forEach {
@@ -3555,6 +3597,22 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                 val canLoadExternalUri = isSystemExternal || sourceBackedUri != null
                 val externalUri = sourceBackedUri ?: photo.uri
                 val preserveExternalHdr = isSystemExternal && showOrigin && !useGlobalEdit
+                val skipPreviewDenoise = maxEdge < FULL_QUALITY_PREVIEW_MAX_EDGE
+
+                // 非 RAW 照片的降噪基底（同 RAW 烘焙的降噪）：编辑中只读取松手时生成的基底，拖动时保持旧结果，
+                // 不在预览渲染里跑降噪；编辑之外按元数据强度惰性生成。
+                val photonDenoiseBase = if (bitmap == null && !showOrigin && !isRawPhoto &&
+                    (useGlobalEdit || !skipPreviewDenoise)
+                ) {
+                    photonDenoiseSource(context, photo.id, finalMetadata)?.let { source ->
+                        contentRepository.photoProcessor.loadPhotonDenoiseBase(
+                            context, photo.id, source,
+                            finalNR.takeUnless { useGlobalEdit }, finalCNR.takeUnless { useGlobalEdit }, maxEdge,
+                        )
+                    }
+                } else {
+                    null
+                }
 
                 // 2. 原始底图缓存（按 maxEdge 加载，快速预览走小尺寸，正式预览走高分辨率）
                 val currentBitmap = bitmap ?: if (showOrigin) {
@@ -3566,7 +3624,7 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                         }
                 } else {
                     val bokehFile = GalleryManager.getBokehFile(context, photo.id)
-                    when {
+                    photonDenoiseBase ?: when {
                         bokehFile.exists() -> GalleryManager.loadBitmap(context, Uri.fromFile(bokehFile), maxEdge)
                         finalMetadata.hasAiDenoisedBase -> GalleryManager.loadBitmap(
                             context,
@@ -3585,9 +3643,8 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                 if (showOrigin) {
                     currentBitmap
                 } else {
-                    val skipPreviewDenoise = maxEdge < FULL_QUALITY_PREVIEW_MAX_EDGE
                     val applyBitmapSharpening = !isRawPhoto
-                    val applyBitmapDenoise = !isRawPhoto && !skipPreviewDenoise
+                    val applyBitmapDenoise = !isRawPhoto && !skipPreviewDenoise && !useGlobalEdit && photonDenoiseBase == null
                     val previewMetadata = if (!applyBitmapSharpening || !applyBitmapDenoise) {
                         finalMetadata.copy(
                             sharpening = if (applyBitmapSharpening) finalMetadata.sharpening else 0f,

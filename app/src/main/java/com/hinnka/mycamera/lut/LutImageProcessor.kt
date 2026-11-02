@@ -87,7 +87,7 @@ class LutImageProcessor(context: Context? = null) {
     private var bitmapDenoisePassthroughProgram = 0
     private var computeCapabilitiesChecked = false
     private var computeCapabilitiesSupported = false
-    private val bitmapPhotonDenoiser = PhotonMultiScaleDenoiser()
+    private val bitmapPhotonDenoiser = PhotonMultiScaleDenoiser(PhotonMultiScaleDenoiser.UI_SLICE_PIXELS)
     private var lutSharpenProgram = 0
     private var lutLuminanceGainProgram = 0
 
@@ -732,7 +732,15 @@ class LutImageProcessor(context: Context? = null) {
         if (uploadBitmap !== bitmap) uploadBitmap.recycle()
     }
 
-    suspend fun applyChromaDenoise(bitmap: Bitmap, strength: Float = 0.1f): Bitmap = withContext(glDispatcher) {
+    suspend fun applyChromaDenoise(bitmap: Bitmap, strength: Float = 0.1f): Bitmap =
+        applyBitmapDenoise(bitmap, 0f, strength)
+
+    /** Photon Bitmap 降噪（不含 LUT/配方），两个强度都为 0 时原样返回。 */
+    suspend fun applyBitmapDenoise(
+        bitmap: Bitmap,
+        lumaStrength: Float,
+        chromaStrength: Float,
+    ): Bitmap = withContext(glDispatcher) {
         currentCoroutineContext().ensureActive()
         if (!isInitialized) {
             if (!initialize()) {
@@ -747,7 +755,8 @@ class LutImageProcessor(context: Context? = null) {
         setupFramebuffer(width, height)
         uploadImageTexture(bitmap)
 
-        val denoised = renderBitmapPhotonDenoise(imageTextureId, width, height, 0f, strength)
+        val denoised = renderBitmapPhotonDenoise(imageTextureId, width, height, lumaStrength, chromaStrength)
+        if (!denoised) return@withContext bitmap
         performRender(
             width = width,
             height = height,

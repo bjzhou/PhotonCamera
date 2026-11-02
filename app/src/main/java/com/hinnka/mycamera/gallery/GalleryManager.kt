@@ -138,6 +138,8 @@ object GalleryManager {
     private const val VIDEO_FILE = "video.mp4"
     private const val DNG_FILE = "original.dng"
     private const val AI_DENOISE_FILE = "ai_denoise.jpg"
+    private const val PHOTON_DENOISE_FILE = "photon_denoise.jpg"
+    private const val PHOTON_DENOISE_KEY_FILE = "photon_denoise.key"
     private const val THUMBNAIL_FILE = "thumbnail.jpg"
     private const val BOKEH_FILE = "bokeh.jpg"
     private const val DETAIL_HDR_FILE = "detail_hdr.jpg"
@@ -598,6 +600,14 @@ object GalleryManager {
 
     fun getAiDenoiseFile(context: Context, photoId: String): File {
         return File(getPhotoDir(context, photoId), AI_DENOISE_FILE)
+    }
+
+    fun getPhotonDenoiseFile(context: Context, photoId: String): File {
+        return File(getPhotoDir(context, photoId), PHOTON_DENOISE_FILE)
+    }
+
+    fun getPhotonDenoiseKeyFile(context: Context, photoId: String): File {
+        return File(getPhotoDir(context, photoId), PHOTON_DENOISE_KEY_FILE)
     }
 
     fun getDepthFile(context: Context, photoId: String): File {

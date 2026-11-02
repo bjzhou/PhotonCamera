@@ -5,6 +5,7 @@ import android.graphics.ImageFormat
 import android.graphics.SurfaceTexture
 import android.hardware.camera2.CameraCharacteristics
 import android.hardware.camera2.CameraManager
+import android.hardware.camera2.params.StreamConfigurationMap
 import android.util.Log
 import android.util.Size
 import com.hinnka.mycamera.utils.PLog
@@ -68,8 +69,9 @@ object CameraUtils {
             // 两者裁切到 65:24 时，4:3 的水平 FOV 更大，导致拍到的画面比预览多。
             //
             // 策略：找到 getBestCaptureSize 会选择的比例，然后选择该比例的预览尺寸
-            val captureSizes = map.getOutputSizes(android.graphics.ImageFormat.YUV_420_888)?.toList() ?: emptyList()
-            val bestCaptureSize = captureSizes.maxByOrNull { it.width * it.height }
+            val captureSizes = map.getOutputSizes(ImageFormat.YUV_420_888)?.toList().orEmpty() +
+                    getHighResolutionOutputSizes(map, ImageFormat.YUV_420_888)
+            val bestCaptureSize = captureSizes.maxByOrNull { it.width.toLong() * it.height }
             
             if (bestCaptureSize != null) {
                 val captureRatio = bestCaptureSize.width.toFloat() / bestCaptureSize.height
@@ -116,30 +118,74 @@ object CameraUtils {
         characteristics: CameraCharacteristics,
         aspectRatio: AspectRatio,
         format: Int = ImageFormat.YUV_420_888
-    ): Size {
+    ): Size = selectCaptureSize(characteristics, aspectRatio, format).size
+
+    /**
+     * 拍照尺寸选择结果
+     * @param isHighResolution 尺寸仅出现在 getHighResolutionOutputSizes 中（无法保证 20fps，部分 HAL 可能配置失败）
+     */
+    data class CaptureSizeSelection(
+        val size: Size,
+        val isHighResolution: Boolean,
+        val maxStandardSize: Size?,
+        val maxHighResolutionSize: Size?
+    )
+
+    /**
+     * 选择拍照尺寸
+     *
+     * 不支持 BURST_CAPTURE 的设备会把达不到 20fps 的全尺寸只放在 getHighResolutionOutputSizes 中，
+     * 只看 getOutputSizes 会选到 1920x1440 之类的低分辨率。
+     */
+    fun selectCaptureSize(
+        characteristics: CameraCharacteristics,
+        aspectRatio: AspectRatio,
+        format: Int = ImageFormat.YUV_420_888,
+        includeHighResolution: Boolean = true
+    ): CaptureSizeSelection {
+        val fallback = CaptureSizeSelection(Size(1920, 1080), false, null, null)
         return try {
             val map = characteristics.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP)
-            val sizes = map?.getOutputSizes(format)
-                ?: map?.getOutputSizes(ImageFormat.YUV_420_888)
-                ?: arrayOf(Size(1920, 1080))
-            val sensorRatio = aspectRatio.getValue(true)
-
-            // 寻找比例最匹配传感器原生比例
-            val matchingSizes = sizes.filter {
-                val ratio = it.width.toFloat() / it.height
-                abs(ratio - sensorRatio) < 0.01
-            }
-
-            val bestMatching = matchingSizes.filter { it.height >= 2160 }.maxByOrNull { it.width * it.height }
-
-            if (bestMatching != null) return bestMatching
-
-            // 选择最大的尺寸
-            sizes.maxByOrNull { it.width * it.height } ?: Size(1920, 1080)
+                ?: return fallback
+            val outputFormat = if (map.getOutputSizes(format) != null) format else ImageFormat.YUV_420_888
+            val standardSizes = map.getOutputSizes(outputFormat)?.toList().orEmpty()
+            val highResolutionSizes = getHighResolutionOutputSizes(map, outputFormat)
+                .filterNot { it in standardSizes }
+            val candidates = if (includeHighResolution) standardSizes + highResolutionSizes else standardSizes
+            val size = chooseCaptureSize(candidates, aspectRatio.getValue(true)) ?: return fallback
+            CaptureSizeSelection(
+                size = size,
+                isHighResolution = size in highResolutionSizes,
+                maxStandardSize = standardSizes.maxByOrNull { it.width.toLong() * it.height },
+                maxHighResolutionSize = highResolutionSizes.maxByOrNull { it.width.toLong() * it.height }
+            )
         } catch (e: Exception) {
-//            PLog.e(TAG, "Failed to get capture size", e)
-            Size(1920, 1080)
+            PLog.w("CameraUtils", "selectCaptureSize failed: ${e.message}")
+            fallback
         }
+    }
+
+    private fun getHighResolutionOutputSizes(map: StreamConfigurationMap, format: Int): List<Size> {
+        return try {
+            map.getHighResolutionOutputSizes(format)?.toList().orEmpty()
+        } catch (e: Exception) {
+            emptyList()
+        }
+    }
+
+    private fun chooseCaptureSize(sizes: List<Size>, sensorRatio: Float): Size? {
+        // 寻找比例最匹配传感器原生比例
+        val matchingSizes = sizes.filter {
+            val ratio = it.width.toFloat() / it.height
+            abs(ratio - sensorRatio) < 0.01
+        }
+
+        val bestMatching = matchingSizes.filter { it.height >= 2160 }.maxByOrNull { it.width.toLong() * it.height }
+
+        if (bestMatching != null) return bestMatching
+
+        // 选择最大的尺寸
+        return sizes.maxByOrNull { it.width.toLong() * it.height }
     }
     
     /**

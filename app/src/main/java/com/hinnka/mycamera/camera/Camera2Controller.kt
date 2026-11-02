@@ -296,6 +296,9 @@ class Camera2Controller(private val context: Context) {
     private var activeOpenCameraId: String = ""
     private var activeOutputPhysicalCameraId: String? = null
     private val failedPhysicalOutputProfiles = mutableSetOf<PhysicalOutputFailureKey>()
+    // "streamCameraId:format" profiles whose high-resolution-only capture size failed session configuration
+    private val failedHighResolutionCaptureProfiles = mutableSetOf<String>()
+    private var activeHighResolutionCaptureProfile: String? = null
     private var cachedSensorOrientation: Int = 0
     private var cachedLensFacing: Int = CameraCharacteristics.LENS_FACING_BACK
     private var cachedHardwareLevel: Int = CameraCharacteristics.INFO_SUPPORTED_HARDWARE_LEVEL_LIMITED
@@ -2818,10 +2821,29 @@ class Camera2Controller(private val context: Context) {
                 }
                 previewSize = CameraUtils.getFixedPreviewSize(outputCharacteristicsForStreams, aspectRatio)
                 surfaceTexture.setDefaultBufferSize(previewSize.width, previewSize.height)
-                val captureSize = if (rawOutput != null) {
-                    rawOutput.size
+                val highResolutionProfile = "$outputCameraIdForStreams:$captureFormat"
+                val captureSizeSelection = if (rawOutput != null) {
+                    null
                 } else {
-                    CameraUtils.getBestCaptureSize(outputCharacteristicsForStreams, aspectRatio, captureFormat)
+                    CameraUtils.selectCaptureSize(
+                        outputCharacteristicsForStreams,
+                        aspectRatio,
+                        captureFormat,
+                        includeHighResolution = highResolutionProfile !in failedHighResolutionCaptureProfiles
+                    )
+                }
+                val captureSize = rawOutput?.size ?: captureSizeSelection!!.size
+                activeHighResolutionCaptureProfile =
+                    highResolutionProfile.takeIf { captureSizeSelection?.isHighResolution == true }
+                captureSizeSelection?.let { selection ->
+                    PLog.i(
+                        TAG,
+                        "Capture size candidates: selected=${selection.size.width}x${selection.size.height}, " +
+                                "highResolution=${selection.isHighResolution}, " +
+                                "maxStandard=${selection.maxStandardSize?.let { "${it.width}x${it.height}" }}, " +
+                                "maxHighResolution=${selection.maxHighResolutionSize?.let { "${it.width}x${it.height}" }}, " +
+                                "highResolutionDisabled=${highResolutionProfile in failedHighResolutionCaptureProfiles}"
+                    )
                 }
 
                 val isP3Supported = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
@@ -2872,6 +2894,7 @@ class Camera2Controller(private val context: Context) {
             } else {
                 safeCloseImageReader(imageReader)
                 imageReader = null
+                activeHighResolutionCaptureProfile = null
                 _state.value = _state.value.copy(isP3Supported = false)
             }
 
@@ -3289,6 +3312,9 @@ class Camera2Controller(private val context: Context) {
                         ) {
                             return
                         }
+                        if (retryPhotoSessionWithoutHighResolutionCapture("photo configure failed", openGeneration)) {
+                            return
+                        }
                         if (retryPreviewSessionWithoutPhysicalOutput("photo configure failed", openGeneration)) {
                             return
                         }
@@ -3543,6 +3569,24 @@ class Camera2Controller(private val context: Context) {
             openGeneration = openGeneration
         )
         return true
+    }
+
+    private fun retryPhotoSessionWithoutHighResolutionCapture(
+        reason: String,
+        openGeneration: Long
+    ): Boolean {
+        val profile = activeHighResolutionCaptureProfile ?: return false
+        val surfaceTexture = previewSurfaceTexture ?: return false
+        val handler = cameraHandler ?: return false
+        if (!failedHighResolutionCaptureProfiles.add(profile)) return false
+        activeHighResolutionCaptureProfile = null
+        PLog.w(TAG, "Retrying photo session without high-resolution capture size: profile=$profile, reason=$reason")
+        // The standard-size capture needs a new ImageReader.
+        return handler.post {
+            if (openGeneration == cameraOpenGeneration) {
+                openCamera(surfaceTexture)
+            }
+        }
     }
 
     private fun retryPreviewSessionWithoutPhysicalOutput(
