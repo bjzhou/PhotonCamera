@@ -3385,6 +3385,7 @@ internal class GlesMgcRawSpatialStacker(
             minimumSensitivityIso = frame.minimumSensitivityIso,
             maximumAnalogSensitivityIso = frame.maximumAnalogSensitivityIso,
             perFrameCamera2Profile = frame.channelNoiseProfile,
+            cfaPattern = cfaPattern,
         )
 
     private fun noiseModelForFrame(frame: RawStackFrame): RawNoiseModel =

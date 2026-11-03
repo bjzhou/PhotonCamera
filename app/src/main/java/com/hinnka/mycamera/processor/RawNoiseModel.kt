@@ -26,6 +26,14 @@ class RawNoiseModel private constructor(
     fun normalizedReadNoiseForShader(cfaPattern: Int = 0): FloatArray =
         canonicalChannels(readNoise, cfaPattern)
 
+    /**
+     * Spatial's MaximumMergeWeight divides by the canonical Gr read variance, so a profile whose
+     * Gr O term is zero (commonly a negative vendor O clamped by [sanitizeCoefficient]) cannot
+     * drive the merge even though it passes the generic Camera2 validity check.
+     */
+    fun hasPositiveGreenReadNoise(cfaPattern: Int): Boolean =
+        normalizedReadNoiseForShader(cfaPattern)[1] > 0f
+
     fun canonicalChannelPairs(cfaPattern: Int = 0): FloatArray {
         val shot = normalizedShotNoiseForShader(cfaPattern)
         val read = normalizedReadNoiseForShader(cfaPattern)
@@ -202,6 +210,7 @@ internal object RawNoiseModelResolver {
         minimumSensitivityIso: Int = 0,
         maximumAnalogSensitivityIso: Int = 0,
         perFrameCamera2Profile: FloatArray?,
+        cfaPattern: Int? = null,
     ): ResolvedRawNoiseModel {
         when (selection) {
             is RawNoiseProfileSelection.Calibrated -> {
@@ -221,6 +230,7 @@ internal object RawNoiseModelResolver {
         perFrameCamera2Profile
             ?.let(RawNoiseModel::fromCamera2NoiseProfile)
             ?.takeIf { it.hasValidCamera2Profile }
+            ?.takeIf { model -> cfaPattern == null || model.hasPositiveGreenReadNoise(cfaPattern) }
             ?.let { model ->
                 return ResolvedRawNoiseModel(model, RawNoiseModelSource.CAMERA2_PER_FRAME)
             }

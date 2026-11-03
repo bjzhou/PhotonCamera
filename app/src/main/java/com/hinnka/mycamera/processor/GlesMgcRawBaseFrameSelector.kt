@@ -224,6 +224,7 @@ internal class GlesMgcRawBaseFrameSelector(
                     minimumSensitivityIso = frame.minimumSensitivityIso,
                     maximumAnalogSensitivityIso = frame.maximumAnalogSensitivityIso,
                     perFrameCamera2Profile = frame.channelNoiseProfile,
+                    cfaPattern = cfaPattern,
                 )
                 check(noiseModel.source != RawNoiseModelSource.UNAVAILABLE) {
                     "Noise model is unavailable for base candidate ${frame.frameNumber}"

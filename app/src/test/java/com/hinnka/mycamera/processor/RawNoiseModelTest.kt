@@ -185,6 +185,40 @@ class RawNoiseModelTest {
     }
 
     @Test
+    fun spatialResolverUsesConfiguredFallbackWhenCanonicalGreenReadTermIsZero() {
+        // GRBG: phase 0 is Gr, so a zero O on the first pair leaves Spatial without Gr read noise.
+        val zeroGreenReadProfile = floatArrayOf(
+            1f, 0f,
+            2f, 20f,
+            3f, 30f,
+            4f, 40f,
+        )
+
+        val generic = RawNoiseModelResolver.resolve(
+            selection = systemSelection,
+            sensitivity = 800,
+            perFrameCamera2Profile = zeroGreenReadProfile,
+        )
+        val spatial = RawNoiseModelResolver.resolve(
+            selection = systemSelection,
+            sensitivity = 800,
+            perFrameCamera2Profile = zeroGreenReadProfile,
+            cfaPattern = 1,
+        )
+        val rggb = RawNoiseModelResolver.resolve(
+            selection = systemSelection,
+            sensitivity = 800,
+            perFrameCamera2Profile = zeroGreenReadProfile,
+            cfaPattern = 0,
+        )
+
+        assertEquals(RawNoiseModelSource.CAMERA2_PER_FRAME, generic.source)
+        assertEquals(RawNoiseModelSource.GCAM_SYSTEM_FALLBACK, spatial.source)
+        assertTrue(spatial.model.hasPositiveGreenReadNoise(cfaPattern = 1))
+        assertEquals(RawNoiseModelSource.CAMERA2_PER_FRAME, rggb.source)
+    }
+
+    @Test
     fun defaultResolverUsesConfiguredFallbackWhenCamera2ReadTermsAreZero() {
         val shotOnlyProfile = floatArrayOf(
             1f, 0f,
