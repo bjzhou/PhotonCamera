@@ -57,10 +57,6 @@ internal data class ColorPassLocations(
     val uTexelSizeLocation: Int,
     val uCurveTextureLocation: Int,
     val uCurveEnabledLocation: Int,
-    val uShadowsHighlightsMaskLocation: Int,
-    val uShadowsHighlightsStatsLocation: Int,
-    val uShadowsHighlightsCurveLocation: Int,
-    val uShadowsHighlightsAmountsLocation: Int,
     val uPreviewBlurLocation: Int,
     val uPreviewClarityLocation: Int,
     val uPreviewSoftLightLocation: Int,
@@ -69,7 +65,6 @@ internal data class ColorPassLocations(
     val aPositionLocation: Int,
     val aTexCoordLocation: Int,
     val previewBlur: Boolean,
-    val liteShadowsHighlights: Boolean,
 )
 
 internal class PreviewColorProgramCache {
@@ -178,10 +173,6 @@ internal class PreviewColorProgramCache {
             uTexelSizeLocation = GLES30.glGetUniformLocation(program, "uTexelSize"),
             uCurveTextureLocation = GLES30.glGetUniformLocation(program, "uCurveTexture"),
             uCurveEnabledLocation = GLES30.glGetUniformLocation(program, "uCurveEnabled"),
-            uShadowsHighlightsMaskLocation = GLES30.glGetUniformLocation(program, "uShadowsHighlightsMask"),
-            uShadowsHighlightsStatsLocation = GLES30.glGetUniformLocation(program, "uShadowsHighlightsStats"),
-            uShadowsHighlightsCurveLocation = GLES30.glGetUniformLocation(program, "uShadowsHighlightsCurve"),
-            uShadowsHighlightsAmountsLocation = GLES30.glGetUniformLocation(program, "uShadowsHighlightsAmounts"),
             uPreviewBlurLocation = GLES30.glGetUniformLocation(program, "uPreviewBlur"),
             uPreviewClarityLocation = GLES30.glGetUniformLocation(program, "uPreviewClarity"),
             uPreviewSoftLightLocation = GLES30.glGetUniformLocation(program, "uPreviewSoftLight"),
@@ -189,8 +180,7 @@ internal class PreviewColorProgramCache {
             uPreviewRedHalationLocation = GLES30.glGetUniformLocation(program, "uPreviewRedHalation"),
             aPositionLocation = GLES30.glGetAttribLocation(program, "aPosition"),
             aTexCoordLocation = GLES30.glGetAttribLocation(program, "aTexCoord"),
-            previewBlur = variant.includePreviewBlur && !variant.toneMapSource,
-            liteShadowsHighlights = variant.includeLiteShadowsHighlights && !variant.toneMapSource,
+            previewBlur = variant.includePreviewBlur,
         )
     }
 

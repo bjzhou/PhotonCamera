@@ -23,13 +23,9 @@ internal data class PreviewColorShaderVariant(
     val includeEnginePreview: Boolean = false,
     val includeChromaticAberration: Boolean = false,
     val includeColorRecipe: Boolean = true,
-    /**
-     * Compiles the highlights / shadows tone map only while it acts: its arrays, loops and
-     * samplers raise register pressure for the whole shader even when the uniform branch skips it.
-     */
-    val includeShadowsHighlights: Boolean = false,
-    /** Preview-only single-pass stand-ins for the multi-pass effects, see [PreviewLiteEffectsGl]. */
+    /** Highlights / shadows through [PreviewLiteEffectsGl], the only preview implementation. */
     val includeLiteShadowsHighlights: Boolean = false,
+    /** Preview-only single-pass stand-ins for the multi-pass effects, see [PreviewLiteEffectsGl]. */
     val includeLiteClarity: Boolean = false,
     val includeLiteSoftLight: Boolean = false,
     val includeLiteBloom: Boolean = false,
@@ -41,11 +37,6 @@ internal data class PreviewColorShaderVariant(
      * single slider costs one step rather than the whole recipe chain.
      */
     val recipeOps: Int = RecipeOps.ALL,
-    /**
-     * Writes the colour as it enters highlights / shadows and stops there: the source of the
-     * tone-map mask, so that mask and colour pass share one input chain.
-     */
-    val toneMapSource: Boolean = false,
 ) {
     val includePreviewBlur: Boolean
         get() = includeLiteShadowsHighlights || includeLiteClarity || includeLiteSoftLight ||
@@ -62,7 +53,9 @@ internal data class PreviewColorShaderVariant(
         ): PreviewColorShaderVariant {
             val lutCurve = lutConfig?.curve ?: TransferCurve.SRGB
             val recipe = !params.isDefault()
-            val shadowsHighlights = recipe && ShadowsHighlightsShader.isActive(params.highlights, params.shadows)
+            val shadowsHighlights = recipe &&
+                (abs(params.highlights) >= SHADOWS_HIGHLIGHTS_ACTIVE_THRESHOLD ||
+                    abs(params.shadows) >= SHADOWS_HIGHLIGHTS_ACTIVE_THRESHOLD)
             val preLogFilmGrain = videoLogEnabled && !lutEnabled && params.filmGrain > EPSILON
             val lite = previewLite && recipe
             return PreviewColorShaderVariant(
@@ -78,7 +71,6 @@ internal data class PreviewColorShaderVariant(
                 includeSharpening = abs(params.sharpness) > 0.0001f,
                 includeChromaticAberration = params.chromaticAberration > 0.001f,
                 includeColorRecipe = recipe,
-                includeShadowsHighlights = shadowsHighlights && !previewLite,
                 includeLiteShadowsHighlights = shadowsHighlights && previewLite,
                 includeLiteClarity = lite && abs(params.clarity) > EPSILON,
                 includeLiteSoftLight = lite && params.softLight > EPSILON,
@@ -91,6 +83,9 @@ internal data class PreviewColorShaderVariant(
 
         private val SIMPLE_LUT_CURVES = setOf(TransferCurve.SRGB.shaderId, TransferCurve.LINEAR.shaderId)
         private const val EPSILON = 0.001f
+
+        /** Matches the early-out of `applyShadowsHighlights`, which doubles the slider value first. */
+        private const val SHADOWS_HIGHLIGHTS_ACTIVE_THRESHOLD = 0.0005f
     }
 }
 

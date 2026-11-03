@@ -131,23 +131,6 @@ internal object PreviewColorShader {
                 return dot(color, W);
             }
 
-            ${if (variant.includeShadowsHighlights && !variant.toneMapSource) """
-            uniform highp sampler2D uShadowsHighlightsMask;
-            uniform highp sampler2D uShadowsHighlightsStats;
-            uniform highp sampler2D uShadowsHighlightsCurve;
-            uniform highp sampler2D uShadowsHighlightsAmounts;
-
-            vec3 shToLinear(vec3 color) {
-                return srgbToLinear(color);
-            }
-
-            vec3 shFromLinear(vec3 color) {
-                return linearToSrgb(color);
-            }
-
-            ${ShadowsHighlightsShader.GLSL}
-            """ else ""}
-
             ${if (needsOklab) PreviewColorShaderModules.OKLAB else ""}
             ${if (needsClassifiers) PreviewColorShaderModules.LCH_CLASSIFIERS else ""}
             ${if (variant.includeOklchDensity) PreviewColorShaderModules.OKLCH_DENSITY else PreviewColorShaderModules.OKLCH_DENSITY_STUB}
@@ -214,13 +197,7 @@ internal object PreviewColorShader {
                     }
                     """)}
 
-                    ${if (variant.toneMapSource) """
-                    fragColor = vec4(color.rgb, 1.0);
-                    return;
-                    """ else if (variant.includeShadowsHighlights) """
-                    color.rgb = applyShadowsHighlights(color.rgb, vOutputCoord);
-                    color.rgb = sanitizeColor(color.rgb);
-                    """ else if (variant.includeLiteShadowsHighlights) """
+                    ${if (variant.includeLiteShadowsHighlights) """
                     color.rgb = applyPreviewShadowsHighlights(color.rgb, uvCoord);
                     color.rgb = sanitizeColor(color.rgb);
                     """ else ""}

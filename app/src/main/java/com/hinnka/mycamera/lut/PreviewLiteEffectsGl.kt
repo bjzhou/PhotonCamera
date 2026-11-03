@@ -12,7 +12,8 @@ import kotlin.math.max
  * its mip chain stands in for every blur: clarity, soft light, bloom, red halation and the local
  * adaptation of highlights / shadows sample it at fixed levels inside the colour pass. The blur
  * is taken before the recipe, so glows and detail bands live in camera colour rather than in the
- * graded output; capture and video keep the full implementations.
+ * graded output; capture keeps the full implementations, and for highlights / shadows this is the
+ * only implementation.
  */
 internal class PreviewLiteEffectsGl(private val tag: String) {
     private var oesProgram = 0
@@ -188,8 +189,8 @@ internal class PreviewLiteEffectsGl(private val tag: String) {
             uniform float uPreviewBloom;
             uniform float uPreviewRedHalation;
 
-            // Global-plus-local tone curve standing in for the local Laplacian tone map: the coarse
-            // blur supplies the adaptation level, highlights / shadows act as gains on linear RGB.
+            // Global-plus-local tone curve: the coarse blur supplies the adaptation level, highlights /
+            // shadows act as gains on linear RGB.
             vec3 applyPreviewShadowsHighlights(vec3 color, vec2 uv) {
                 float fill = clamp(uShadows, -1.0, 1.0);
                 float highlight = clamp(uHighlights, -1.0, 1.0);

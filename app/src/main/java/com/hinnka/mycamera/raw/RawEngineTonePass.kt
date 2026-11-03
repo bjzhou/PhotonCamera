@@ -1,5 +1,6 @@
 package com.hinnka.mycamera.raw
 
+import com.hinnka.mycamera.lut.ShadowsHighlightsShader
 
 /** Selects a rendering engine and composes its shader with the shared tone pipeline. */
 internal class RawEngineTonePass(
@@ -158,7 +159,7 @@ internal class RawEngineTonePass(
         }
 
         internal fun fragmentShader(shaderDefinition: RawEngineToneShaderDefinition): String {
-            val source = combinedFragmentShader(shaderDefinition)
+            val source = combinedFragmentShader(shaderDefinition, includeShadowsHighlights = false)
             val cutoff = source.indexOf("const vec3 BW_LUMA")
                 .takeIf { it >= 0 }
                 ?: source.indexOf("void main()").takeIf { it >= 0 }
@@ -182,7 +183,7 @@ internal class RawEngineTonePass(
         internal fun hdrReferenceFragmentShader(
             shaderDefinition: RawEngineToneShaderDefinition,
         ): String {
-            val source = combinedFragmentShader(shaderDefinition)
+            val source = combinedFragmentShader(shaderDefinition, includeShadowsHighlights = false)
             val cutoff = source.indexOf("const vec3 BW_LUMA")
                 .takeIf { it >= 0 }
                 ?: source.indexOf("void main()").takeIf { it >= 0 }
@@ -305,7 +306,7 @@ internal class RawEngineTonePass(
             shaderDefinition: RawEngineToneShaderDefinition,
             isHncs: Boolean,
         ): String {
-            val source = combinedFragmentShader(shaderDefinition)
+            val source = combinedFragmentShader(shaderDefinition, includeShadowsHighlights = false)
             val cutoff = source.indexOf("const vec3 BW_LUMA")
                 .takeIf { it >= 0 }
                 ?: source.indexOf("void main()").takeIf { it >= 0 }
@@ -338,6 +339,16 @@ internal class RawEngineTonePass(
             """.trimIndent()
         }
 
+        fun combinedFragmentShaderFor(
+            colorEngine: RawRenderingEngine,
+            includeShadowsHighlights: Boolean = true,
+        ): String {
+            return combinedFragmentShader(
+                shaderDefinition = shaderDefinitionFor(colorEngine),
+                includeShadowsHighlights = includeShadowsHighlights,
+            )
+        }
+
         internal fun shaderDefinitionFor(
             colorEngine: RawRenderingEngine,
         ): RawEngineToneShaderDefinition {
@@ -357,7 +368,50 @@ internal class RawEngineTonePass(
 
         private fun combinedFragmentShader(
             shaderDefinition: RawEngineToneShaderDefinition,
+            includeShadowsHighlights: Boolean,
         ): String {
+            val shadowsHighlightsUniforms = if (includeShadowsHighlights) {
+                """
+        uniform vec2 uTexelSize;
+        uniform float uHighlights;
+        uniform float uShadows;
+                """.trimIndent()
+            } else {
+                ""
+            }
+            val shadowsHighlightsFunctions = if (includeShadowsHighlights) {
+                """
+        vec3 sampleToneSource(vec2 uv) {
+            vec3 sampleColor = texture(uInputTexture, clamp(uv, vec2(0.0), vec2(1.0))).rgb;
+            return applyEngineTone(prepareEngineInput(sampleColor));
+        }
+
+        vec3 shRgbToXyz(vec3 rgb) {
+            return mat3(
+                0.4360747, 0.2225045, 0.0139322,
+                0.3850649, 0.7168786, 0.0971045,
+                0.1430804, 0.0606169, 0.7141733
+            ) * rgb;
+        }
+
+        vec3 shXyzToRgb(vec3 xyz) {
+            return mat3(
+                 3.1338561, -0.9787684,  0.0719453,
+                -1.6168667,  1.9161415, -0.2289914,
+                -0.4906146,  0.0334540,  1.4052427
+            ) * xyz;
+        }
+
+        ${ShadowsHighlightsShader.GLSL}
+                """.trimIndent()
+            } else {
+                ""
+            }
+            val shadowsHighlightsApply = if (includeShadowsHighlights) {
+                "color = applyShadowsHighlights(color, vTexCoord);"
+            } else {
+                ""
+            }
             val prepareEngineInputFunction = if (shaderDefinition.includeAdobeProfilePipeline) {
                 """
         vec3 prepareProfileGainInput(vec3 color) {
@@ -402,6 +456,7 @@ internal class RawEngineTonePass(
         uniform sampler2D uInputTexture;
         uniform float uBlacks;
         uniform float uWhites;
+        $shadowsHighlightsUniforms
         uniform mat3 uProfileToEngineTransform;
 
         ${shaderDefinition.engineUniforms}
@@ -423,6 +478,8 @@ internal class RawEngineTonePass(
         ${shaderDefinition.engineFunctions}
 
         $prepareEngineInputFunction
+
+        $shadowsHighlightsFunctions
 
         const vec3 BW_LUMA = vec3(0.2126, 0.7152, 0.0722);
         const float BW_EPSILON = 0.000001;
@@ -464,6 +521,7 @@ internal class RawEngineTonePass(
             vec3 color = texture(uInputTexture, vTexCoord).rgb;
             color = prepareEngineInput(color);
             color = applyEngineTone(color);
+            $shadowsHighlightsApply
             color = applyBlackWhiteLevels(color);
             // Engine tone and adjustment passes have a linear-RGB output contract.
             // RawSrgbPass performs the single display encoding after all

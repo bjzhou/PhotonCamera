@@ -69,9 +69,6 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
     }
 
     private val colorProgramCache = PreviewColorProgramCache()
-    private val shadowsHighlightsPreview = ShadowsHighlightsPreviewGl(TAG)
-    private val shadowsHighlightsStackPreview = ShadowsHighlightsPreviewGl(TAG)
-    private val shadowsHighlightsSourceMvp = FloatArray(16).also { Matrix.setIdentityM(it, 0) }
     private val enginePreview = RawEnginePreviewGl()
     private val mgcEisHardwareBufferRenderer = MgcEisHardwareBufferRenderer(TAG)
     private val mgcEisYuvRenderer = MgcEisYuvRenderer(TAG)
@@ -586,8 +583,6 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
      */
     private fun resetGlResourceState() {
         colorProgramCache.reset()
-        shadowsHighlightsPreview.reset()
-        shadowsHighlightsStackPreview.reset()
         previewLiteEffects.reset()
         enginePreview.reset()
         mgcEisHardwareBufferRenderer.resetAfterContextLoss()
@@ -795,7 +790,6 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
         params: com.hinnka.mycamera.model.ColorRecipeParams,
         enableVideoLog: Boolean,
         includeEnginePreview: Boolean = false,
-        toneMapSource: Boolean = false,
     ): ColorPassLocations? {
         val variant = PreviewColorShaderVariant.forPass(
             textureSource = textureSource,
@@ -805,19 +799,7 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
             videoLogEnabled = enableVideoLog && videoLogProfile.isEnabled,
             previewLite = previewLiteEffectsEnabled,
         )
-        return colorProgramCache.get(
-            variant.copy(includeEnginePreview = includeEnginePreview, toneMapSource = toneMapSource)
-        )
-    }
-
-    /** The tone-map source program, compiled only while highlights / shadows are active. */
-    private inline fun toneMapSourceLocationsFor(
-        params: com.hinnka.mycamera.model.ColorRecipeParams,
-        locations: () -> ColorPassLocations?,
-    ): ColorPassLocations? {
-        if (previewLiteEffectsEnabled) return null
-        if (params.isDefault() || !ShadowsHighlightsShader.isActive(params.highlights, params.shadows)) return null
-        return locations()
+        return colorProgramCache.get(variant.copy(includeEnginePreview = includeEnginePreview))
     }
 
     private fun drawColorPass(
@@ -838,37 +820,7 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
         curveTextureId: Int,
         curveEnabled: Boolean,
         enableVideoLog: Boolean,
-        shadowsHighlights: ShadowsHighlightsPreviewGl? = null,
-        toneMapSourceLocations: ColorPassLocations? = null,
     ) {
-        // Highlights / shadows: render the tone-map source with the same inputs, then build the mask.
-        val shadowsHighlightsResult = if (shadowsHighlights != null && toneMapSourceLocations != null &&
-            !params.isDefault()
-        ) {
-            shadowsHighlights.prepare(width, height, params.highlights, params.shadows) { framebuffer, w, h ->
-                drawColorPass(
-                    locations = toneMapSourceLocations,
-                    targetFboId = framebuffer,
-                    width = w,
-                    height = h,
-                    sourceTextureTarget = sourceTextureTarget,
-                    sourceTextureId = sourceTextureId,
-                    sourceStMatrix = sourceStMatrix,
-                    sourceCropRect = sourceCropRect,
-                    targetMvpMatrix = shadowsHighlightsSourceMvp,
-                    lutConfig = lutConfig,
-                    lutTextureId = lutTextureId,
-                    lutSize = lutSize,
-                    lutEnabled = lutEnabled,
-                    params = params,
-                    curveTextureId = curveTextureId,
-                    curveEnabled = curveEnabled,
-                    enableVideoLog = enableVideoLog,
-                )
-            }
-        } else {
-            null
-        }
         val previewBlurTextureId = if (locations.previewBlur) {
             val oesSource = sourceTextureTarget == GLES11Ext.GL_TEXTURE_EXTERNAL_OES
             previewLiteEffects.render(
@@ -894,7 +846,6 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
             GLES30.glUniform1f(locations.uPreviewBloomLocation, params.bloom)
             GLES30.glUniform1f(locations.uPreviewRedHalationLocation, params.redHalation)
         }
-        (shadowsHighlights ?: shadowsHighlightsPreview).bind(locations, shadowsHighlightsResult)
         colorProgramCache.bindLogInput(locations)
         enginePreview.bind(locations.uEnginePreviewLutLocation)
 
@@ -941,12 +892,11 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
             GLES30.glUniform1f(locations.uTintLocation, params.tint)
             GLES30.glUniform1f(locations.uFadeLocation, params.fade)
             GLES30.glUniform1f(locations.uVibranceLocation, params.color)
-            val shadowsHighlightsApplied = shadowsHighlightsResult != null || locations.liteShadowsHighlights
             ShadowsHighlightsShader.bindUniformLocations(
                 highlightsLocation = locations.uHighlightsLocation,
                 shadowsLocation = locations.uShadowsLocation,
-                highlights = if (shadowsHighlightsApplied) params.highlights else 0f,
-                shadows = if (shadowsHighlightsApplied) params.shadows else 0f,
+                highlights = params.highlights,
+                shadows = params.shadows,
             )
             GLES30.glUniform1f(locations.uSharpeningLocation, params.sharpness.coerceIn(-1f, 1f))
             GLES30.glUniform1f(locations.uFilmGrainLocation, params.filmGrain)
@@ -1208,17 +1158,6 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
                     curveTextureId = curveTextureId,
                     curveEnabled = curveEnabled && curveTextureId != 0,
                     enableVideoLog = false,
-                    shadowsHighlights = shadowsHighlightsStackPreview,
-                    toneMapSourceLocations = toneMapSourceLocationsFor(creativeParams) {
-                        getColorPassLocations(
-                            textureSource = PreviewColorTextureSource.TEXTURE_2D,
-                            lutConfig = currentLutConfig,
-                            lutEnabled = lutEnabled && currentLutConfig != null,
-                            params = creativeParams,
-                            enableVideoLog = false,
-                            toneMapSource = true,
-                        )
-                    },
                 )
                 currentTexId = stackTextureId
             }
@@ -1528,18 +1467,6 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
             curveTextureId = layerCurveTextureId,
             curveEnabled = layerCurveEnabled,
             enableVideoLog = enableVideoLog,
-            shadowsHighlights = shadowsHighlightsPreview,
-            toneMapSourceLocations = toneMapSourceLocationsFor(layerParams) {
-                getColorPassLocations(
-                    textureSource = currentCameraTextureSource,
-                    lutConfig = layerLutConfig,
-                    lutEnabled = layerLutEnabled,
-                    params = layerParams,
-                    enableVideoLog = enableVideoLog,
-                    includeEnginePreview = plan != null,
-                    toneMapSource = true,
-                )
-            },
         )
 
         // 测光和直方图（按需）
@@ -3271,8 +3198,6 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
         clarityDownsampleProgram = 0
         clarityCompositeProgram = 0
         releaseClarityPreviewFramebuffers()
-        shadowsHighlightsPreview.release()
-        shadowsHighlightsStackPreview.release()
         previewLiteEffects.release()
         filmGrainGl.release()
         highlightDiffusionGl.release()

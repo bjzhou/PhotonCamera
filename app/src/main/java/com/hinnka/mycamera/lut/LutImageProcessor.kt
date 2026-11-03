@@ -101,7 +101,6 @@ class LutImageProcessor(context: Context? = null) {
     private var lutSharpenHeight = 0
     private val filmGrainGl = FilmGrainGl(TAG)
     private val highlightDiffusionGl = HighlightDiffusionGl(TAG)
-    private val shadowsHighlightsMask = ShadowsHighlightsMaskGl(TAG)
 
     // HDF (Highlight Diffusion) 光晕效果资源
     private var hdfExtractBlurHProgram = 0
@@ -808,19 +807,6 @@ class LutImageProcessor(context: Context? = null) {
         val lchAdjustments = ColorRecipeGl.lchAdjustments(colorRecipeParams)
         val primaryCalibrationMatrix = CameraRawCalibrationMatrix.build(colorRecipeParams)
         val program = shaderProgram
-        val shadowsHighlightsMaskResult = if (colorRecipeEnabled && ShadowsHighlightsShader.isActive(highlights, shadows)) {
-            shadowsHighlightsMask.render(
-                sourceTextureId = inputTextureId,
-                sourceWidth = width,
-                sourceHeight = height,
-                encoding = ShadowsHighlightsMaskGl.SourceEncoding.DisplaySrgb,
-                exposureEv = if (kotlin.math.abs(exposure) > 0.001f) exposure else 0f,
-            )?.takeIf { shadowsHighlightsMask.renderAmounts(highlights, shadows) }
-                .also { if (it == null) PLog.e(TAG, "Shadows/highlights mask unavailable, adjustment skipped") }
-        } else {
-            null
-        }
-        val shadowsHighlightsApplied = shadowsHighlightsMaskResult != null
         GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, framebufferId)
         GLES30.glViewport(0, 0, width, height)
 
@@ -833,17 +819,6 @@ class LutImageProcessor(context: Context? = null) {
         GLES30.glActiveTexture(GLES30.GL_TEXTURE0)
         GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, inputTextureId)
         GLES30.glUniform1i(GLES30.glGetUniformLocation(program, "uImageTexture"), 0)
-        shadowsHighlightsMask.bind(
-            result = shadowsHighlightsMaskResult,
-            maskUnit = 4,
-            maskLocation = GLES30.glGetUniformLocation(program, "uShadowsHighlightsMask"),
-            statsUnit = 8,
-            statsLocation = GLES30.glGetUniformLocation(program, "uShadowsHighlightsStats"),
-            curveUnit = 9,
-            curveLocation = GLES30.glGetUniformLocation(program, "uShadowsHighlightsCurve"),
-            amountsUnit = 10,
-            amountsLocation = GLES30.glGetUniformLocation(program, "uShadowsHighlightsAmounts"),
-        )
 
         GLES30.glActiveTexture(GLES30.GL_TEXTURE1)
         GLES30.glBindTexture(GLES30.GL_TEXTURE_3D, lutTextureId)
@@ -879,11 +854,7 @@ class LutImageProcessor(context: Context? = null) {
             GLES30.glUniform1f(GLES30.glGetUniformLocation(program, "uTint"), tint)
             GLES30.glUniform1f(GLES30.glGetUniformLocation(program, "uFade"), fade)
             GLES30.glUniform1f(GLES30.glGetUniformLocation(program, "uVibrance"), vibrance)
-            ShadowsHighlightsShader.bindUniforms(
-                program,
-                if (shadowsHighlightsApplied) highlights else 0f,
-                if (shadowsHighlightsApplied) shadows else 0f,
-            )
+            ShadowsHighlightsShader.bindUniforms(program, highlights, shadows)
             GLES30.glUniform1f(GLES30.glGetUniformLocation(program, "uVignette"), vignette)
             GLES30.glUniform1f(GLES30.glGetUniformLocation(program, "uFlash"), flash)
             GLES30.glUniform1f(GLES30.glGetUniformLocation(program, "uBleachBypass"), bleachBypass)
@@ -2289,7 +2260,6 @@ class LutImageProcessor(context: Context? = null) {
         if (clarityCompositeProgram != 0) GLES30.glDeleteProgram(clarityCompositeProgram)
         releaseClarityFramebuffers()
         filmGrainGl.release()
-        shadowsHighlightsMask.release()
         highlightDiffusionGl.release()
         for (i in 0..1) {
             if (hdfTexId[i] != 0) GLES30.glDeleteTextures(1, intArrayOf(hdfTexId[i]), 0)
@@ -2441,10 +2411,6 @@ class LutImageProcessor(context: Context? = null) {
             // 色散效果
             uniform float uChromaticAberration; // 0.0 ~ 1.0 (色散强度)
             uniform vec2 uTexelSize;
-            uniform highp sampler2D uShadowsHighlightsMask;
-            uniform highp sampler2D uShadowsHighlightsStats;
-            uniform highp sampler2D uShadowsHighlightsCurve;
-            uniform highp sampler2D uShadowsHighlightsAmounts;
             
             // 辅助函数：亮度计算
             const float PI = 3.14159265359;
@@ -2463,11 +2429,33 @@ class LutImageProcessor(context: Context? = null) {
             ${PreviewColorShaderModules.SANITIZE}
             ${BasicToneLutShader.GLSL}
 
-            vec3 shToLinear(vec3 rgb) {
-                return srgbToLinear(rgb);
+            vec3 prepareToneSample(vec3 sampleColor) {
+                vec3 prepared = sampleColor;
+                if (abs(uExposure) > 0.001) {
+                    prepared = applyExposureInLinearSpace(prepared, uExposure);
+                }
+                return sanitizeColor(prepared);
             }
 
-            vec3 shFromLinear(vec3 linearRgb) {
+            vec3 sampleToneSource(vec2 uv) {
+                return prepareToneSample(sampleImage(clamp(uv, vec2(0.0), vec2(1.0))).rgb);
+            }
+
+            vec3 shRgbToXyz(vec3 rgb) {
+                vec3 linearRgb = srgbToLinear(rgb);
+                return mat3(
+                    0.4360747, 0.2225045, 0.0139322,
+                    0.3850649, 0.7168786, 0.0971045,
+                    0.1430804, 0.0606169, 0.7141733
+                ) * linearRgb;
+            }
+
+            vec3 shXyzToRgb(vec3 xyz) {
+                vec3 linearRgb = mat3(
+                     3.1338561, -0.9787684,  0.0719453,
+                    -1.6168667,  1.9161415, -0.2289914,
+                    -0.4906146,  0.0334540,  1.4052427
+                ) * xyz;
                 return linearToSrgb(linearRgb);
             }
 
