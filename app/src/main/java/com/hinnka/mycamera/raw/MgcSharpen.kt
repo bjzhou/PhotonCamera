@@ -3,10 +3,9 @@ package com.hinnka.mycamera.raw
 import com.hinnka.mycamera.processor.PhotonCoreImagingTuning
 import com.hinnka.mycamera.processor.PhotonSharpenTuning
 
-/** MGC FinishRaw sharpening: the GLES SharpenTo16Bit port, or GuidedUpsample when prepared. */
+/** MGC FinishRaw sharpening: the GLES SharpenTo16Bit port, or the GLES GuidedUpsample when prepared. */
 internal class MgcSharpen {
-    private val transfer = RawFloatTextureTransfer()
-    val guided = MgcGuidedUpsample(transfer)
+    val guided = MgcGuidedUpsample()
     private val sharpen = GlesMgcSharpen()
 
     fun render(sourceTexture: Int, targetTexture: Int, width: Int, height: Int,
@@ -23,14 +22,12 @@ internal class MgcSharpen {
     }
 
     fun releaseBuffers() {
-        guided.release()
+        guided.releaseBuffers()
         sharpen.releaseBuffers()
-        transfer.releaseBuffers()
     }
 
     fun release() {
-        releaseBuffers()
+        guided.release()
         sharpen.release()
-        transfer.release()
     }
 }

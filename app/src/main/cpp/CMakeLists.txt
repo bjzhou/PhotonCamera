@@ -12,41 +12,6 @@ set(
 option(PHOTON_ENABLE_DNG_JXL "Enable Adobe DNG SDK JPEG XL support" OFF)
 
 set(
-    MGC_GUIDED_CAPSULE
-    "${CMAKE_CURRENT_SOURCE_DIR}/mgc_denoise_static/mgc_guided_upsample_capsule.bin"
-)
-set(
-    MGC_GUIDED_CAPSULE_SHA256
-    "d0708404b1d62561eafcae6b3fd2207f3340da5b0036d403c1c30da18bcd2b98"
-)
-if(NOT EXISTS "${MGC_GUIDED_CAPSULE}")
-    message(
-        FATAL_ERROR
-        "MGC GuidedUpsample capsule is missing; restore the tracked "
-        "mgc_denoise_static/mgc_guided_upsample_capsule.bin asset"
-    )
-endif()
-file(SHA256 "${MGC_GUIDED_CAPSULE}" MGC_GUIDED_CAPSULE_ACTUAL_SHA256)
-if(NOT MGC_GUIDED_CAPSULE_ACTUAL_SHA256 STREQUAL MGC_GUIDED_CAPSULE_SHA256)
-    message(FATAL_ERROR "MGC GuidedUpsample capsule hash mismatch")
-endif()
-set(
-    MGC_GUIDED_ASM
-    "${CMAKE_CURRENT_BINARY_DIR}/mgc_guided_upsample_static.S"
-)
-configure_file(
-    "${CMAKE_CURRENT_SOURCE_DIR}/mgc_denoise_static/mgc_guided_upsample_static.S.in"
-    "${MGC_GUIDED_ASM}"
-    @ONLY
-)
-set_source_files_properties(
-    "${MGC_GUIDED_ASM}"
-    PROPERTIES
-    GENERATED TRUE
-    OBJECT_DEPENDS "${MGC_GUIDED_CAPSULE}"
-)
-
-set(
     MGC_RAISR_CAPSULE
     "${CMAKE_CURRENT_SOURCE_DIR}/mgc_denoise_static/mgc_raisr_capsule.bin"
 )
@@ -351,14 +316,11 @@ add_library(my-native-lib SHARED
     lut_processor.cpp
     dcp_parser.cpp
     mgc_denoise_static/mgc_halide_runtime.cpp
-    mgc_denoise_static/mgc_denoise_static.cpp
     mgc_denoise_static/mgc_spatial_rgb_merge_jni.cpp
-    mgc_denoise_static/mgc_guided_upsample_jni.cpp
-    mgc_denoise_static/mgc_sharpen_jni.cpp
+    raw_float_texture_transfer_jni.cpp
     mgc_denoise_static/mgc_raisr_jni.cpp
     mgc_denoise_static/mgc_raisr_driver.cpp
     mgc_denoise_static/mgc_polysharp_driver.cpp
-    "${MGC_GUIDED_ASM}"
     "${MGC_RAISR_ASM}"
     "${MGC_RAISR_TABLES_ASM}"
     "${MGC_POLYSHARP_ASM}"
@@ -394,12 +356,9 @@ set_source_files_properties(
 )
 
 # RAW signal statistics define MGC's physical tuning coordinate, while PGTM validation must
-# reliably reject non-finite values. The sharpen adapter must preserve separate matrix
-# multiply/adds and nearest-even U12 rounding. Keep these independent of fast-math.
+# reliably reject non-finite values. Keep these independent of fast-math.
 set_source_files_properties(
     raw_signal_stats_jni.cpp
-    mgc_denoise_static/mgc_guided_upsample_jni.cpp
-    mgc_denoise_static/mgc_sharpen_jni.cpp
     PROPERTIES
     COMPILE_OPTIONS "-fno-fast-math;-ffp-contract=off"
 )
@@ -425,11 +384,10 @@ set_source_files_properties(
     COMPILE_OPTIONS "-fno-fast-math;-ffp-contract=off"
 )
 
-# The MGC Halide runtime and AOT wrappers rely on scalar IEEE behavior.
-# Keep them independent of the target-wide fast-math flags.
+# The MGC Halide runtime relies on scalar IEEE behavior.
+# Keep it independent of the target-wide fast-math flags.
 set_source_files_properties(
     mgc_denoise_static/mgc_halide_runtime.cpp
-    mgc_denoise_static/mgc_denoise_static.cpp
     PROPERTIES
     COMPILE_OPTIONS "-fno-fast-math;-ffp-contract=off"
 )

@@ -117,12 +117,14 @@ internal class GlesMgcSharpen {
         try {
             val level1Padding = 2 * GlesMgcSharpenShaders.LEVEL1_PADDING
             val level2Padding = 2 * GlesMgcSharpenShaders.LEVEL2_PADDING
-            lumaTexture = createPlane(width, height)
-            level1Texture = createPlane(width + level1Padding, height + level1Padding)
-            level2Texture = createPlane(width + level2Padding, height + level2Padding)
-            lumaFramebuffer = createFramebuffer(lumaTexture)
-            level1Framebuffer = createFramebuffer(level1Texture)
-            level2Framebuffer = createFramebuffer(level2Texture)
+            lumaTexture = MgcGlesSurfaces.texture(GLES30.GL_R16I, width, height, "MGC sharpen luma")
+            level1Texture = MgcGlesSurfaces.texture(GLES30.GL_R16I, width + level1Padding,
+                height + level1Padding, "MGC sharpen level1")
+            level2Texture = MgcGlesSurfaces.texture(GLES30.GL_R16I, width + level2Padding,
+                height + level2Padding, "MGC sharpen level2")
+            lumaFramebuffer = MgcGlesSurfaces.framebuffer("MGC sharpen luma", lumaTexture)
+            level1Framebuffer = MgcGlesSurfaces.framebuffer("MGC sharpen level1", level1Texture)
+            level2Framebuffer = MgcGlesSurfaces.framebuffer("MGC sharpen level2", level2Texture)
             outputFramebuffer = IntArray(1).also { GLES30.glGenFramebuffers(1, it, 0) }[0]
             this.width = width
             this.height = height
@@ -132,46 +134,9 @@ internal class GlesMgcSharpen {
         }
     }
 
-    // Integer textures are incomplete under linear filtering, so texelFetch would read zero.
-    private fun createPlane(width: Int, height: Int): Int {
-        val names = IntArray(1)
-        GLES30.glGenTextures(1, names, 0)
-        GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, names[0])
-        GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_MIN_FILTER, GLES30.GL_NEAREST)
-        GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_MAG_FILTER, GLES30.GL_NEAREST)
-        GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_WRAP_S, GLES30.GL_CLAMP_TO_EDGE)
-        GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_WRAP_T, GLES30.GL_CLAMP_TO_EDGE)
-        GLES30.glTexStorage2D(GLES30.GL_TEXTURE_2D, 1, GLES30.GL_R16I, width, height)
-        GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, 0)
-        val error = GLES30.glGetError()
-        if (error != GLES30.GL_NO_ERROR) {
-            GLES30.glDeleteTextures(1, names, 0)
-            error("MGC sharpen R16I plane ${width}x$height failed: 0x${Integer.toHexString(error)}")
-        }
-        return names[0]
-    }
-
-    private fun createFramebuffer(texture: Int): Int {
-        val names = IntArray(1)
-        GLES30.glGenFramebuffers(1, names, 0)
-        GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, names[0])
-        GLES30.glFramebufferTexture2D(GLES30.GL_FRAMEBUFFER, GLES30.GL_COLOR_ATTACHMENT0,
-            GLES30.GL_TEXTURE_2D, texture, 0)
-        val status = GLES30.glCheckFramebufferStatus(GLES30.GL_FRAMEBUFFER)
-        GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, 0)
-        if (status != GLES30.GL_FRAMEBUFFER_COMPLETE) {
-            GLES30.glDeleteFramebuffers(1, names, 0)
-            error("MGC sharpen R16I framebuffer is incomplete: 0x${Integer.toHexString(status)}")
-        }
-        return names[0]
-    }
-
     fun releaseBuffers() {
-        val framebuffers = intArrayOf(lumaFramebuffer, level1Framebuffer, level2Framebuffer, outputFramebuffer)
-            .filter { it != 0 }.toIntArray()
-        if (framebuffers.isNotEmpty()) GLES30.glDeleteFramebuffers(framebuffers.size, framebuffers, 0)
-        val textures = intArrayOf(lumaTexture, level1Texture, level2Texture).filter { it != 0 }.toIntArray()
-        if (textures.isNotEmpty()) GLES30.glDeleteTextures(textures.size, textures, 0)
+        MgcGlesSurfaces.deleteFramebuffers(lumaFramebuffer, level1Framebuffer, level2Framebuffer, outputFramebuffer)
+        MgcGlesSurfaces.deleteTextures(lumaTexture, level1Texture, level2Texture)
         lumaFramebuffer = 0; level1Framebuffer = 0; level2Framebuffer = 0; outputFramebuffer = 0
         lumaTexture = 0; level1Texture = 0; level2Texture = 0
         width = 0; height = 0
@@ -193,9 +158,11 @@ internal class GlesMgcSharpen {
      * The AOT entry's curve preparation, in the same unfused binary32 order (JVM Float arithmetic
      * is never contracted): knots and y values become int16 U12 codes, then each of the four
      * segments gets a Q8 slope and an intercept. Curves use [MgcSharpenCurveBuilder]'s
-     * [point, frequency, coordinate] layout.
+     * [point, frequency, coordinate] layout. The corner term is normalised over
+     * [cornerWidth] x [cornerHeight]: the image for SharpenTo16Bit, the two-row padded output for
+     * GuidedUpsample.
      */
-    class KernelUniforms(curves: FloatArray, width: Int, height: Int, attenuation: Float) {
+    class KernelUniforms(curves: FloatArray, cornerWidth: Int, cornerHeight: Int, attenuation: Float) {
         val knots = IntArray(9)
         val slopes = IntArray(12)
         val intercepts = IntArray(12)
@@ -221,8 +188,8 @@ internal class GlesMgcSharpen {
                     intercepts[band * 4 + k] = toS16(intercept)
                 }
             }
-            val halfWidth = width shr 1
-            val halfHeight = height shr 1
+            val halfWidth = cornerWidth shr 1
+            val halfHeight = cornerHeight shr 1
             val maxRadius2 = (halfWidth * halfWidth).toFloat() + (halfHeight * halfHeight).toFloat()
             radialValid = maxRadius2 > 0f
             inverseMaxRadius2 = if (radialValid) 1f / maxRadius2 else 0f
