@@ -1,4 +1,4 @@
-// Host wrappers of the MGC FinishRaw sharpen and GuidedUpsample AOT kernels.
+// Host wrappers of the MGC GuidedUpsample AOT kernels.
 #include "mgc_denoise_static.h"
 
 #include <cmath>
@@ -38,21 +38,6 @@ static_assert(offsetof(HalideBuffer, type) == 32);
 static_assert(offsetof(HalideBuffer, dimensions) == 36);
 static_assert(offsetof(HalideBuffer, dim) == 40);
 
-using SharpenTo16BitFn = int (*)(
-    void*,
-    HalideBuffer*,
-    HalideBuffer*,
-    HalideBuffer*,
-    HalideBuffer*,
-    float);
-extern "C" int photon_mgc_sharpen_to_16_bit_halide(
-    void*,
-    HalideBuffer*,
-    HalideBuffer*,
-    HalideBuffer*,
-    HalideBuffer*,
-    float);
-
 HalideBuffer MakeBuffer(
     void* host,
     HalideType type,
@@ -71,74 +56,6 @@ HalideBuffer MakeBuffer(
 }
 
 }  // namespace
-
-int RunSharpenTo16Bit(
-    const int16_t* input_yuv,
-    int width,
-    int height,
-    const float curves[30],
-    const float relative_corner_acutance_correction[3],
-    float sharpen_attenuation_scale,
-    uint16_t* output_interleaved_rgb) {
-    if (input_yuv == nullptr || curves == nullptr ||
-        relative_corner_acutance_correction == nullptr ||
-        output_interleaved_rgb == nullptr || width <= 0 || height <= 0 ||
-        !std::isfinite(sharpen_attenuation_scale)) {
-        return -1;
-    }
-    const int pixel_count = width * height;
-    const HalideDimension input_dimensions[] = {
-        {0, width, 1, 0},
-        {0, height, width, 0},
-        {0, 3, pixel_count, 0},
-    };
-    const HalideDimension curve_dimensions[] = {
-        {0, 1, 1, 0},
-        {0, 5, 1, 0},
-        {0, 3, 5, 0},
-        {0, 2, 15, 0},
-    };
-    const HalideDimension correction_dimensions[] = {
-        {0, 3, 1, 0},
-    };
-    const HalideDimension output_dimensions[] = {
-        {0, width, 3, 0},
-        // This AOT schedules two output rows per iteration, including its final tail.
-        // Input bounds stay exact so the kernel applies its original edge extension.
-        {0, (height + 1) & ~1, width * 3, 0},
-        {0, 3, 1, 0},
-    };
-    HalideBuffer input_buffer = MakeBuffer(
-        const_cast<int16_t*>(input_yuv),
-        {0, 16, 1},
-        3,
-        input_dimensions);
-    HalideBuffer curve_buffer = MakeBuffer(
-        const_cast<float*>(curves),
-        {2, 32, 1},
-        4,
-        curve_dimensions);
-    HalideBuffer correction_buffer = MakeBuffer(
-        const_cast<float*>(relative_corner_acutance_correction),
-        {2, 32, 1},
-        1,
-        correction_dimensions);
-    HalideBuffer output_buffer = MakeBuffer(
-        output_interleaved_rgb,
-        {1, 16, 1},
-        3,
-        output_dimensions);
-    const auto function = reinterpret_cast<SharpenTo16BitFn>(
-        &photon_mgc_sharpen_to_16_bit_halide);
-    return function(
-        nullptr,
-        &input_buffer,
-        &curve_buffer,
-        &correction_buffer,
-        &output_buffer,
-        sharpen_attenuation_scale);
-}
-
 
 // V25 S16 guide uses the same padded Q14 linear YUV domain as FinishRaw.
 extern "C" int photon_mgc_box_downsample_s16(

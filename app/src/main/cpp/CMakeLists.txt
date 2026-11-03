@@ -12,41 +12,6 @@ set(
 option(PHOTON_ENABLE_DNG_JXL "Enable Adobe DNG SDK JPEG XL support" OFF)
 
 set(
-    MGC_SHARPEN_CAPSULE
-    "${CMAKE_CURRENT_SOURCE_DIR}/mgc_denoise_static/mgc_sharpen_capsule.bin"
-)
-set(
-    MGC_SHARPEN_CAPSULE_SHA256
-    "733065cfec32ac752cc2088ea284b44a55b24a6171e5829f6971dcb098b1d7ce"
-)
-if(NOT EXISTS "${MGC_SHARPEN_CAPSULE}")
-    message(
-        FATAL_ERROR
-        "MGC SharpenTo16Bit capsule is missing; restore the tracked "
-        "mgc_denoise_static/mgc_sharpen_capsule.bin asset"
-    )
-endif()
-file(SHA256 "${MGC_SHARPEN_CAPSULE}" MGC_SHARPEN_CAPSULE_ACTUAL_SHA256)
-if(NOT MGC_SHARPEN_CAPSULE_ACTUAL_SHA256 STREQUAL MGC_SHARPEN_CAPSULE_SHA256)
-    message(FATAL_ERROR "MGC SharpenTo16Bit capsule hash mismatch")
-endif()
-set(
-    MGC_SHARPEN_ASM
-    "${CMAKE_CURRENT_BINARY_DIR}/mgc_sharpen_static.S"
-)
-configure_file(
-    "${CMAKE_CURRENT_SOURCE_DIR}/mgc_denoise_static/mgc_sharpen_static.S.in"
-    "${MGC_SHARPEN_ASM}"
-    @ONLY
-)
-set_source_files_properties(
-    "${MGC_SHARPEN_ASM}"
-    PROPERTIES
-    GENERATED TRUE
-    OBJECT_DEPENDS "${MGC_SHARPEN_CAPSULE}"
-)
-
-set(
     MGC_GUIDED_CAPSULE
     "${CMAKE_CURRENT_SOURCE_DIR}/mgc_denoise_static/mgc_guided_upsample_capsule.bin"
 )
@@ -394,7 +359,6 @@ add_library(my-native-lib SHARED
     mgc_denoise_static/mgc_raisr_driver.cpp
     mgc_denoise_static/mgc_polysharp_driver.cpp
     "${MGC_GUIDED_ASM}"
-    "${MGC_SHARPEN_ASM}"
     "${MGC_RAISR_ASM}"
     "${MGC_RAISR_TABLES_ASM}"
     "${MGC_POLYSHARP_ASM}"

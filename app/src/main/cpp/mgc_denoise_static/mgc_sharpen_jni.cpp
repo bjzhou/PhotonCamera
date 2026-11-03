@@ -1,13 +1,9 @@
-#include "mgc_denoise_static.h"
 #include "mgc_sharpen_adapter.h"
 #include <GLES3/gl3.h>
 #include <algorithm>
-#include <android/log.h>
 #include <arm_neon.h>
-#include <chrono>
 #include <cmath>
 #include <jni.h>
-#include <limits>
 
 namespace photon::mgc_denoise {
 namespace {
@@ -174,71 +170,6 @@ void SharpenRgbToFloatRgba(const uint16_t *rgb, size_t count, float *rgba) {
   }
 }
 } // namespace photon::mgc_denoise
-
-extern "C" JNIEXPORT jint JNICALL
-Java_com_hinnka_mycamera_raw_MgcSharpen_nativeSharpenRgbaFloat(
-    JNIEnv *env, jobject, jobject rgba_buffer, jobject scratch_buffer,
-    jint width, jint height, jfloat snr, jfloat attenuation, jfloatArray curve_points) {
-  using namespace photon::mgc_denoise;
-  if (!rgba_buffer || !scratch_buffer || !curve_points || width <= 0 || height <= 0 ||
-      !std::isfinite(snr) || snr < 0 || !std::isfinite(attenuation) ||
-      attenuation < 0)
-    return -1;
-  const size_t count = size_t(width) * size_t(height);
-  const size_t output_count =
-      size_t(width) * ((size_t(height) + 1) & ~size_t(1));
-  const size_t scratch_bytes = (count + output_count) * 6;
-  if (scratch_bytes > size_t(std::numeric_limits<int>::max()))
-    return -1;
-  auto *rgba = static_cast<float *>(env->GetDirectBufferAddress(rgba_buffer));
-  auto *yuv =
-      static_cast<int16_t *>(env->GetDirectBufferAddress(scratch_buffer));
-  if (!rgba || !yuv ||
-      env->GetDirectBufferCapacity(rgba_buffer) < jlong(count * 4 * sizeof(float)) ||
-      env->GetDirectBufferCapacity(scratch_buffer) < jlong(scratch_bytes))
-    return -1;
-  auto *rgb = reinterpret_cast<uint16_t *>(yuv + count * 3);
-  // Curves are resolved once in Kotlin from Photon's local, named tuning table.
-  // Halide layout: point + 5 * frequency + 15 * coordinate.
-  if (env->GetArrayLength(curve_points) != 30)
-    return -1;
-  float curves[30];
-  env->GetFloatArrayRegion(curve_points, 0, 30, curves);
-  if (env->ExceptionCheck())
-    return -1;
-  for (int band = 0; band < 3; ++band) {
-    for (int point = 0; point < 5; ++point) {
-      const int index = point + 5 * band;
-      const float x = curves[index], y = curves[index + 15];
-      if (!std::isfinite(x) || !std::isfinite(y) || x < 0 || y < 0 ||
-          (point == 0 && (x != 0 || y != 0)) ||
-          (point > 0 && x <= curves[index - 1]))
-        return -1;
-    }
-  }
-  constexpr float corner_correction[3] = {0, 0, 0};
-  using Clock = std::chrono::steady_clock;
-  const auto start = Clock::now();
-  if (!SharpenFloatRgbaToYuv(rgba, count, yuv)) return -1;
-  const auto converted = Clock::now();
-  const int result = RunSharpenTo16Bit(
-      yuv, width, height, curves, corner_correction, attenuation, rgb);
-  if (result != 0)
-    return result;
-  const auto sharpened = Clock::now();
-  SharpenRgbToFloatRgba(rgb, count, rgba);
-  const auto finish = Clock::now();
-  const auto ms = [](auto a, auto b) {
-    return std::chrono::duration<double, std::milli>(b - a).count();
-  };
-  __android_log_print(
-      ANDROID_LOG_INFO, "PLog_MgcSharpen",
-      "MGC original sharpen %dx%d snr=%.6g attenuation=%.6g convertInMs=%.3f "
-      "kernelMs=%.3f convertOutMs=%.3f totalNativeMs=%.3f",
-      width, height, snr, attenuation, ms(start, converted),
-      ms(converted, sharpened), ms(sharpened, finish), ms(start, finish));
-  return 0;
-}
 
 extern "C" JNIEXPORT jboolean JNICALL
 Java_com_hinnka_mycamera_raw_RawFloatTextureTransfer_nativeUpload(
