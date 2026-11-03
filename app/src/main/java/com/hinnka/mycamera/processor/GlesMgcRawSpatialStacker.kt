@@ -434,7 +434,7 @@ internal class GlesMgcRawSpatialStacker(
     private var spatialRgbAccumulateProgram = 0
     private var spatialRgbResolveProgram = 0
     private var copyRgb16ToFloatProgram = 0
-    private var rgbChromaPostprocessor: GlesMgcSpatialRgbChromaPostprocessor? = null
+    private var rgbOutputAssembler: GlesMgcSpatialRgbOutputAssembler? = null
     private var supportsComputePrograms = false
     private var supportsComputeReadback = false
     private var maxShaderStorageBlockBytes = 0L
@@ -2256,11 +2256,11 @@ internal class GlesMgcRawSpatialStacker(
             val lensShadingTexture = createLensShadingTexture()
             val fullOutput = MgcSpatialRgbRect(0, 0, width, height)
             val fullOutputTile = MgcSpatialRgbTile(index = 0, outputCore = fullOutput)
-            val chromaPostprocessor = checkNotNull(rgbChromaPostprocessor) {
-                "MGC Sabre VGN color noise/IIR postprocessor is not initialized"
+            val outputAssembler = checkNotNull(rgbOutputAssembler) {
+                "MGC Sabre VGN output assembler is not initialized"
             }
-            chromaPostprocessor.initStorage(listOf(fullOutputTile))
-            val resolvedRgb = chromaPostprocessor.normalizationTargetTexture()
+            outputAssembler.initStorage(listOf(fullOutputTile))
+            val resolvedRgb = outputAssembler.normalizationTargetTexture()
             val resolveStartNs = System.nanoTime()
             renderSabreResolve(
                 accumulatedColor = accumulatedColor,
@@ -2276,7 +2276,7 @@ internal class GlesMgcRawSpatialStacker(
                 SABRE_TAG,
                 "MGC Sabre Resolve GPU submit=${elapsedMs(resolveStartNs)}ms",
             )
-            chromaPostprocessor.markTileWritten(fullOutputTile)
+            outputAssembler.markTileWritten(fullOutputTile)
             releaseSabreMergePhaseTextures(resolvedRgb)
             if (!exportGpuLinearRgbSource) {
                 val outputBytes = width.toLong() * height * 3L * Short.SIZE_BYTES
@@ -2286,31 +2286,30 @@ internal class GlesMgcRawSpatialStacker(
                 )
             }
             GlesGpuScheduler.memoryBarrier()
-            val onChromaFinalSubmitted: (() -> Unit)? = when {
+            val onOutputSubmitted: (() -> Unit)? = when {
                 exportGpuLinearRgbSource -> {
-                    { completionRecorder.mark(GpuStackCompletionStage.CHROMA_POSTPROCESS) }
+                    { completionRecorder.mark(GpuStackCompletionStage.OUTPUT_HANDOFF) }
                 }
                 else -> null
             }
-            val chromaResult = chromaPostprocessor.process(
+            outputAssembler.process(
                 obtainOutputBuffer = { checkNotNull(cpuOutput) },
                 deferFullSizeReadback = exportGpuLinearRgbSource,
-                onFinalSubmitted = onChromaFinalSubmitted,
-            )
-            postprocessedUi = chromaResult.exportedTextureId
+                onFinalSubmitted = onOutputSubmitted,
+            ).also { postprocessedUi = it.exportedTextureId }
             if (exportGpuLinearRgbSource) {
                 check(postprocessedUi != 0) {
-                    "MGC Sabre VGN color noise/IIR did not export its filtered texture"
+                    "MGC Sabre VGN output did not export its resolved texture"
                 }
                 exportedTexture = if (gpuLinearRgbStorage == GpuLinearRgbStorage.RGBA16UI) {
                     postprocessedUi.also { postprocessedUi = 0 }
                 } else {
-                    // The chroma component leaves its final image pass behind a deferred export
-                    // checkpoint. Complete that ownership handoff before submitting a dependent
-                    // conversion and deleting the RGBA16UI source. This mirrors Spatial RGB and
-                    // avoids exposing partially retired VGN work groups on affected Mali queues.
+                    // Resolve leaves its final pass behind a deferred export checkpoint. Complete
+                    // that ownership handoff before submitting a dependent conversion and deleting
+                    // the RGBA16UI source. This mirrors Spatial RGB and avoids exposing partially
+                    // retired work groups on affected Mali queues.
                     GlesGpuCompletion.awaitSubmittedWork(
-                        label = "MGC Sabre VGN IIR-to-float handoff",
+                        label = "MGC Sabre VGN RGB16-to-float handoff",
                         checkGlError = ::checkGlError,
                     )
                     createTexture(
@@ -2335,15 +2334,13 @@ internal class GlesMgcRawSpatialStacker(
                     textureSpecs.remove(exportedTexture)
                 }
             }
-            checkGlError("MGC Sabre Resolve/VGN color noise")
+            checkGlError("MGC Sabre Resolve/VGN output")
             PLog.i(
                 SABRE_TAG,
                 "MGC Sabre complete frames=${frames.size} native=${width}x$height " +
                     "output=${outputWidth}x$outputHeight " +
                     "referenceSnr=${kernelTuning.referenceSnr} " +
                     "result=${if (exportedTexture != 0) gpuLinearRgbStorage.name + "_GPU" else "RGB16_CPU"} " +
-                    "colorNoiseIir=${chromaResult.chromaSubmissionMs}ms " +
-                    "chromaFinal=${chromaResult.finalSubmissionMs}ms " +
                     "total=${elapsedMs(processStartNs)}ms",
             )
             val result = RawStackResult(
@@ -2765,7 +2762,7 @@ internal class GlesMgcRawSpatialStacker(
 
     private fun initSabrePrograms() {
         check(supportsComputePrograms) {
-            "MGC Sabre VGN color noise/IIR requires the GLES 3.1 compute baseline"
+            "MGC Sabre VGN requires the GLES 3.1 compute baseline"
         }
         sabreExtractBayerProgram = linkProgram(
             GlesMgcRawSabreShaders.extractBayer,
@@ -2847,17 +2844,17 @@ internal class GlesMgcRawSpatialStacker(
         ) {
             copyRgb16ToFloatProgram = linkComputeProgram(
                 GlesMgcRawSpatialShaders.copyRgb16ToFloat,
-                "mgc_sabre_chroma_to_rgba16f",
+                "mgc_sabre_rgb16_to_rgba16f",
             )
         }
-        // ResolveSabre and VGN stay on the native grid. A requested larger output is a separate
-        // display transform after FinishRaw/GuidedUpsample in RawDemosaicProcessor.
-        rgbChromaPostprocessor = createRgbChromaPostprocessor(
+        // ResolveSabre stays on the native grid. A requested larger output is a separate display
+        // transform after FinishRaw/GuidedUpsample in RawDemosaicProcessor.
+        rgbOutputAssembler = createRgbOutputAssembler(
             imageWidth = width,
             imageHeight = height,
             exportFullSizeTexture = exportGpuLinearRgbSource ||
                 outputWidth != width || outputHeight != height,
-        ).also { it.initPrograms() }
+        )
     }
 
     private fun initMergeUpsampleAlignment(): Int {
@@ -3017,7 +3014,7 @@ internal class GlesMgcRawSpatialStacker(
         }
         if (outputMode == MgcSpatialOutputMode.RGB) {
             check(supportsComputePrograms) {
-                "MGC Spatial RGB color noise/IIR requires the GLES 3.1 compute baseline"
+                "MGC Spatial RGB requires the GLES 3.1 compute baseline"
             }
             spatialRgbConvertProgram = linkProgram(
                 GlesMgcGreenDemosaicShaders.convertRaw16,
@@ -3035,7 +3032,7 @@ internal class GlesMgcRawSpatialStacker(
                 GlesMgcSpatialRgbMergeShaders.accumulateFrame,
                 "mgc_spatial_v25_rgb_accumulate",
             )
-            // Color noise/IIR owns a fixed RGBA16UI boundary, matching the VGN/Radiance
+            // The output assembler owns a fixed RGBA16UI boundary, matching the VGN/Radiance
             // contract. The merged F16 output enters that boundary exactly once.
             spatialRgbResolveProgram = linkProgram(
                 GlesMgcSpatialRgbMergeShaders.resolve,
@@ -3046,12 +3043,10 @@ internal class GlesMgcRawSpatialStacker(
             ) {
                 copyRgb16ToFloatProgram = linkComputeProgram(
                     GlesMgcRawSpatialShaders.copyRgb16ToFloat,
-                    "mgc_spatial_rgb_chroma_to_rgba16f",
+                    "mgc_spatial_rgb16_to_rgba16f",
                 )
             }
-            rgbChromaPostprocessor = createRgbChromaPostprocessor().also {
-                it.initPrograms()
-            }
+            rgbOutputAssembler = createRgbOutputAssembler()
         }
         normalizeBayerProgram = linkProgram(
             GlesMgcRawSpatialShaders.normalizeBayer,
@@ -3059,21 +3054,16 @@ internal class GlesMgcRawSpatialStacker(
         )
     }
 
-    private fun createRgbChromaPostprocessor(
+    private fun createRgbOutputAssembler(
         imageWidth: Int = outputWidth,
         imageHeight: Int = outputHeight,
         exportFullSizeTexture: Boolean = exportGpuLinearRgbSource,
-    ): GlesMgcSpatialRgbChromaPostprocessor {
-        return GlesMgcSpatialRgbChromaPostprocessor(
+    ): GlesMgcSpatialRgbOutputAssembler {
+        return GlesMgcSpatialRgbOutputAssembler(
             imageWidth = imageWidth,
             imageHeight = imageHeight,
-            calculationWbGains = calculationWhiteBalance,
-            outputScale = 1f,
             exportFullSizeTexture = exportFullSizeTexture,
-            backend = object : GlesMgcSpatialRgbChromaPostprocessor.Backend {
-                override fun linkComputeProgram(source: String, name: String): Int =
-                    this@GlesMgcRawSpatialStacker.linkComputeProgram(source, name)
-
+            backend = object : GlesMgcSpatialRgbOutputAssembler.Backend {
                 override fun createRgba16UiTexture(
                     width: Int,
                     height: Int,
@@ -3093,9 +3083,6 @@ internal class GlesMgcRawSpatialStacker(
                 override fun transferTextureOwnership(texture: Int, label: String) {
                     this@GlesMgcRawSpatialStacker.transferOwnedTexture(texture, label)
                 }
-
-                override fun uniformLocation(program: Int, name: String): Int =
-                    this@GlesMgcRawSpatialStacker.uniformLocation(program, name)
 
                 override fun checkGlError(label: String) {
                     this@GlesMgcRawSpatialStacker.checkGlError(label)
@@ -5613,9 +5600,6 @@ internal class GlesMgcRawSpatialStacker(
         GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, 0)
     }
 
-    private fun rgbIirWorkingSetBytes(): Long =
-        MgcSpatialRgbMemoryPolicy.iirWorkingSetBytes(outputWidth, outputHeight)
-
     /**
      * MGC 9.7.047 V25's Spatial RGB merge (MergeRgbRaw16F16TileSize16Halide) on the GPU, see
      * [GlesMgcSpatialRgbMergeShaders]. Each burst frame's DemosaicGreenRaw16 guide feeds the same
@@ -5676,10 +5660,10 @@ internal class GlesMgcRawSpatialStacker(
                     "Unable to allocate MGC V25 Spatial RGB16 output",
                 )
             }
-            val chromaPostprocessor = checkNotNull(rgbChromaPostprocessor) {
-                "MGC Spatial RGB chroma postprocessor is not initialized"
+            val outputAssembler = checkNotNull(rgbOutputAssembler) {
+                "MGC Spatial RGB output assembler is not initialized"
             }
-            chromaPostprocessor.initStorage(listOf(fullOutputTile))
+            outputAssembler.initStorage(listOf(fullOutputTile))
             val lensShadingTexture = createLensShadingTexture()
             val mergeStartNs = System.nanoTime()
             mergeSpatialRgbFrames(
@@ -5689,7 +5673,7 @@ internal class GlesMgcRawSpatialStacker(
                 capture = capture,
                 referenceBlack = referenceBlack,
                 lensShadingTexture = lensShadingTexture,
-                target = chromaPostprocessor.normalizationTargetTexture(),
+                target = outputAssembler.normalizationTargetTexture(),
                 outputExposureScale = outputExposureScale,
                 cameraWhite = mergeCameraWhite,
                 ultrashortWeight = ultrashortWeight,
@@ -5699,32 +5683,31 @@ internal class GlesMgcRawSpatialStacker(
                 "merge=${mergeCameraWhite.contentToString()} normalization=$outputExposureScale " +
                 "referenceFallbackWhiteScale=$outputExposureScale " +
                 "hasShort=${ultrashortWeight != 0} stage=before-rgb16")
-            chromaPostprocessor.markTileWritten(fullOutputTile)
+            outputAssembler.markTileWritten(fullOutputTile)
 
             releaseRgbFusionPhaseTextures(
-                retainedTexture = chromaPostprocessor.normalizationTargetTexture(),
+                retainedTexture = outputAssembler.normalizationTargetTexture(),
                 label = "V25 merge",
             )
             GlesGpuScheduler.memoryBarrier()
-            val chromaResult = chromaPostprocessor.process(
+            outputAssembler.process(
                 obtainOutputBuffer = { checkNotNull(cpuOutput) },
                 deferFullSizeReadback = exportGpuLinearRgbSource,
                 onFinalSubmitted = if (exportGpuLinearRgbSource) {
-                    { completionRecorder.mark(GpuStackCompletionStage.CHROMA_POSTPROCESS) }
+                    { completionRecorder.mark(GpuStackCompletionStage.OUTPUT_HANDOFF) }
                 } else {
                     null
                 },
-            )
-            postprocessedUi = chromaResult.exportedTextureId
+            ).also { postprocessedUi = it.exportedTextureId }
             if (exportGpuLinearRgbSource) {
                 check(postprocessedUi != 0) {
-                    "MGC Spatial RGB chroma did not export its filtered texture"
+                    "MGC Spatial RGB output did not export its merged texture"
                 }
                 gpuOutput = if (gpuLinearRgbStorage == GpuLinearRgbStorage.RGBA16UI) {
                     postprocessedUi.also { postprocessedUi = 0 }
                 } else {
                     GlesGpuCompletion.awaitSubmittedWork(
-                        label = "MGC Spatial V25 merge IIR-to-float handoff",
+                        label = "MGC Spatial V25 merge RGB16-to-float handoff",
                         checkGlError = ::checkGlError,
                     )
                     createTexture(
@@ -5755,9 +5738,7 @@ internal class GlesMgcRawSpatialStacker(
                 "MGC Spatial V25 RGB merge frames=${frames.size} " +
                     "native=${width}x$height " +
                     "output=${outputWidth}x$outputHeight rawScale=$sabreResolveRawScale " +
-                    "mergeSharpness=$mergeSharpness merge=${mergeMs}ms " +
-                    "colorNoiseIir=${chromaResult.chromaSubmissionMs}ms " +
-                    "chromaFinal=${chromaResult.finalSubmissionMs}ms",
+                    "mergeSharpness=$mergeSharpness merge=${mergeMs}ms",
             )
             return RgbMergeOutput(
                 cpuBuffer = cpuOutput,
@@ -6034,7 +6015,7 @@ internal class GlesMgcRawSpatialStacker(
             GLES31.GL_WRITE_ONLY,
             GLES30.GL_RGBA16F,
         )
-        checkGlError("MGC Spatial RGB chroma RGBA16F handoff")
+        checkGlError("MGC Spatial RGB RGBA16F handoff")
     }
 
     private fun readRgbTile(
@@ -6483,9 +6464,9 @@ internal class GlesMgcRawSpatialStacker(
     }
 
     /**
-     * ResolveSabre has consumed every merge-stage texture. Retire that arena before the VGN
-     * IIR surfaces are allocated; only the Resolve result in the chroma stage's assembled RGB
-     * crosses this phase boundary.
+     * ResolveSabre has consumed every merge-stage texture. Retire that arena before the output
+     * handoff; only the Resolve result in the output assembler's RGB texture crosses this phase
+     * boundary.
      */
     private fun releaseSabreMergePhaseTextures(resolvedRgb: Int) {
         check(resolvedRgb in textures) { "Sabre Resolve phase must retain its resolved RGB" }
@@ -6544,16 +6525,16 @@ internal class GlesMgcRawSpatialStacker(
     }
 
     /**
-     * Closes RGB fusion before the recursive chroma stage allocates its two additional full-size
-     * surfaces. The assembled RGBA16UI input becomes IIR scratch after seeding; every other fusion
-     * texture is dead at this boundary and must not inflate the IIR allocation peak.
+     * Closes RGB fusion before the output handoff. Only the assembled RGBA16UI output survives;
+     * every other fusion texture is dead at this boundary and must not overlap the export or
+     * full-size readback.
      */
     private fun releaseRgbFusionPhaseTextures(
         retainedTexture: Int,
         label: String,
     ) {
         check(retainedTexture != 0 && textures.contains(retainedTexture)) {
-            "MGC Spatial RGB $label IIR input is not owned by the stacker"
+            "MGC Spatial RGB $label output is not owned by the stacker"
         }
         val beforeBytes = estimatedOwnedTextureBytes()
         val waitMs = GlesGpuCompletion.awaitSubmittedWork(
@@ -6575,7 +6556,7 @@ internal class GlesMgcRawSpatialStacker(
             TAG,
             "MGC Spatial RGB $label fusion arena released textures=${releasedTextures.size} " +
                 "releasedBytes=$releasedBytes retainedBytes=${estimatedOwnedTextureBytes()} " +
-                "iirWorkingSetBytes=${rgbIirWorkingSetBytes()} beforeBytes=$beforeBytes " +
+                "beforeBytes=$beforeBytes " +
                 "gpuWait=${waitMs}ms",
         )
     }
@@ -7119,8 +7100,8 @@ internal class GlesMgcRawSpatialStacker(
             noiseLutCache.clear()
             globalAlignment?.release()
             globalAlignment = null
-            rgbChromaPostprocessor?.release()
-            rgbChromaPostprocessor = null
+            rgbOutputAssembler?.release()
+            rgbOutputAssembler = null
             if (programs.isNotEmpty()) {
                 for (program in programs) GLES30.glDeleteProgram(program)
             }

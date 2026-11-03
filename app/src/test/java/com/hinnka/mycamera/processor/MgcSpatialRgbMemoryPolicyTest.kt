@@ -1,7 +1,6 @@
 package com.hinnka.mycamera.processor
 
 import org.junit.Assert.assertEquals
-import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class MgcSpatialRgbMemoryPolicyTest {
@@ -31,13 +30,5 @@ class MgcSpatialRgbMemoryPolicyTest {
                 advisoryBytes = 640L * mib,
             ),
         )
-    }
-
-    @Test
-    fun twoTimesSpatialOutputKeepsOnlyThreeFullSizeIirSurfaces() {
-        val workingSet = MgcSpatialRgbMemoryPolicy.iirWorkingSetBytes(8192, 6144)
-
-        assertEquals(1_207_959_552L, workingSet)
-        assertTrue(workingSet > 640L * 1024L * 1024L)
     }
 }

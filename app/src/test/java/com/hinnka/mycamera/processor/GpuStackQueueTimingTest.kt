@@ -12,7 +12,7 @@ class GpuStackQueueTimingTest {
                 GpuStackStageWait(GpuStackCompletionStage.LONG_ALIGNMENT, 7L),
                 GpuStackStageWait(GpuStackCompletionStage.HIGHLIGHT_ALIGNMENT, 11L),
                 GpuStackStageWait(GpuStackCompletionStage.TILED_RECONSTRUCTION, 29L),
-                GpuStackStageWait(GpuStackCompletionStage.CHROMA_POSTPROCESS, 2_137L),
+                GpuStackStageWait(GpuStackCompletionStage.OUTPUT_HANDOFF, 2_137L),
                 GpuStackStageWait(GpuStackCompletionStage.FINAL_EXPORT, 35L),
             ),
         )
@@ -20,7 +20,7 @@ class GpuStackQueueTimingTest {
         assertEquals(2_219L, timing.totalWaitMs)
         assertEquals(
             "normalAlignment=0ms longAlignment=7ms highlightAlignment=11ms " +
-                "tiledReconstruction=29ms chromaPostprocess=2137ms finalExport=35ms",
+                "tiledReconstruction=29ms outputHandoff=2137ms finalExport=35ms",
             timing.logFields(),
         )
     }

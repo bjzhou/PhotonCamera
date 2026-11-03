@@ -8,7 +8,7 @@ internal enum class GpuStackCompletionStage(val logKey: String) {
     LONG_ALIGNMENT("longAlignment"),
     HIGHLIGHT_ALIGNMENT("highlightAlignment"),
     TILED_RECONSTRUCTION("tiledReconstruction"),
-    CHROMA_POSTPROCESS("chromaPostprocess"),
+    OUTPUT_HANDOFF("outputHandoff"),
     FINAL_EXPORT("finalExport"),
 }
 

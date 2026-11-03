@@ -35,7 +35,9 @@ internal object PhotonDenoiseShaders {
 
         layout(local_size_x = $LOCAL, local_size_y = $LOCAL) in;
 
-        ivec2 groupId() { return ivec2(gl_WorkGroupID.xy); }
+        // Work-group offset of a partial dispatch (row bands of the synthesis); 0 for a whole level.
+        uniform ivec2 uGroupOffset;
+        ivec2 groupId() { return ivec2(gl_WorkGroupID.xy) + uGroupOffset; }
         ivec2 globalId() { return groupId() * $LOCAL + ivec2(gl_LocalInvocationID.xy); }
 
         const float LUMA_TAPS[7] = float[7](

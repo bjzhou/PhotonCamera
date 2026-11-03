@@ -167,9 +167,8 @@ internal class PhotonMultiScaleDenoiser {
                     bindSynthesize(synthesizeProgram, inputTexture, lscTexture, mergeTexture, gaussians,
                         denoisedCoarse, sizes, level, lumaEnabled, chromaEnabled, bilateralEnabled, params)
                     bindImage(0, result, GLES30.GL_RGBA16F)
-                    dispatch(synthesizeProgram, size)
+                    dispatchBands(synthesizeProgram, size)
                 }
-                GlesGpuScheduler.yieldToUiRenderer()
                 sink?.onPass(if (level == 0) "output" else "denoised$level", result, size[0], size[1], false)
                 if (timing.ablation) {
                     synthesizeAblation(timing, inputTexture, lscTexture, mergeTexture, gaussians, denoisedCoarse,
@@ -235,9 +234,8 @@ internal class PhotonMultiScaleDenoiser {
                         bindSynthesize(synthesizeProgram, inputTexture, lscTexture, mergeTexture, gaussians,
                             denoisedCoarse, sizes, level, variant.luma, variant.chroma, variant.bilateral, params)
                         bindImage(0, scratch, GLES30.GL_RGBA16F)
-                        dispatch(synthesizeProgram, size)
+                        dispatchBands(synthesizeProgram, size)
                     }
-                    GlesGpuScheduler.yieldToUiRenderer()
                 }
             }
         } finally {
@@ -454,6 +452,31 @@ internal class PhotonMultiScaleDenoiser {
         )
     }
 
+    /**
+     * The fused synthesis in row bands of [SYNTHESIS_BAND_GROUPS] work-group rows, each flushed with
+     * a yield so the UI renderer gets GPU slots inside a level (L0 alone is ~300ms in one dispatch).
+     * Tiles read only the inputs and write disjoint pixels, so bands need no barrier between them
+     * and the result is the same as one whole-level dispatch.
+     */
+    private fun dispatchBands(program: Int, size: IntArray) {
+        val groupsX = GlesComputeWorkGroup.imageGroupCount(size[0])
+        val groupsY = GlesComputeWorkGroup.imageGroupCount(size[1])
+        val offset = location(program, "uGroupOffset")
+        var row = 0
+        while (row < groupsY) {
+            val rows = minOf(SYNTHESIS_BAND_GROUPS, groupsY - row)
+            GLES31.glUniform2i(offset, 0, row)
+            GLES31.glDispatchCompute(groupsX, rows, 1)
+            GlesGpuScheduler.yieldToUiRenderer()
+            row += rows
+        }
+        GLES31.glUniform2i(offset, 0, 0)
+        GLES31.glMemoryBarrier(
+            GLES31.GL_SHADER_IMAGE_ACCESS_BARRIER_BIT or GLES31.GL_TEXTURE_FETCH_BARRIER_BIT or
+                GLES31.GL_FRAMEBUFFER_BARRIER_BIT,
+        )
+    }
+
     private fun bindImage(unit: Int, texture: Int, format: Int) {
         GLES31.glBindImageTexture(unit, texture, 0, false, 0, GLES31.GL_WRITE_ONLY, format)
     }
@@ -476,6 +499,7 @@ internal class PhotonMultiScaleDenoiser {
 
     private companion object {
         const val ABLATION_REPEATS = 3
+        const val SYNTHESIS_BAND_GROUPS = 64
         const val UNIT_INPUT = 0
         const val UNIT_LSC = 1
         const val UNIT_FINE = 2

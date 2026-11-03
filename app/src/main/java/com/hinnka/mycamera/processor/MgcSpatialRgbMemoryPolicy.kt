@@ -8,9 +8,6 @@ package com.hinnka.mycamera.processor
  * threshold, the smallest estimated candidate remains runnable.
  */
 internal object MgcSpatialRgbMemoryPolicy {
-    private const val RGBA16_BYTES_PER_PIXEL = 8L
-    private const val IIR_SURFACE_COUNT = 3L
-
     fun selectAdvisoryPlanIndex(
         projectedBytes: List<Long>,
         advisoryBytes: Long,
@@ -24,10 +21,5 @@ internal object MgcSpatialRgbMemoryPolicy {
         } else {
             projectedBytes.indices.minBy { projectedBytes[it] }
         }
-    }
-
-    fun iirWorkingSetBytes(width: Int, height: Int): Long {
-        require(width > 0 && height > 0)
-        return width.toLong() * height * RGBA16_BYTES_PER_PIXEL * IIR_SURFACE_COUNT
     }
 }
