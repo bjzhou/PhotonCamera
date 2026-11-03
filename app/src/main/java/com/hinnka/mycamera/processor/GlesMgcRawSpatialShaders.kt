@@ -1493,63 +1493,6 @@ internal object GlesMgcRawSpatialShaders {
         }
     """.trimIndent()
 
-    /** Converts native planar Q14 camera RGB to RGB16, without resampling before FinishRaw. */
-    val normalizeAotRgb16 = """
-        #version 300 es
-        precision highp float;
-        precision highp int;
-        precision highp sampler2D;
-        uniform sampler2D uChannelPlane;
-        uniform sampler2D uLensShading;
-        uniform sampler2D uUltrashortWeight;
-        uniform vec3 uCameraWhite;
-        uniform int uHasUltrashort;
-        uniform ivec2 uOutputSize;
-        uniform float uOutputExposureScale;
-        uniform int uUseLensShading;
-        uniform int uChannel;
-        layout(location = 0) out highp uvec4 oRgb16;
-
-        void main() {
-            ivec2 p = ivec2(gl_FragCoord.xy);
-            vec2 uv = (vec2(p) + vec2(0.5)) / vec2(uOutputSize);
-            float value = texelFetch(uChannelPlane, p, 0).r * (1.0 / 16384.0);
-            float channelShading = 1.0;
-            if (uUseLensShading != 0) {
-                vec4 shading = texture(uLensShading, clamp(uv, vec2(0.0), vec2(1.0)));
-                channelShading = uChannel == 0 ? shading.r :
-                    (uChannel == 1 ? 0.5 * (shading.g + shading.b) : shading.a);
-            }
-            // Sensor saturation precedes lens-shading correction, so CameraWhite bounds the
-            // unshaded sensor-domain value and the shading gain applies to the clipped result.
-            // Clipping after shading would cap unsaturated off-axis samples at the reference
-            // white, outside the (unshaded) highlight mask the ultrashort replaces.
-            // CameraWhite must follow the exposures that actually supply this pixel.
-            // A rejected short leaves the reference's saturated RGB at 1/ratio in the
-            // exported short domain; clipping it later against short-domain CameraWhite
-            // misses the reference plateau and preserves its false magenta chroma.
-            // The selected short slice has weight m and unit frame weight, while the
-            // reference slice alone keeps (1 - m); the short's share of the merge is thus
-            // at most m, and the merged white is bounded by mix(referenceWhite, shortWhite, m).
-            // The bound must stay continuous in m: switching on m > 0 steps the cap along
-            // the RAW/4 weight texel grid and draws a staircase through the highlight.
-            float shortShare = uHasUltrashort != 0
-                ? clamp(texture(uUltrashortWeight, uv).r, 0.0, 1.0)
-                : 0.0;
-            float whiteScale = mix(uOutputExposureScale, 1.0, shortShare);
-            float cameraWhite = uCameraWhite[uChannel] * whiteScale;
-            float outputValue =
-                min(value * uOutputExposureScale, cameraWhite) * channelShading;
-            uint encodedValue = uint(round(
-                clamp(outputValue, 0.0, 1.0) * 65535.0
-            ));
-            // CPU-side glColorMask selects the destination RGB component for this pass.
-            // Avoid dynamically indexing a fragment output, which is rejected by strict ES
-            // compilers even though dynamically indexing an ordinary local vector is legal.
-            oRgb16 = uvec4(uvec3(encodedValue), 0u);
-        }
-    """.trimIndent()
-
     /**
      * First integer-to-float conversion stays in compute image load/store. Some Mali drivers
      * incorrectly lower the equivalent fragment-sampler uint16 conversion to FP16.

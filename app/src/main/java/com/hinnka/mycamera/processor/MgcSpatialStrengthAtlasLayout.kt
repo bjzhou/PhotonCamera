@@ -62,33 +62,5 @@ internal fun createMgcSpatialStrengthAtlasLayout(
     }
 }
 
-internal data class MgcSpatialStrengthPackDispatch(
-    val groupsX: Int,
-    val groupsY: Int,
-)
-
-internal fun createMgcSpatialStrengthPackDispatch(
-    invocationCount: Long,
-    localSize: Int,
-    maximumGroupsX: Int,
-    maximumGroupsY: Int,
-): MgcSpatialStrengthPackDispatch {
-    require(invocationCount > 0L)
-    require(localSize > 0 && maximumGroupsX > 0 && maximumGroupsY > 0)
-    val totalGroups = ceilDivPositive(invocationCount, localSize.toLong())
-    require(totalGroups <= maximumGroupsX.toLong() * maximumGroupsY) {
-        "MGC Spatial strength pack requires $totalGroups work groups, device supports " +
-            "${maximumGroupsX}x$maximumGroupsY"
-    }
-    val groupsX = minOf(totalGroups, maximumGroupsX.toLong()).toInt()
-    return MgcSpatialStrengthPackDispatch(
-        groupsX = groupsX,
-        groupsY = ceilDivPositive(totalGroups, groupsX.toLong()).toInt(),
-    )
-}
-
 private fun ceilDivPositive(value: Int, divisor: Int): Int =
     ((value.toLong() + divisor - 1L) / divisor).toInt()
-
-private fun ceilDivPositive(value: Long, divisor: Long): Long =
-    (value + divisor - 1L) / divisor

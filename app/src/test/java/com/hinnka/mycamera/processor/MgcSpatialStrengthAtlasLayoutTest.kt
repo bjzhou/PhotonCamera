@@ -39,19 +39,4 @@ class MgcSpatialStrengthAtlasLayoutTest {
         assertEquals(0, layout.originX(18))
         assertEquals(13_788, layout.originY(18))
     }
-
-    @Test
-    fun rejectionPackDispatchWrapsAcrossTheDeviceGroupCountLimit() {
-        val valueCount = 2_040L * 1_532L * 19L
-        val invocationCount = (valueCount + 3L) / 4L
-        val dispatch = createMgcSpatialStrengthPackDispatch(
-            invocationCount = invocationCount,
-            localSize = GlesComputeWorkGroup.LINEAR_SIZE,
-            maximumGroupsX = 65_535,
-            maximumGroupsY = 65_535,
-        )
-
-        assertEquals(65_535, dispatch.groupsX)
-        assertEquals(2, dispatch.groupsY)
-    }
 }

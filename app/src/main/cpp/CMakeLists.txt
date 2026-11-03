@@ -158,50 +158,11 @@ set_source_files_properties(
     OBJECT_DEPENDS "${MGC_RAISR_FILTERS};${MGC_RAISR_RANDOMNESS_LUT}"
 )
 
-set(
-    MGC_SPATIAL_RGB_CAPSULE
-    "${CMAKE_CURRENT_SOURCE_DIR}/mgc_denoise_static/mgc_spatial_rgb_merge_capsule.bin"
-)
-set(
-    MGC_SPATIAL_RGB_CAPSULE_SHA256
-    "196c4fb671a4c1e0667518d334474afd6f81a35a01acfd9d385089630a58eddd"
-)
-if(NOT EXISTS "${MGC_SPATIAL_RGB_CAPSULE}")
-    message(
-        FATAL_ERROR
-        "MGC Spatial RGB Merge capsule is missing; regenerate it with "
-        "scripts/research/generate_mgc_spatial_rgb_merge_static_asm.py"
-    )
-endif()
-file(
-    SHA256
-    "${MGC_SPATIAL_RGB_CAPSULE}"
-    MGC_SPATIAL_RGB_CAPSULE_ACTUAL_SHA256
-)
-if(NOT MGC_SPATIAL_RGB_CAPSULE_ACTUAL_SHA256 STREQUAL MGC_SPATIAL_RGB_CAPSULE_SHA256)
-    message(FATAL_ERROR "MGC Spatial RGB Merge capsule hash mismatch")
-endif()
-set(
-    MGC_SPATIAL_RGB_ASM
-    "${CMAKE_CURRENT_BINARY_DIR}/mgc_spatial_rgb_merge_static.S"
-)
-configure_file(
-    "${CMAKE_CURRENT_SOURCE_DIR}/mgc_denoise_static/mgc_spatial_rgb_merge_static.S.in"
-    "${MGC_SPATIAL_RGB_ASM}"
-    @ONLY
-)
-set_source_files_properties(
-    "${MGC_SPATIAL_RGB_ASM}"
-    PROPERTIES
-    OBJECT_DEPENDS "${MGC_SPATIAL_RGB_CAPSULE}"
-)
-
 # These are configure-time outputs, so do not mark them GENERATED: Ninja clean
 # would delete them without a build-time command to recreate them. Track them
 # as configure dependencies so a missing output also causes CMake to regenerate it.
 set_property(
     DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
-    "${MGC_SPATIAL_RGB_ASM}"
     "${MGC_RAISR_ASM}"
     "${MGC_RAISR_TABLES_ASM}"
     "${MGC_POLYSHARP_ASM}"
@@ -316,7 +277,6 @@ add_library(my-native-lib SHARED
     lut_processor.cpp
     dcp_parser.cpp
     mgc_denoise_static/mgc_halide_runtime.cpp
-    mgc_denoise_static/mgc_spatial_rgb_merge_jni.cpp
     raw_float_texture_transfer_jni.cpp
     mgc_denoise_static/mgc_raisr_jni.cpp
     mgc_denoise_static/mgc_raisr_driver.cpp
@@ -324,7 +284,6 @@ add_library(my-native-lib SHARED
     "${MGC_RAISR_ASM}"
     "${MGC_RAISR_TABLES_ASM}"
     "${MGC_POLYSHARP_ASM}"
-    "${MGC_SPATIAL_RGB_ASM}"
     ${LIBRAW_SOURCES}
     ${ADOBE_DNG_SOURCES}
 )
