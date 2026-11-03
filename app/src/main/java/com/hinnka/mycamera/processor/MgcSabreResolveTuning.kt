@@ -5,12 +5,16 @@ package com.hinnka.mycamera.processor
  *
  * Recovered from libgcastartup.so:
  * - default SNR maps: 0x3882c20
- * - output-white lookup and interpolation: 0x348c96c
+ * - Gr/Gb imbalance retention lookup and interpolation: 0x348c96c
  * - demosaic sharpness TET ratio: 0x348a234
  */
 internal object MgcSabreResolveTuning {
     data class Parameters(
-        val outputWhiteLevel: Float,
+        /**
+         * Fraction of the Gr/Gb difference kept by ResolveSabre's `g_gb` stage: 0 replaces each
+         * green with its diagonal-green blur, 1 keeps it unchanged.
+         */
+        val greenImbalanceRetention: Float,
         val demosaicSharpness: Float,
     )
 
@@ -19,7 +23,7 @@ internal object MgcSabreResolveTuning {
         desiredExposureProduct: Double?,
         actualExposureProduct: Double,
     ): Parameters = Parameters(
-        outputWhiteLevel = outputWhiteLevel(referenceSnr),
+        greenImbalanceRetention = greenImbalanceRetention(referenceSnr),
         demosaicSharpness = demosaicSharpness(
             desiredExposureProduct = desiredExposureProduct,
             actualExposureProduct = actualExposureProduct,
@@ -27,25 +31,25 @@ internal object MgcSabreResolveTuning {
     )
 
     /** std::map<float, float>{{5, 0}, {20, 0.5}, {40, 1}} with endpoint clamping. */
-    internal fun outputWhiteLevel(referenceSnr: Float): Float {
-        val snr = referenceSnr.takeIf { it.isFinite() } ?: OUTPUT_WHITE_SNR_LOW
+    internal fun greenImbalanceRetention(referenceSnr: Float): Float {
+        val snr = referenceSnr.takeIf { it.isFinite() } ?: GREEN_IMBALANCE_SNR_LOW
         return when {
-            snr <= OUTPUT_WHITE_SNR_LOW -> OUTPUT_WHITE_LOW
-            snr < OUTPUT_WHITE_SNR_MID -> interpolate(
+            snr <= GREEN_IMBALANCE_SNR_LOW -> GREEN_IMBALANCE_LOW
+            snr < GREEN_IMBALANCE_SNR_MID -> interpolate(
                 snr,
-                OUTPUT_WHITE_SNR_LOW,
-                OUTPUT_WHITE_LOW,
-                OUTPUT_WHITE_SNR_MID,
-                OUTPUT_WHITE_MID,
+                GREEN_IMBALANCE_SNR_LOW,
+                GREEN_IMBALANCE_LOW,
+                GREEN_IMBALANCE_SNR_MID,
+                GREEN_IMBALANCE_MID,
             )
-            snr < OUTPUT_WHITE_SNR_HIGH -> interpolate(
+            snr < GREEN_IMBALANCE_SNR_HIGH -> interpolate(
                 snr,
-                OUTPUT_WHITE_SNR_MID,
-                OUTPUT_WHITE_MID,
-                OUTPUT_WHITE_SNR_HIGH,
-                OUTPUT_WHITE_HIGH,
+                GREEN_IMBALANCE_SNR_MID,
+                GREEN_IMBALANCE_MID,
+                GREEN_IMBALANCE_SNR_HIGH,
+                GREEN_IMBALANCE_HIGH,
             )
-            else -> OUTPUT_WHITE_HIGH
+            else -> GREEN_IMBALANCE_HIGH
         }
     }
 
@@ -78,11 +82,11 @@ internal object MgcSabreResolveTuning {
         return upperY * amount + lowerY * (1f - amount)
     }
 
-    private const val OUTPUT_WHITE_SNR_LOW = 5f
-    private const val OUTPUT_WHITE_SNR_MID = 20f
-    private const val OUTPUT_WHITE_SNR_HIGH = 40f
-    private const val OUTPUT_WHITE_LOW = 0f
-    private const val OUTPUT_WHITE_MID = 0.5f
-    private const val OUTPUT_WHITE_HIGH = 1f
+    private const val GREEN_IMBALANCE_SNR_LOW = 5f
+    private const val GREEN_IMBALANCE_SNR_MID = 20f
+    private const val GREEN_IMBALANCE_SNR_HIGH = 40f
+    private const val GREEN_IMBALANCE_LOW = 0f
+    private const val GREEN_IMBALANCE_MID = 0.5f
+    private const val GREEN_IMBALANCE_HIGH = 1f
     private const val DEFAULT_DEMOSAIC_SHARPNESS = 1f
 }

@@ -5,14 +5,14 @@ import org.junit.Test
 
 class MgcSabreResolveTuningTest {
     @Test
-    fun outputWhiteUsesOriginalSnrCurveAndEndpointClamping() {
-        assertEquals(0f, MgcSabreResolveTuning.outputWhiteLevel(0f), 0f)
-        assertEquals(0f, MgcSabreResolveTuning.outputWhiteLevel(5f), 0f)
-        assertEquals(0.25f, MgcSabreResolveTuning.outputWhiteLevel(12.5f), 1e-7f)
-        assertEquals(0.5f, MgcSabreResolveTuning.outputWhiteLevel(20f), 0f)
-        assertEquals(0.75f, MgcSabreResolveTuning.outputWhiteLevel(30f), 1e-7f)
-        assertEquals(1f, MgcSabreResolveTuning.outputWhiteLevel(40f), 0f)
-        assertEquals(1f, MgcSabreResolveTuning.outputWhiteLevel(80f), 0f)
+    fun greenImbalanceRetentionUsesOriginalSnrCurveAndEndpointClamping() {
+        assertEquals(0f, MgcSabreResolveTuning.greenImbalanceRetention(0f), 0f)
+        assertEquals(0f, MgcSabreResolveTuning.greenImbalanceRetention(5f), 0f)
+        assertEquals(0.25f, MgcSabreResolveTuning.greenImbalanceRetention(12.5f), 1e-7f)
+        assertEquals(0.5f, MgcSabreResolveTuning.greenImbalanceRetention(20f), 0f)
+        assertEquals(0.75f, MgcSabreResolveTuning.greenImbalanceRetention(30f), 1e-7f)
+        assertEquals(1f, MgcSabreResolveTuning.greenImbalanceRetention(40f), 0f)
+        assertEquals(1f, MgcSabreResolveTuning.greenImbalanceRetention(80f), 0f)
     }
 
     @Test

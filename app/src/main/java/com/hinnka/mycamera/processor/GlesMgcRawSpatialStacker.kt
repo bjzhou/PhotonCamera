@@ -14,7 +14,6 @@ import com.hinnka.mycamera.camera.MultiFrameConfig
 import com.hinnka.mycamera.model.SafeImage
 import com.hinnka.mycamera.raw.RawDenoisePipeline
 import com.hinnka.mycamera.raw.denoise.PhotonMergeNoise
-import com.hinnka.mycamera.raw.RawFloatTextureTransfer
 import com.hinnka.mycamera.raw.RawSceneAERawStats
 import com.hinnka.mycamera.utils.DngCaptureDiagnostics
 import com.hinnka.mycamera.utils.DirectBufferPixelPacker
@@ -518,6 +517,10 @@ internal class GlesMgcRawSpatialStacker(
     private var sabreCopyMaskProgram = 0
     private var sabreCopyAlphaProgram = 0
     private var sabreDehomogenizeProgram = 0
+    private var sabreResolveConvertProgram = 0
+    private var sabreResolveGreenBalanceProgram = 0
+    private var sabreResolveGreenProgram = 0
+    private var sabreResolveOutputProgram = 0
 
     /** §2.2 merge variance accumulator of the merge in flight; released with the merge. */
     private var mergeNoise: PhotonMergeNoise? = null
@@ -2056,8 +2059,6 @@ internal class GlesMgcRawSpatialStacker(
             return null
         }
         var cpuOutput: ByteBuffer? = null
-        val sabreTransfer = RawFloatTextureTransfer(RawFloatTextureTransfer.Layout.HALF)
-        var sabreResolvedRgb: ByteBuffer? = null
         var exportedTexture = 0
         var postprocessedUi = 0
         var exportedCompletionTimeline: GpuStackCompletionTimeline? = null
@@ -2069,7 +2070,6 @@ internal class GlesMgcRawSpatialStacker(
             if (useCurrentGlContext) attachCurrentEgl() else initEgl()
             ensureGles3()
             initSabrePrograms()
-            sabreTransfer.prepare(width, height)
             renderFbo = createFramebuffer()
             applyRawRenderState()
 
@@ -2348,15 +2348,9 @@ internal class GlesMgcRawSpatialStacker(
                 alphaScale = accumulatedWeightScale / frames.size.toFloat(),
                 alphaBias = 1f / frames.size.toFloat(),
             )
-            // The original merge shaders write normalized, white-balanced half floats. The
-            // Resolve AOT accepts those RGBA16F bit patterns directly; rawScale applies only to
-            // the black/white scalar parameters below.
-            sabreResolvedRgb = checkNotNull(
-                LargeDirectBuffer.allocate(
-                    width.toLong() * height * 3L * Short.SIZE_BYTES,
-                    "MGC Sabre Resolve RGB16",
-                ),
-            ) { "Unable to allocate MGC Sabre Resolve output" }
+            // The original merge shaders write normalized, white-balanced half floats, which
+            // ResolveSabre consumes directly; rawScale applies only to the black/white scalar
+            // parameters below.
             val demosaicWhiteLevel = minOf(
                 (sensorWhiteLevel * sabreResolveRawScale).toInt(),
                 Short.MAX_VALUE.toInt(),
@@ -2370,44 +2364,26 @@ internal class GlesMgcRawSpatialStacker(
                     "black=${sabreResolveFinalBlackLevel.contentToString()} " +
                     "gains=${sabreResolveFinalGains.contentToString()} " +
                     "demosaicWhite=$demosaicWhiteLevel " +
-                    "outputWhite=${sabreResolveParameters.outputWhiteLevel} " +
+                    "greenImbalanceRetention=" +
+                    "${sabreResolveParameters.greenImbalanceRetention} " +
                     "demosaicSharpness=${sabreResolveParameters.demosaicSharpness}",
             )
-            sabreTransfer.read(
-                accumulatedColor, width, height, label = "MGC Sabre Resolve",
-                writable = false,
-            ) { accumulated ->
-                MgcSabreResolver.resolve(
-                    accumulatedColorRgba16f = accumulated,
-                    outputRgb16Planar = checkNotNull(sabreResolvedRgb),
-                    width = width,
-                    height = height,
-                    cfaPattern = cfaPattern,
-                    finalBlackLevel = sabreResolveFinalBlackLevel,
-                    finalGains = sabreResolveFinalGains,
-                    demosaicWhiteLevel = demosaicWhiteLevel,
-                    outputWhiteLevel = sabreResolveParameters.outputWhiteLevel,
-                    demosaicBlendScale = -demosaicBlendRange * frames.size,
-                    demosaicBlendBias = SABRE_DEMOSAIC_BLEND_END / demosaicBlendRange,
-                    demosaicSharpnessScale =
-                        demosaicWhiteLevel * sabreResolveParameters.demosaicSharpness,
-                )
-            }
-            logSabreResolvedRgbStats(sabreResolvedRgb)
-            sabreTransfer.releaseBuffers()
-
-            val nativeResolvedPlanes = IntArray(3) {
-                createTexture(
-                    width,
-                    height,
-                    GLES30.GL_R16UI,
-                    GLES30.GL_NEAREST,
-                )
-            }
-            uploadSabreResolvedRgb16Planar(sabreResolvedRgb, nativeResolvedPlanes)
-            LargeDirectBuffer.free(sabreResolvedRgb)
-            sabreResolvedRgb = null
-            releaseSabreMergePhaseTextures(nativeResolvedPlanes)
+            val resolveStartNs = System.nanoTime()
+            val resolvedPlanes = renderSabreResolve(
+                accumulatedColor = accumulatedColor,
+                finalBlackLevel = sabreResolveFinalBlackLevel,
+                demosaicWhiteLevel = demosaicWhiteLevel,
+                greenImbalanceRetention = sabreResolveParameters.greenImbalanceRetention,
+                demosaicBlendScale = -demosaicBlendRange * frames.size,
+                demosaicBlendBias = SABRE_DEMOSAIC_BLEND_END / demosaicBlendRange,
+                demosaicQuantizationScale =
+                    demosaicWhiteLevel * sabreResolveParameters.demosaicSharpness,
+            )
+            PLog.i(
+                SABRE_TAG,
+                "MGC Sabre Resolve GPU submit=${elapsedMs(resolveStartNs)}ms",
+            )
+            releaseSabreMergePhaseTextures(resolvedPlanes)
             val lensShadingTexture = createLensShadingTexture()
             val fullOutput = MgcSpatialRgbRect(0, 0, width, height)
             val fullOutputTile = MgcSpatialRgbTile(index = 0, outputCore = fullOutput)
@@ -2416,7 +2392,7 @@ internal class GlesMgcRawSpatialStacker(
             }
             chromaPostprocessor.initStorage(listOf(fullOutputTile))
             renderSabreOutputTransform(
-                resolvedRgbPlanes = nativeResolvedPlanes,
+                resolvedRgbPlanes = resolvedPlanes,
                 lensShadingTexture = lensShadingTexture,
                 finalBlackLevel = sabreResolveFinalBlackLevel,
                 demosaicWhiteLevel = demosaicWhiteLevel.toFloat(),
@@ -2525,10 +2501,8 @@ internal class GlesMgcRawSpatialStacker(
             null
         } finally {
             images.forEach { it.close() }
-            sabreTransfer.release()
             release()
             GlesGpuScheduler.restoreCurrentThreadPriority(originalThreadPriority, SABRE_TAG)
-            LargeDirectBuffer.free(sabreResolvedRgb)
             if (!returned) {
                 exportedCompletionTimeline?.releasePending()
                 LargeDirectBuffer.free(cpuOutput)
@@ -2836,6 +2810,97 @@ internal class GlesMgcRawSpatialStacker(
         }
     }
 
+    /**
+     * ResolveSabre on the GPU (see [GlesMgcSabreResolveShaders]): demosaics the dehomogenized
+     * accumulation, blends it with the accumulated colour by coverage and returns the R/G/B
+     * RAW14 planes as R16UI textures. The int16 intermediates are padded so every pass reads the
+     * virtual-CFA neighbourhood the original AOT reads.
+     */
+    private fun renderSabreResolve(
+        accumulatedColor: Int,
+        finalBlackLevel: FloatArray,
+        demosaicWhiteLevel: Int,
+        greenImbalanceRetention: Float,
+        demosaicBlendScale: Float,
+        demosaicBlendBias: Float,
+        demosaicQuantizationScale: Float,
+    ): IntArray {
+        require(finalBlackLevel.size == 3)
+        require(demosaicWhiteLevel in 1..Short.MAX_VALUE.toInt())
+        require(demosaicQuantizationScale.isFinite() && demosaicQuantizationScale > 0f)
+        require(sabreResolveFinalGains.all { it.isFinite() && it > 0f })
+        // Offset of the red site; the AOT resolves in a virtual RGGB frame anchored there.
+        val (redX, redY) = when (cfaPattern) {
+            0 -> 0 to 0 // RGGB
+            1 -> 1 to 0 // GRBG
+            2 -> 0 to 1 // GBRG
+            3 -> 1 to 1 // BGGR
+            else -> throw IllegalArgumentException("MGC Sabre Resolve CFA pattern $cfaPattern")
+        }
+        val padding = GlesMgcSabreResolveShaders.PLANE_PADDING
+        val planeWidth = width + 2 * padding
+        val planeHeight = height + 2 * padding
+        val converted = createTexture(planeWidth, planeHeight, GLES30.GL_R16I, GLES30.GL_NEAREST)
+        val balanced = createTexture(planeWidth, planeHeight, GLES30.GL_R16I, GLES30.GL_NEAREST)
+        val green = createTexture(planeWidth, planeHeight, GLES30.GL_R16I, GLES30.GL_NEAREST)
+        val resolvedPlanes = IntArray(3) {
+            createTexture(width, height, GLES30.GL_R16UI, GLES30.GL_NEAREST)
+        }
+
+        GLES30.glUseProgram(sabreResolveConvertProgram)
+        bindTexture(sabreResolveConvertProgram, "uAccumulated", 0, accumulatedColor)
+        uniform2i(sabreResolveConvertProgram, "uImageSize", width, height)
+        uniform2i(sabreResolveConvertProgram, "uRedSite", redX, redY)
+        uniform1f(
+            sabreResolveConvertProgram,
+            "uQuantizationScale",
+            demosaicQuantizationScale,
+        )
+        draw(sabreResolveConvertProgram, planeWidth, planeHeight, intArrayOf(converted))
+
+        // Entry 0x34A67F8: k = fcvtzs(clamp(retention * 65536, 0, 65535)).
+        val retentionFixed16 = (greenImbalanceRetention * 65536f).coerceIn(0f, 65535f).toInt()
+        GLES30.glUseProgram(sabreResolveGreenBalanceProgram)
+        bindTexture(sabreResolveGreenBalanceProgram, "uConverted", 0, converted)
+        uniform2i(sabreResolveGreenBalanceProgram, "uPlaneSize", planeWidth, planeHeight)
+        uniform1i(sabreResolveGreenBalanceProgram, "uGreenImbalanceRetention", retentionFixed16)
+        draw(sabreResolveGreenBalanceProgram, planeWidth, planeHeight, intArrayOf(balanced))
+
+        GLES30.glUseProgram(sabreResolveGreenProgram)
+        bindTexture(sabreResolveGreenProgram, "uBalanced", 0, balanced)
+        uniform2i(sabreResolveGreenProgram, "uPlaneSize", planeWidth, planeHeight)
+        draw(sabreResolveGreenProgram, planeWidth, planeHeight, intArrayOf(green))
+
+        val program = sabreResolveOutputProgram
+        val white = demosaicWhiteLevel.toFloat()
+        val black = finalBlackLevel
+        val gains = sabreResolveFinalGains
+        GLES30.glUseProgram(program)
+        bindTexture(program, "uAccumulated", 0, accumulatedColor)
+        bindTexture(program, "uBalanced", 1, balanced)
+        bindTexture(program, "uGreen", 2, green)
+        uniform2i(program, "uImageSize", width, height)
+        uniform2i(program, "uPlaneSize", planeWidth, planeHeight)
+        uniform2i(program, "uRedSite", redX, redY)
+        uniform1f(program, "uBlendBias", demosaicBlendBias)
+        uniform1f(program, "uBlendScale", demosaicBlendScale)
+        // The AOT multiplies by the binary32 reciprocal rather than dividing per pixel.
+        uniform1f(program, "uInverseQuantizationScale", 1f / demosaicQuantizationScale)
+        uniform3f(program, "uFinalGains", gains[0], gains[1], gains[2])
+        uniform3f(program, "uFinalBlackLevel", black[0], black[1], black[2])
+        uniform3f(
+            program,
+            "uOutputRange",
+            white - black[0],
+            white - black[1],
+            white - black[2],
+        )
+        GLES30.glUniform1ui(uniformLocation(program, "uFloatFence"), 0)
+        draw(program, width, height, resolvedPlanes)
+        checkGlError("MGC Sabre Resolve")
+        return resolvedPlanes
+    }
+
     private fun renderSabreOutputTransform(
         resolvedRgbPlanes: IntArray,
         lensShadingTexture: Int,
@@ -2863,72 +2928,6 @@ internal class GlesMgcRawSpatialStacker(
         uniform1f(program, "uDemosaicWhiteLevel", demosaicWhiteLevel)
         uniform1f(program, "uOutputExposureScale", 1f)
         draw(program, width, height, intArrayOf(output))
-    }
-
-    private fun uploadSabreResolvedRgb16Planar(buffer: ByteBuffer, textures: IntArray) {
-        require(textures.size == 3)
-        val planeBytes = Math.multiplyExact(
-            Math.multiplyExact(width, height),
-            Short.SIZE_BYTES,
-        )
-        require(buffer.capacity() >= Math.multiplyExact(planeBytes, textures.size))
-        GLES30.glBindBuffer(GLES30.GL_PIXEL_UNPACK_BUFFER, 0)
-        GLES30.glPixelStorei(GLES30.GL_UNPACK_ALIGNMENT, 1)
-        textures.forEachIndexed { channel, texture ->
-            val plane = buffer.duplicate().order(ByteOrder.nativeOrder())
-            plane.position(channel * planeBytes)
-            plane.limit((channel + 1) * planeBytes)
-            GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, texture)
-            GLES30.glTexSubImage2D(
-                GLES30.GL_TEXTURE_2D,
-                0,
-                0,
-                0,
-                width,
-                height,
-                GLES30.GL_RED_INTEGER,
-                GLES30.GL_UNSIGNED_SHORT,
-                plane,
-            )
-        }
-        GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, 0)
-        checkGlError("upload MGC Sabre Resolve planar RGB16")
-    }
-
-    private fun logSabreResolvedRgbStats(buffer: ByteBuffer) {
-        val pixelCount = Math.multiplyExact(width, height)
-        val samplesPerPlane = 4096
-        val sampleStep = max(1, pixelCount / samplesPerPlane)
-        val values = buffer.duplicate().order(ByteOrder.nativeOrder()).asShortBuffer()
-        val minimum = IntArray(3) { 0xffff }
-        val maximum = IntArray(3)
-        val sum = LongArray(3)
-        val count = IntArray(3)
-        for (channel in 0 until 3) {
-            val planeOffset = channel * pixelCount
-            var pixel = 0
-            while (pixel < pixelCount) {
-                val value = values.get(planeOffset + pixel).toInt() and 0xffff
-                minimum[channel] = minOf(minimum[channel], value)
-                maximum[channel] = maxOf(maximum[channel], value)
-                sum[channel] += value.toLong()
-                count[channel]++
-                pixel += sampleStep
-            }
-        }
-        val mean = FloatArray(3) { channel ->
-            if (count[channel] > 0) {
-                sum[channel].toFloat() / count[channel].toFloat()
-            } else {
-                0f
-            }
-        }
-        PLog.i(
-            SABRE_TAG,
-            "MGC Sabre Resolve output samples min=${minimum.contentToString()} " +
-                "max=${maximum.contentToString()} mean=${mean.contentToString()} " +
-                "step=$sampleStep",
-        )
     }
 
     private fun initSabrePrograms() {
@@ -2994,6 +2993,22 @@ internal class GlesMgcRawSpatialStacker(
         sabreDehomogenizeProgram = linkProgram(
             GlesMgcRawSabreShaders.dehomogenize,
             "mgc_sabre_dehomogenize",
+        )
+        sabreResolveConvertProgram = linkProgram(
+            GlesMgcSabreResolveShaders.convertToInt,
+            "mgc_sabre_resolve_convert_to_int",
+        )
+        sabreResolveGreenBalanceProgram = linkProgram(
+            GlesMgcSabreResolveShaders.greenBalance,
+            "mgc_sabre_resolve_green_balance",
+        )
+        sabreResolveGreenProgram = linkProgram(
+            GlesMgcSabreResolveShaders.greenAtColor,
+            "mgc_sabre_resolve_green_at_color",
+        )
+        sabreResolveOutputProgram = linkProgram(
+            GlesMgcSabreResolveShaders.resolveOutput,
+            "mgc_sabre_resolve_output",
         )
         sabreOutputTransformProgram = linkProgram(
             GlesMgcRawSabreShaders.outputTransformUint16,
