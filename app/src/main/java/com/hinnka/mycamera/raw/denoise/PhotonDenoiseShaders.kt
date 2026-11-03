@@ -125,10 +125,13 @@ internal object PhotonDenoiseShaders {
         uniform float uScale;
         uniform vec3 uWb;
 
-        vec3 working0(ivec2 p) {
+        // gain = lscGain(levelCentre(p, 0)), for callers that also need it.
+        vec3 working0Gain(ivec2 p, vec3 gain) {
             vec3 rgb = texelFetch(uInput, p, 0).rgb;
-            return uScale * yccFromRgb(uWb * (rgb / lscGain(levelCentre(p, 0))));
+            return uScale * yccFromRgb(uWb * (rgb / gain));
         }
+
+        vec3 working0(ivec2 p) { return working0Gain(p, lscGain(levelCentre(p, 0))); }
     """
 
     /** ↑2 of a coarse level at a fine pixel (uCoarseSize is the coarse level's size). */
@@ -161,7 +164,8 @@ internal object PhotonDenoiseShaders {
         uniform float uKappaChroma[4];
 
         // (σ²_Y, σ²_Cb, σ²_Cr, σ_CbCr) at level pixel p; mu receives the camera signal.
-        vec4 modelNoise(ivec2 p, vec3 base, out vec3 mu) {
+        // gain = lscGain(levelCentre(p, uLevel)).
+        vec4 modelNoiseGain(ivec2 p, vec3 base, vec3 gain, out vec3 mu) {
             mu = max(rgbFromYcc(base) / uScale / uWb, vec3(0.0));
             vec2 merge = mergeRatio(levelCentre(p, uLevel));
             vec3 v = merge.x * uRead + merge.y * uShot * mu;
@@ -178,9 +182,13 @@ internal object PhotonDenoiseShaders {
                 kc * dot(aCb * aCb, v) * t.y * t.y,
                 kc * dot(aCr * aCr, v) * t.z * t.z,
                 kc * dot(aCb * aCr, v) * t.y * t.z);
-            vec3 camera = mu * lscGain(levelCentre(p, uLevel));
+            vec3 camera = mu * gain;
             if (any(greaterThanEqual(camera, vec3(CLIP_LEVEL)))) noise = vec4(0.0);
             return noise;
+        }
+
+        vec4 modelNoise(ivec2 p, vec3 base, out vec3 mu) {
+            return modelNoiseGain(p, base, lscGain(levelCentre(p, uLevel)), mu);
         }
     """
 
@@ -221,8 +229,9 @@ internal object PhotonDenoiseShaders {
      *
      * A work group owns an 8×8 output tile. Band values (L, base, noise) are computed into shared
      * memory for the tile plus a 4-pixel border, pilot values for the tile plus a 2-pixel border.
-     * Shared memory is addressed by image coordinate and every neighbourhood is mirrored first,
-     * exactly as in the unfused reference, so border pixels see the same values. L, base and pilot
+     * Shared memory is addressed by raw image coordinate and holds the value of the mirrored
+     * coordinate (the reference's reflection without edge repetition), so neighbourhood reads are
+     * plain offsets and border pixels see the same values as the unfused reference. L, base and pilot
      * are stored as packed float16 bits, rounding them exactly as their textures were rounded in
      * the unfused passes.
      *
@@ -524,6 +533,32 @@ internal object PhotonDenoiseShaders {
         shared vec4 sNoise[BAND_SIDE * BAND_SIDE];
         shared uvec2 sPilot[PILOT_SIDE * PILOT_SIDE];
 
+        // ↑2 inputs of the band region: G_{l+1} (slot 0) and G̃_{l+1} (slot 1) at coarse coordinates
+        // gCoarseLo + [0, COARSE_SIDE)², each entry the texel of the mirrored coordinate. Pixels of
+        // the band region map into a span of at most 16 fine pixels, i.e. 12 coarse taps.
+        const int COARSE_SIDE = 12;
+        shared vec4 sCoarse[2 * COARSE_SIDE * COARSE_SIDE];
+        ivec2 gCoarseLo;
+
+        // upAt over the cached coarse texels: the same taps in the same order.
+        vec3 upCached(int slot, ivec2 p) {
+            int offset = slot * COARSE_SIDE * COARSE_SIDE;
+            float y = 0.0;
+            vec2 c = vec2(0.0);
+            for (int j = -3; j <= 3; ++j) {
+                if (((p.y - j) & 1) != 0) continue;
+                int cy = (p.y - j) / 2 - gCoarseLo.y;
+                for (int i = -3; i <= 3; ++i) {
+                    if (((p.x - i) & 1) != 0) continue;
+                    int cx = (p.x - i) / 2 - gCoarseLo.x;
+                    vec3 v = sCoarse[offset + cy * COARSE_SIDE + cx].rgb;
+                    y += 4.0 * LUMA_TAPS[i + 3] * LUMA_TAPS[j + 3] * v.x;
+                    if (abs(i) <= 2 && abs(j) <= 2) c += 4.0 * CHROMA_TAPS[i + 2] * CHROMA_TAPS[j + 2] * v.yz;
+                }
+            }
+            return vec3(y, c);
+        }
+
         ivec2 tileOrigin() { return groupId() * TILE; }
         int bandIndex(ivec2 c) { ivec2 r = c - (tileOrigin() - BAND_BORDER); return r.y * BAND_SIDE + r.x; }
         int pilotIndex(ivec2 c) { ivec2 r = c - (tileOrigin() - PILOT_BORDER); return r.y * PILOT_SIDE + r.x; }
@@ -541,30 +576,35 @@ internal object PhotonDenoiseShaders {
             return s0 + f * (s1 - s0);
         }
 
-        // Band at image pixel p: L = G_l − ↑G_{l+1}, base = ↑G̃_{l+1}, noise = §2.1 × §5.1.
-        void computeBand(ivec2 p) {
-            vec3 fine = uFineIsInput == 1 ? working0(p) : texelFetch(uFine, p, 0).rgb;
-            vec3 base = upAt(uDenoisedCoarse, p);
-            vec3 lap = fine - upAt(uNoisyCoarse, p);
+        // Band at image pixel p = mirror(c): L = G_l − ↑G_{l+1}, base = ↑G̃_{l+1}, noise = §2.1 × §5.1.
+        // Stored at c, so shared memory holds the mirrored values at their raw coordinates.
+        void computeBand(ivec2 c) {
+            ivec2 p = mirror2(c, uSize);
+            // Level 0 reads the input at uLevel = 0: one gain serves the input and the clip test.
+            vec3 gain = lscGain(levelCentre(p, uLevel));
+            vec3 fine = uFineIsInput == 1 ? working0Gain(p, gain) : texelFetch(uFine, p, 0).rgb;
+            vec3 base = upCached(1, p);
+            vec3 lap = fine - upCached(0, p);
             vec3 mu;
             vec3 s = strengthAt(base.x);
-            vec4 noise = modelNoise(p, base, mu) * vec4(s, sqrt(s.y * s.z));
-            int index = bandIndex(p);
+            vec4 noise = modelNoiseGain(p, base, gain, mu) * vec4(s, sqrt(s.y * s.z));
+            int index = bandIndex(c);
             sLapBase[index] = uvec3(packHalf2x16(lap.xy), packHalf2x16(vec2(lap.z, base.x)), packHalf2x16(base.yz));
             sNoise[index] = noise;
         }
 
+        // Raw coordinates: the arrays already hold the mirrored values (computeBand, main).
         vec3 lapAt(ivec2 p) {
-            uvec3 u = sLapBase[bandIndex(mirror2(p, uSize))];
+            uvec3 u = sLapBase[bandIndex(p)];
             return vec3(unpackHalf2x16(u.x), unpackHalf2x16(u.y).x);
         }
         vec3 baseAt(ivec2 p) {
-            uvec3 u = sLapBase[bandIndex(mirror2(p, uSize))];
+            uvec3 u = sLapBase[bandIndex(p)];
             return vec3(unpackHalf2x16(u.y).y, unpackHalf2x16(u.z));
         }
-        vec4 noiseAt(ivec2 p) { return sNoise[bandIndex(mirror2(p, uSize))]; }
+        vec4 noiseAt(ivec2 p) { return sNoise[bandIndex(p)]; }
         vec4 pilotAt(ivec2 p) {
-            uvec2 u = sPilot[pilotIndex(mirror2(p, uSize))];
+            uvec2 u = sPilot[pilotIndex(p)];
             return vec4(unpackHalf2x16(u.x), unpackHalf2x16(u.y));
         }
 
@@ -703,19 +743,29 @@ internal object PhotonDenoiseShaders {
         void main() {
             int lid = int(gl_LocalInvocationIndex);
             ivec2 origin = tileOrigin();
+            // Fine pixels the band region reads (mirrored), and the coarse taps of their ↑2.
+            ivec2 lo = ivec2(1 << 30);
+            for (int i = 0; i < BAND_SIDE; ++i) lo = min(lo, mirror2(origin - BAND_BORDER + ivec2(i), uSize));
+            gCoarseLo = (lo - 3) >> 1;
+            for (int i = lid; i < 2 * COARSE_SIDE * COARSE_SIDE; i += TILE * TILE) {
+                int slot = i / (COARSE_SIDE * COARSE_SIDE);
+                int r = i - slot * COARSE_SIDE * COARSE_SIDE;
+                ivec2 k = mirror2(gCoarseLo + ivec2(r % COARSE_SIDE, r / COARSE_SIDE), uCoarseSize);
+                sCoarse[i] = slot == 0 ? texelFetch(uNoisyCoarse, k, 0) : texelFetch(uDenoisedCoarse, k, 0);
+            }
+            memoryBarrierShared();
+            barrier();
             for (int i = lid; i < BAND_SIDE * BAND_SIDE; i += TILE * TILE) {
                 ivec2 c = origin - BAND_BORDER + ivec2(i % BAND_SIDE, i / BAND_SIDE);
-                if (all(greaterThanEqual(c, ivec2(0))) && all(lessThan(c, uSize))) computeBand(c);
+                computeBand(c);
             }
             memoryBarrierShared();
             barrier();
             if (uLumaEnabled == 1) {
                 for (int i = lid; i < PILOT_SIDE * PILOT_SIDE; i += TILE * TILE) {
                     ivec2 c = origin - PILOT_BORDER + ivec2(i % PILOT_SIDE, i / PILOT_SIDE);
-                    if (all(greaterThanEqual(c, ivec2(0))) && all(lessThan(c, uSize))) {
-                        vec4 pilot = computePilot(c);
-                        sPilot[pilotIndex(c)] = uvec2(packHalf2x16(pilot.xy), packHalf2x16(pilot.zw));
-                    }
+                    vec4 pilot = computePilot(mirror2(c, uSize));
+                    sPilot[pilotIndex(c)] = uvec2(packHalf2x16(pilot.xy), packHalf2x16(pilot.zw));
                 }
             }
             memoryBarrierShared();

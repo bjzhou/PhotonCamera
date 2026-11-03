@@ -24,6 +24,7 @@
 | `imageStore` 可见性 | 跨驱动约束 | barrier 必须覆盖下一位 consumer，而非只覆盖 producer |
 | CPU/GPU Float 除法 | 已确认，Adreno；跨驱动精度约束 | CPU 算法迁到 GPU 时不能假定 `/` 与 JVM Float 逐位一致 |
 | 后台 compute 调度 | 已确认，Mali | 以资源 RAW/WAR/WAW 冲突和 fence 管理并发，不以队列长度代替所有权 |
+| `GL_EXT_disjoint_timer_query` 计时 compute | 已确认，Adreno 840 | `GL_TIME_ELAPSED` 包住 `glDispatchCompute` 读数约为 0（非 disjoint）；compute 耗时用排空队列后的 `glFinish` 墙钟测，仅限调试 |
 | IMG/PowerVR `imageSize` | 研究线索，项目未复现 | 只做对照验证，复现前不建立全局兼容分支 |
 
 ## 全局基线

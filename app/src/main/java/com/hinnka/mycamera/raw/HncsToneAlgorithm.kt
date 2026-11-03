@@ -314,14 +314,14 @@ internal class HncsToneAlgorithm(quad: RawFullscreenQuad) :
                 uploaded = true
             }
         }
-        if (uploaded) {
+        /*if (uploaded) {
             PLog.d(
                 TAG,
                 "HNCS resources uploaded: profile=${renderPlan.profileId} " +
                     "map=${renderPlan.colorMap.width}x${renderPlan.colorMap.height} " +
                     "curves=${HncsProfileManager.CURVE_SAMPLE_COUNT}",
             )
-        }
+        }*/
     }
 
     private fun uploadRgbaTexture(

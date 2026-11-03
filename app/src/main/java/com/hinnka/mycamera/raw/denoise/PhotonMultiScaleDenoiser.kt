@@ -74,13 +74,18 @@ internal class PhotonMultiScaleDenoiser {
         sink: PassSink? = null,
     ): Int? {
         if (!initialize(debug = sink != null)) return null
+        val timing = PhotonDenoiseTiming(width, height, params)
         val sizes = ArrayList<IntArray>(params.levels + 1)
         sizes += intArrayOf(width, height)
         repeat(params.levels) { val s = sizes.last(); sizes += intArrayOf((s[0] + 1) / 2, (s[1] + 1) / 2) }
         val owned = ArrayList<Int>()
         fun texture(size: IntArray, format: Int) = createTexture(size[0], size[1], format).also(owned::add)
-        val lscTexture = params.lensShading?.let { createLscTexture(it).also(owned::add) } ?: 0
-        val mergeTexture = createMergeTexture(params).also(owned::add)
+        val lscTexture = timing.gpu("upload.lsc") {
+            params.lensShading?.let { createLscTexture(it).also(owned::add) } ?: 0
+        }
+        val mergeTexture = timing.gpu("upload.merge", "${params.mergeMapWidth}x${params.mergeMapHeight}") {
+            createMergeTexture(params).also(owned::add)
+        }
         val output = createTexture(width, height, GLES30.GL_RGBA16F)
         val buffers = IntArray(2)
         GLES31.glGenBuffers(2, buffers, 0)
@@ -90,15 +95,17 @@ internal class PhotonMultiScaleDenoiser {
             val gaussians = IntArray(params.levels + 1)
             for (level in 0 until params.levels) {
                 val coarse = sizes[level + 1]
-                gaussians[level + 1] = texture(coarse, GLES30.GL_RGBA16F)
-                GLES31.glUseProgram(analyzeProgram)
-                bindCommon(analyzeProgram, inputTexture, lscTexture, params)
-                bindSampler(analyzeProgram, "uFine", UNIT_FINE, if (level == 0) inputTexture else gaussians[level])
-                uniform1i(analyzeProgram, "uFineIsInput", if (level == 0) 1 else 0)
-                uniform2i(analyzeProgram, "uFineSize", sizes[level])
-                uniform2i(analyzeProgram, "uCoarseSize", coarse)
-                bindImage(0, gaussians[level + 1], GLES30.GL_RGBA16F)
-                dispatch(analyzeProgram, coarse)
+                timing.gpu("analyze", "G${level + 1} ${coarse[0]}x${coarse[1]}") {
+                    gaussians[level + 1] = texture(coarse, GLES30.GL_RGBA16F)
+                    GLES31.glUseProgram(analyzeProgram)
+                    bindCommon(analyzeProgram, inputTexture, lscTexture, params)
+                    bindSampler(analyzeProgram, "uFine", UNIT_FINE, if (level == 0) inputTexture else gaussians[level])
+                    uniform1i(analyzeProgram, "uFineIsInput", if (level == 0) 1 else 0)
+                    uniform2i(analyzeProgram, "uFineSize", sizes[level])
+                    uniform2i(analyzeProgram, "uCoarseSize", coarse)
+                    bindImage(0, gaussians[level + 1], GLES30.GL_RGBA16F)
+                    dispatch(analyzeProgram, coarse)
+                }
                 GlesGpuScheduler.yieldToUiRenderer()
                 sink?.onPass("G${level + 1}", gaussians[level + 1], coarse[0], coarse[1], false)
             }
@@ -107,13 +114,14 @@ internal class PhotonMultiScaleDenoiser {
             val fixedTable = params.strengthTable
             if (fixedTable != null) {
                 require(fixedTable.size == tableSize) { "Strength table has ${fixedTable.size} values, expected $tableSize" }
-                uploadBuffer(strengthBuffer, floatBuffer(fixedTable))
+                timing.gpu("strength.upload") { uploadBuffer(strengthBuffer, floatBuffer(fixedTable)) }
             } else {
                 estimateStrength(inputTexture, lscTexture, mergeTexture, gaussians, sizes, params,
-                    histogramBuffer, strengthBuffer)
+                    histogramBuffer, strengthBuffer, timing)
             }
             if (strengthOut != null || sink != null) {
-                val table = readStrength(strengthBuffer, tableSize)
+                // Mapping waits for the estimate: the CPU time here is the GPU backlog it drains.
+                val table = timing.cpu("strength.readback") { readStrength(strengthBuffer, tableSize) }
                 strengthOut?.let { table.copyInto(it, 0, 0, minOf(it.size, tableSize)) }
                 sink?.onStrength(table)
             }
@@ -123,6 +131,8 @@ internal class PhotonMultiScaleDenoiser {
             for (level in params.levels - 1 downTo 0) {
                 val size = sizes[level]
                 val lumaEnabled = level < params.lumaLevels && params.lumaStrength > 0f
+                val chromaEnabled = params.chromaStrength > 0f
+                val bilateralEnabled = chromaEnabled && level >= params.levels - params.bilateralLevels
                 if (sink != null) {
                     // Parity variant: the same fused computation, emitting its band, base, noise
                     // and pilot tiles instead of the result.
@@ -130,14 +140,16 @@ internal class PhotonMultiScaleDenoiser {
                     val base = texture(size, GLES30.GL_RGBA16F)
                     val noise = texture(size, GLES30.GL_RGBA32F)
                     val pilot = if (lumaEnabled) texture(size, GLES30.GL_RGBA16F) else band
-                    GLES31.glUseProgram(synthesizeDebugProgram)
-                    bindSynthesize(synthesizeDebugProgram, inputTexture, lscTexture, mergeTexture, gaussians,
-                        denoisedCoarse, sizes, level, lumaEnabled, params)
-                    bindImage(0, band, GLES30.GL_RGBA16F)
-                    bindImage(1, base, GLES30.GL_RGBA16F)
-                    bindImage(2, noise, GLES30.GL_RGBA32F)
-                    bindImage(3, pilot, GLES30.GL_RGBA16F)
-                    dispatch(synthesizeDebugProgram, size)
+                    timing.gpu("synthesize.parity", "L$level ${size[0]}x${size[1]}") {
+                        GLES31.glUseProgram(synthesizeDebugProgram)
+                        bindSynthesize(synthesizeDebugProgram, inputTexture, lscTexture, mergeTexture, gaussians,
+                            denoisedCoarse, sizes, level, lumaEnabled, chromaEnabled, bilateralEnabled, params)
+                        bindImage(0, band, GLES30.GL_RGBA16F)
+                        bindImage(1, base, GLES30.GL_RGBA16F)
+                        bindImage(2, noise, GLES30.GL_RGBA32F)
+                        bindImage(3, pilot, GLES30.GL_RGBA16F)
+                        dispatch(synthesizeDebugProgram, size)
+                    }
                     sink.onPass("band$level", band, size[0], size[1], false)
                     sink.onPass("base$level", base, size[0], size[1], false)
                     sink.onPass("noise$level", noise, size[0], size[1], true)
@@ -149,13 +161,20 @@ internal class PhotonMultiScaleDenoiser {
                 }
 
                 val result = if (level == 0) output else texture(size, GLES30.GL_RGBA16F)
-                GLES31.glUseProgram(synthesizeProgram)
-                bindSynthesize(synthesizeProgram, inputTexture, lscTexture, mergeTexture, gaussians,
-                    denoisedCoarse, sizes, level, lumaEnabled, params)
-                bindImage(0, result, GLES30.GL_RGBA16F)
-                dispatch(synthesizeProgram, size)
+                timing.gpu("synthesize", "L$level ${size[0]}x${size[1]} luma=$lumaEnabled chroma=$chromaEnabled " +
+                    "bilateral=$bilateralEnabled") {
+                    GLES31.glUseProgram(synthesizeProgram)
+                    bindSynthesize(synthesizeProgram, inputTexture, lscTexture, mergeTexture, gaussians,
+                        denoisedCoarse, sizes, level, lumaEnabled, chromaEnabled, bilateralEnabled, params)
+                    bindImage(0, result, GLES30.GL_RGBA16F)
+                    dispatch(synthesizeProgram, size)
+                }
                 GlesGpuScheduler.yieldToUiRenderer()
                 sink?.onPass(if (level == 0) "output" else "denoised$level", result, size[0], size[1], false)
+                if (timing.ablation) {
+                    synthesizeAblation(timing, inputTexture, lscTexture, mergeTexture, gaussians, denoisedCoarse,
+                        sizes, level, lumaEnabled, chromaEnabled, bilateralEnabled, params)
+                }
 
                 if (denoisedCoarse != gaussians[params.levels]) {
                     GLES30.glDeleteTextures(1, intArrayOf(denoisedCoarse), 0)
@@ -164,6 +183,7 @@ internal class PhotonMultiScaleDenoiser {
                 denoisedCoarse = result
             }
             RawGlesProgram.logErrors("PhotonMultiScaleDenoiser")
+            timing.report()
             return output
         } catch (error: Throwable) {
             GLES30.glDeleteTextures(1, intArrayOf(output), 0)
@@ -174,6 +194,54 @@ internal class PhotonMultiScaleDenoiser {
             GLES31.glBindBufferBase(GLES31.GL_SHADER_STORAGE_BUFFER, 1, 0)
             GLES31.glDeleteBuffers(2, buffers, 0)
             GLES31.glUseProgram(0)
+        }
+    }
+
+    /**
+     * Timing only: re-runs the fused synthesis of [level] into a scratch image with the luma,
+     * chroma gate and chroma bilateral stages switched on one at a time, and with all of them as in
+     * the real pass; the differences to the band-only run are each stage's GPU cost. Every variant
+     * runs [ABLATION_REPEATS] rounds and the report keeps the fastest, which drops the runs slowed
+     * by the GPU clocking down between serialized passes.
+     */
+    private fun synthesizeAblation(
+        timing: PhotonDenoiseTiming,
+        inputTexture: Int,
+        lscTexture: Int,
+        mergeTexture: Int,
+        gaussians: IntArray,
+        denoisedCoarse: Int,
+        sizes: List<IntArray>,
+        level: Int,
+        lumaEnabled: Boolean,
+        chromaEnabled: Boolean,
+        bilateralEnabled: Boolean,
+        params: PhotonDenoiseParams,
+    ) {
+        val size = sizes[level]
+        val scratch = createTexture(size[0], size[1], GLES30.GL_RGBA16F)
+        try {
+            val variants = buildList {
+                add(AblationVariant("full", lumaEnabled, chromaEnabled, bilateralEnabled))
+                add(AblationVariant("none", false, false, false))
+                if (lumaEnabled) add(AblationVariant("luma", true, false, false))
+                if (chromaEnabled) add(AblationVariant("chroma", false, true, false))
+                if (bilateralEnabled) add(AblationVariant("bilateral", false, true, true))
+            }
+            repeat(ABLATION_REPEATS) {
+                for (variant in variants) {
+                    timing.gpu(PhotonDenoiseTiming.ABLATION + variant.name, "L$level ${size[0]}x${size[1]}") {
+                        GLES31.glUseProgram(synthesizeProgram)
+                        bindSynthesize(synthesizeProgram, inputTexture, lscTexture, mergeTexture, gaussians,
+                            denoisedCoarse, sizes, level, variant.luma, variant.chroma, variant.bilateral, params)
+                        bindImage(0, scratch, GLES30.GL_RGBA16F)
+                        dispatch(synthesizeProgram, size)
+                    }
+                    GlesGpuScheduler.yieldToUiRenderer()
+                }
+            }
+        } finally {
+            GLES30.glDeleteTextures(1, intArrayOf(scratch), 0)
         }
     }
 
@@ -191,6 +259,7 @@ internal class PhotonMultiScaleDenoiser {
         params: PhotonDenoiseParams,
         histogramBuffer: Int,
         strengthBuffer: Int,
+        timing: PhotonDenoiseTiming,
     ) {
         val entries = PhotonDenoiseShaders.STRENGTH_BINS * 3 * PhotonDenoiseShaders.HIST_BUCKETS
         val zeros = ByteBuffer.allocateDirect(params.levels * entries * Int.SIZE_BYTES).order(ByteOrder.nativeOrder())
@@ -201,11 +270,11 @@ internal class PhotonMultiScaleDenoiser {
         val span = GlesComputeWorkGroup.IMAGE_TILE_SIZE * PhotonDenoiseShaders.ESTIMATE_BLOCK
         repeat(PhotonDenoiseShaders.ESTIMATE_PASSES) { pass ->
             // glBufferData(null) leaves the contents undefined: the counts start from explicit zeros.
-            uploadBuffer(histogramBuffer, zeros)
+            timing.gpu("estimate.clear", "pass$pass") { uploadBuffer(histogramBuffer, zeros) }
             GLES31.glUseProgram(estimateProgram)
             GLES31.glBindBufferBase(GLES31.GL_SHADER_STORAGE_BUFFER, 0, histogramBuffer)
             GLES31.glBindBufferBase(GLES31.GL_SHADER_STORAGE_BUFFER, 1, strengthBuffer)
-            for (level in 0 until params.levels) {
+            for (level in 0 until params.levels) timing.gpu("estimate.histogram", "pass$pass L$level") {
                 bindCommon(estimateProgram, inputTexture, lscTexture, params)
                 bindModelNoise(estimateProgram, mergeTexture, level, params)
                 bindSampler(estimateProgram, "uFine", UNIT_FINE, if (level == 0) inputTexture else gaussians[level])
@@ -226,14 +295,16 @@ internal class PhotonMultiScaleDenoiser {
             }
             GLES31.glMemoryBarrier(GLES31.GL_SHADER_STORAGE_BARRIER_BIT)
 
-            GLES31.glUseProgram(resolveProgram)
-            GLES31.glBindBufferBase(GLES31.GL_SHADER_STORAGE_BUFFER, 0, histogramBuffer)
-            GLES31.glBindBufferBase(GLES31.GL_SHADER_STORAGE_BUFFER, 1, strengthBuffer)
-            uniform1i(resolveProgram, "uLevels", params.levels)
-            GLES31.glUniform1fv(location(resolveProgram, "uCapLuma"), capLuma.size, capLuma, 0)
-            GLES31.glUniform1fv(location(resolveProgram, "uCapChroma"), capChroma.size, capChroma, 0)
-            GLES31.glDispatchCompute(1, 1, 1)
-            GLES31.glMemoryBarrier(GLES31.GL_SHADER_STORAGE_BARRIER_BIT or GLES31.GL_BUFFER_UPDATE_BARRIER_BIT)
+            timing.gpu("estimate.resolve", "pass$pass") {
+                GLES31.glUseProgram(resolveProgram)
+                GLES31.glBindBufferBase(GLES31.GL_SHADER_STORAGE_BUFFER, 0, histogramBuffer)
+                GLES31.glBindBufferBase(GLES31.GL_SHADER_STORAGE_BUFFER, 1, strengthBuffer)
+                uniform1i(resolveProgram, "uLevels", params.levels)
+                GLES31.glUniform1fv(location(resolveProgram, "uCapLuma"), capLuma.size, capLuma, 0)
+                GLES31.glUniform1fv(location(resolveProgram, "uCapChroma"), capChroma.size, capChroma, 0)
+                GLES31.glDispatchCompute(1, 1, 1)
+                GLES31.glMemoryBarrier(GLES31.GL_SHADER_STORAGE_BARRIER_BIT or GLES31.GL_BUFFER_UPDATE_BARRIER_BIT)
+            }
             GlesGpuScheduler.yieldToUiRenderer()
         }
         GLES31.glBindBufferBase(GLES31.GL_SHADER_STORAGE_BUFFER, 1, 0)
@@ -302,6 +373,8 @@ internal class PhotonMultiScaleDenoiser {
         sizes: List<IntArray>,
         level: Int,
         lumaEnabled: Boolean,
+        chromaEnabled: Boolean,
+        bilateralEnabled: Boolean,
         params: PhotonDenoiseParams,
     ) {
         bindCommon(program, inputTexture, lscTexture, params)
@@ -316,7 +389,6 @@ internal class PhotonMultiScaleDenoiser {
         uniform1f(program, "uAlpha", params.lumaAlpha(level))
         uniform1i(program, "uLumaEnabled", if (lumaEnabled) 1 else 0)
         uniform1f(program, "uGrain", params.lumaGrain(level))
-        val chromaEnabled = params.chromaStrength > 0f
         uniform1i(program, "uChromaEnabled", if (chromaEnabled) 1 else 0)
         uniform1f(program, "uChromaStrength", minOf(params.chromaStrength, 1f))
         val thresholdScale = params.chromaThresholdScale()
@@ -324,7 +396,7 @@ internal class PhotonMultiScaleDenoiser {
             params.gateLuma[0] * thresholdScale, params.gateLuma[1] * thresholdScale)
         GLES31.glUniform2f(location(program, "uGateChroma"),
             params.gateChroma[0] * thresholdScale, params.gateChroma[1] * thresholdScale)
-        uniform1i(program, "uBilateral", if (chromaEnabled && level >= params.levels - params.bilateralLevels) 1 else 0)
+        uniform1i(program, "uBilateral", if (bilateralEnabled) 1 else 0)
         uniform1f(program, "uBilateralLuma", params.bilateralLuma)
         uniform1f(program, "uBilateralChroma", params.bilateralChroma * thresholdScale)
         uniform1i(program, "uWriteOutput", if (level == 0) 1 else 0)
@@ -400,7 +472,10 @@ internal class PhotonMultiScaleDenoiser {
     private fun uniform3f(program: Int, name: String, v: FloatArray) =
         GLES31.glUniform3f(location(program, name), v[0], v[1], v[2])
 
+    private class AblationVariant(val name: String, val luma: Boolean, val chroma: Boolean, val bilateral: Boolean)
+
     private companion object {
+        const val ABLATION_REPEATS = 3
         const val UNIT_INPUT = 0
         const val UNIT_LSC = 1
         const val UNIT_FINE = 2
