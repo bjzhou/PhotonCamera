@@ -1,9 +1,6 @@
 package com.hinnka.mycamera.raw
 
 import android.opengl.GLES30
-import java.nio.ByteBuffer
-import java.nio.ByteOrder
-import kotlin.math.sqrt
 
 /**
  * MGC V25 guided finish on the GPU ([GlesMgcGuidedUpsampleShaders]).
@@ -32,7 +29,6 @@ internal class MgcGuidedUpsample {
     val globalHeight get() = lowHeight shl log2Scale
     private val quad = RawFullscreenQuad()
     private val programs = HashMap<String, Int>()
-    private var sqrtLutTexture = 0
 
     fun prepare(texture: Int, width: Int, height: Int, gains: FloatArray,
                 resolution: MgcFinishResolution) {
@@ -45,7 +41,7 @@ internal class MgcGuidedUpsample {
         paddedHeight = (height + 15) and -16
         lowWidth = paddedWidth shr log2Scale
         lowHeight = paddedHeight shr log2Scale
-        val framebuffers = IntArray(3)
+        val framebuffers = IntArray(2)
         try {
             guideTexture = MgcGlesSurfaces.texture(GLES30.GL_R16I, paddedWidth, paddedHeight, "MGC guide")
             lowGuideTexture = MgcGlesSurfaces.texture(GLES30.GL_R16I, lowWidth, lowHeight, "MGC low guide")
@@ -54,21 +50,17 @@ internal class MgcGuidedUpsample {
             profileTexture = MgcGlesSurfaces.texture(GLES30.GL_RGBA16F, lowWidth, lowHeight,
                 "MGC low profile", GLES30.GL_LINEAR)
             profileFramebuffer = MgcGlesSurfaces.framebuffer("MGC low profile", profileTexture)
-            val lut = sqrtLut()
             val sourceSetup: (Int) -> Unit = { program ->
                 bindTexture(program, "uSource", 0, texture)
-                bindTexture(program, "uSqrtLut", 1, lut)
                 GLES30.glUniform2i(location(program, "uSourceMax"), width - 1, height - 1)
-                GLES30.glUniform1fv(location(program, "uWhiteBalance"), 3, whiteBalance, 0)
-                GLES30.glUniform1ui(location(program, "uFloatFence"), 0)
+                GLES30.glUniform3fv(location(program, "uWhiteBalance"), 1, whiteBalance, 0)
                 GLES30.glUniform1i(location(program, "uLog2Scale"), log2Scale)
             }
             framebuffers[0] = MgcGlesSurfaces.framebuffer("MGC guide", guideTexture)
             draw("guide", framebuffers[0], paddedWidth, paddedHeight, sourceSetup)
-            framebuffers[1] = MgcGlesSurfaces.framebuffer("MGC low guide", lowGuideTexture)
-            draw("lowGuide", framebuffers[1], lowWidth, lowHeight, sourceSetup)
-            framebuffers[2] = MgcGlesSurfaces.framebuffer("MGC low colour", cameraTexture)
-            draw("lowColor", framebuffers[2], lowWidth, lowHeight, sourceSetup)
+            framebuffers[1] = MgcGlesSurfaces.framebuffer("MGC low guide and colour", lowGuideTexture,
+                cameraTexture)
+            draw("low", framebuffers[1], lowWidth, lowHeight, sourceSetup)
             finishPasses("prepare")
         } catch (error: Throwable) {
             releaseBuffers()
@@ -102,8 +94,8 @@ internal class MgcGuidedUpsample {
         check(isPrepared && width == fullWidth && height == fullHeight)
         require(attenuation.isFinite() && attenuation >= 0f && source != 0 && target != 0)
         val padding = GlesMgcGuidedUpsampleShaders.GUIDED_PADDING
-        val level1Padding = 2 * GlesMgcGuidedUpsampleShaders.LEVEL1_PADDING
-        val level2Padding = 2 * GlesMgcGuidedUpsampleShaders.LEVEL2_PADDING
+        val level1Padding = 2 * GlesMgcSharpenShaders.LEVEL1_PADDING
+        val level2Padding = 2 * GlesMgcSharpenShaders.LEVEL2_PADDING
         val scale = 1 shl log2Scale
         val cellStep = 32768 / scale
         fun cellOf(x: Int) = ((2 * x + 1) * cellStep - 65536) shr 17
@@ -113,83 +105,64 @@ internal class MgcGuidedUpsample {
         val cellRows = cellOf(height - 1 + padding) + 1 - cellY0 + 1
         val guidedWidth = width + 2 * padding
         val guidedHeight = height + 2 * padding
-        val paddedOutputHeight = (height + 1) and -2
-        val kernel = GlesMgcSharpen.KernelUniforms(curves, width, paddedOutputHeight, attenuation)
-        val textures = IntArray(8)
-        val framebuffers = IntArray(7)
+        val kernel = GlesMgcSharpen.KernelUniforms(curves, attenuation)
+        val textures = IntArray(7)
+        val framebuffers = IntArray(6)
         try {
-            val lowYuv = MgcGlesSurfaces.texture(GLES30.GL_RGBA16I, lowWidth, lowHeight, "MGC low YUV")
-                .also { textures[0] = it }
             val cell0 = MgcGlesSurfaces.texture(GLES30.GL_RGBA32UI, cellColumns, cellRows, "MGC cells 0")
-                .also { textures[1] = it }
+                .also { textures[0] = it }
             val cell1 = MgcGlesSurfaces.texture(GLES30.GL_RGBA32UI, cellColumns, cellRows, "MGC cells 1")
-                .also { textures[2] = it }
+                .also { textures[1] = it }
             val row0 = MgcGlesSurfaces.texture(GLES30.GL_RGBA32UI, guidedWidth, cellRows, "MGC rows 0")
-                .also { textures[3] = it }
+                .also { textures[2] = it }
             val row1 = MgcGlesSurfaces.texture(GLES30.GL_RGBA32UI, guidedWidth, cellRows, "MGC rows 1")
+                .also { textures[3] = it }
+            val guided = MgcGlesSurfaces.texture(GLES30.GL_R32F, guidedWidth, guidedHeight, "MGC guided luma")
                 .also { textures[4] = it }
-            val guided = MgcGlesSurfaces.texture(GLES30.GL_R16I, guidedWidth, guidedHeight, "MGC guided luma")
-                .also { textures[5] = it }
-            val level1 = MgcGlesSurfaces.texture(GLES30.GL_R16I, width + level1Padding,
-                height + level1Padding, "MGC guided level1").also { textures[6] = it }
-            val level2 = MgcGlesSurfaces.texture(GLES30.GL_R16I, width + level2Padding,
-                height + level2Padding, "MGC guided level2").also { textures[7] = it }
-            framebuffers[0] = MgcGlesSurfaces.framebuffer("MGC low YUV", lowYuv)
-            draw("lowYuv", framebuffers[0], lowWidth, lowHeight) { program ->
-                bindTexture(program, "uSource", 0, source)
-                GLES30.glUniform1ui(location(program, "uFloatFence"), 0)
-            }
-            framebuffers[1] = MgcGlesSurfaces.framebuffer("MGC cells", cell0, cell1)
-            draw("cellFit", framebuffers[1], cellColumns, cellRows) { program ->
+            val level1 = MgcGlesSurfaces.texture(GLES30.GL_R32F, width + level1Padding,
+                height + level1Padding, "MGC guided level1").also { textures[5] = it }
+            val level2 = MgcGlesSurfaces.texture(GLES30.GL_R32F, width + level2Padding,
+                height + level2Padding, "MGC guided level2").also { textures[6] = it }
+            framebuffers[0] = MgcGlesSurfaces.framebuffer("MGC cells", cell0, cell1)
+            draw("cellFit", framebuffers[0], cellColumns, cellRows) { program ->
                 bindTexture(program, "uLowGuide", 0, lowGuideTexture)
-                bindTexture(program, "uLowYuv", 1, lowYuv)
+                bindTexture(program, "uLowSource", 1, source)
                 GLES30.glUniform2i(location(program, "uLowMax"), lowWidth - 1, lowHeight - 1)
                 GLES30.glUniform2i(location(program, "uCellOrigin"), cellX0, cellY0)
-                GLES30.glUniform1ui(location(program, "uFloatFence"), 0)
             }
-            framebuffers[2] = MgcGlesSurfaces.framebuffer("MGC rows", row0, row1)
-            draw("horizontal", framebuffers[2], guidedWidth, cellRows) { program ->
+            framebuffers[1] = MgcGlesSurfaces.framebuffer("MGC rows", row0, row1)
+            draw("horizontal", framebuffers[1], guidedWidth, cellRows) { program ->
                 bindTexture(program, "uCell0", 0, cell0)
                 bindTexture(program, "uCell1", 1, cell1)
                 GLES30.glUniform2i(location(program, "uCellOrigin"), cellX0, cellY0)
                 GLES30.glUniform1i(location(program, "uCellStep"), cellStep)
-                GLES30.glUniform1ui(location(program, "uFloatFence"), 0)
             }
-            framebuffers[3] = MgcGlesSurfaces.framebuffer("MGC guided luma", guided)
-            draw("guidedY", framebuffers[3], guidedWidth, guidedHeight) { program ->
+            framebuffers[2] = MgcGlesSurfaces.framebuffer("MGC guided luma", guided)
+            draw("guidedY", framebuffers[2], guidedWidth, guidedHeight) { program ->
                 bindTexture(program, "uRow0", 0, row0)
                 bindTexture(program, "uRow1", 1, row1)
                 bindTexture(program, "uGuide", 2, guideTexture)
                 GLES30.glUniform2i(location(program, "uGuideMax"), paddedWidth - 1, paddedHeight - 1)
                 GLES30.glUniform1i(location(program, "uCellOriginY"), cellY0)
                 GLES30.glUniform1i(location(program, "uCellStep"), cellStep)
-                GLES30.glUniform1ui(location(program, "uFloatFence"), 0)
             }
-            framebuffers[4] = MgcGlesSurfaces.framebuffer("MGC guided level1", level1)
-            draw("level1", framebuffers[4], width + level1Padding, height + level1Padding) { program ->
+            framebuffers[3] = MgcGlesSurfaces.framebuffer("MGC guided level1", level1)
+            draw("level1", framebuffers[3], width + level1Padding, height + level1Padding) { program ->
                 bindTexture(program, "uLuma", 0, guided)
             }
-            framebuffers[5] = MgcGlesSurfaces.framebuffer("MGC guided level2", level2)
-            draw("level2", framebuffers[5], width + level2Padding, height + level2Padding) { program ->
+            framebuffers[4] = MgcGlesSurfaces.framebuffer("MGC guided level2", level2)
+            draw("level2", framebuffers[4], width + level2Padding, height + level2Padding) { program ->
                 bindTexture(program, "uLevel1", 0, level1)
             }
-            framebuffers[6] = MgcGlesSurfaces.framebuffer("MGC guided output", target)
-            draw("output", framebuffers[6], width, height) { program ->
+            framebuffers[5] = MgcGlesSurfaces.framebuffer("MGC guided output", target)
+            draw("output", framebuffers[5], width, height) { program ->
                 bindTexture(program, "uLuma", 0, guided)
                 bindTexture(program, "uLevel1", 1, level1)
                 bindTexture(program, "uLevel2", 2, level2)
-                bindTexture(program, "uLowYuv", 3, lowYuv)
+                bindTexture(program, "uLowSource", 3, source)
                 GLES30.glUniform2i(location(program, "uLowMax"), lowWidth - 1, lowHeight - 1)
                 GLES30.glUniform1i(location(program, "uCellStep"), cellStep)
-                GLES30.glUniform1iv(location(program, "uKnots"), kernel.knots.size, kernel.knots, 0)
-                GLES30.glUniform1iv(location(program, "uSlopes"), kernel.slopes.size, kernel.slopes, 0)
-                GLES30.glUniform1iv(location(program, "uIntercepts"), kernel.intercepts.size, kernel.intercepts, 0)
-                GLES30.glUniform2i(location(program, "uCenter"), width shr 1, paddedOutputHeight shr 1)
-                GLES30.glUniform1f(location(program, "uInverseMaxRadius2"), kernel.inverseMaxRadius2)
-                GLES30.glUniform1fv(location(program, "uCorner"), 3, RELATIVE_CORNER_ACUTANCE_CORRECTION, 0)
-                GLES30.glUniform1f(location(program, "uLowerScale"), kernel.lowerScale)
-                GLES30.glUniform1f(location(program, "uUpperScale"), kernel.upperScale)
-                GLES30.glUniform1ui(location(program, "uFloatFence"), 0)
+                kernel.bind(program)
             }
             finishPasses("render")
         } finally {
@@ -223,9 +196,7 @@ internal class MgcGuidedUpsample {
         val source = with(GlesMgcGuidedUpsampleShaders) {
             when (pass) {
                 "guide" -> guideShader
-                "lowGuide" -> lowGuideShader
-                "lowColor" -> lowColorShader
-                "lowYuv" -> lowYuvShader
+                "low" -> lowShader
                 "cellFit" -> cellFitShader
                 "horizontal" -> horizontalShader
                 "guidedY" -> guidedYShader
@@ -246,31 +217,8 @@ internal class MgcGuidedUpsample {
         GLES30.glUniform1i(location(program, name), unit)
     }
 
-    /** SqrtGuide(g) for g in [0, 32767] at texel (g and 255, g shr 8). */
-    private fun sqrtLut(): Int {
-        if (sqrtLutTexture != 0) return sqrtLutTexture
-        val values = ByteBuffer.allocateDirect(32768 * 2).order(ByteOrder.nativeOrder())
-        // JVM float sqrt is correctly rounded; for g >= 1 the AOT's `s < 1 ? rne(s)` never applies
-        // and g = 0 gives 0, so this equals fcvtzs(sqrt(g) * 128) of the original.
-        for (g in 0 until 32768) values.putShort((sqrt(g.toFloat()) * 128f).toInt().toShort())
-        values.position(0)
-        val texture = MgcGlesSurfaces.texture(GLES30.GL_R16I, 256, 128, "MGC sqrt guide LUT")
-        GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, texture)
-        GLES30.glPixelStorei(GLES30.GL_UNPACK_ALIGNMENT, 2)
-        GLES30.glTexSubImage2D(GLES30.GL_TEXTURE_2D, 0, 0, 0, 256, 128,
-            GLES30.GL_RED_INTEGER, GLES30.GL_SHORT, values)
-        GLES30.glPixelStorei(GLES30.GL_UNPACK_ALIGNMENT, 4)
-        GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, 0)
-        val error = GLES30.glGetError()
-        if (error != GLES30.GL_NO_ERROR) {
-            MgcGlesSurfaces.deleteTextures(texture)
-            error("MGC sqrt guide LUT upload failed: 0x${Integer.toHexString(error)}")
-        }
-        sqrtLutTexture = texture
-        return texture
-    }
 
-    /** Drops the prepared guides and low-resolution textures; programs and the LUT are kept. */
+    /** Drops the prepared guides and low-resolution textures; programs are kept. */
     fun releaseBuffers() {
         MgcGlesSurfaces.deleteFramebuffers(profileFramebuffer)
         MgcGlesSurfaces.deleteTextures(cameraTexture, profileTexture, guideTexture, lowGuideTexture)
@@ -284,13 +232,9 @@ internal class MgcGuidedUpsample {
         releaseBuffers()
         programs.values.forEach { GLES30.glDeleteProgram(it) }
         programs.clear()
-        MgcGlesSurfaces.deleteTextures(sqrtLutTexture)
-        sqrtLutTexture = 0
     }
 
     private companion object {
-        // FinishRaw's relative corner acutance correction; the original call site passes zeros.
-        val RELATIVE_CORNER_ACUTANCE_CORRECTION = floatArrayOf(0f, 0f, 0f)
         val BOX_COLOR = """
             #version 300 es
             precision highp float;
@@ -312,8 +256,8 @@ internal class MgcGuidedUpsample {
 }
 
 /**
- * The guide's linear YUV boundary applies channel gains normalized to the green mean; the
- * low colour pass removes them again after YUV -> RGB.
+ * The guide applies channel gains normalized to the green mean before clamping; the low colour
+ * pass removes them again from the box means.
  */
 private fun normalizedRgbWhiteBalance(gains: FloatArray): FloatArray {
     fun safeGain(index: Int, fallback: Float): Float {

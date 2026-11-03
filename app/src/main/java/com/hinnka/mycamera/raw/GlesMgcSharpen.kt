@@ -25,7 +25,7 @@ internal class GlesMgcSharpen {
     fun render(source: Int, target: Int, width: Int, height: Int, curves: FloatArray, attenuation: Float) {
         require(width > 0 && height > 0 && source != 0 && target != 0)
         require(attenuation.isFinite() && attenuation >= 0f)
-        val uniforms = KernelUniforms(curves, width, height, attenuation)
+        val uniforms = KernelUniforms(curves, attenuation)
         ensurePrograms()
         ensurePlanes(width, height)
         GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, outputFramebuffer)
@@ -39,7 +39,6 @@ internal class GlesMgcSharpen {
 
         begin(lumaProgram, lumaFramebuffer, width, height)
         bindTexture(lumaProgram, "uSource", 0, source)
-        GLES30.glUniform1ui(GLES30.glGetUniformLocation(lumaProgram, "uFloatFence"), 0)
         quad.draw(lumaProgram)
 
         begin(level1Program, level1Framebuffer, width + 2 * level1Padding, height + 2 * level1Padding)
@@ -57,18 +56,8 @@ internal class GlesMgcSharpen {
         bindTexture(program, "uLuma", 1, lumaTexture)
         bindTexture(program, "uLevel1", 2, level1Texture)
         bindTexture(program, "uLevel2", 3, level2Texture)
-        fun location(name: String) = GLES30.glGetUniformLocation(program, name)
-        GLES30.glUniform2i(location("uImageMax"), width - 1, height - 1)
-        GLES30.glUniform1ui(location("uFloatFence"), 0)
-        GLES30.glUniform1iv(location("uKnots"), uniforms.knots.size, uniforms.knots, 0)
-        GLES30.glUniform1iv(location("uSlopes"), uniforms.slopes.size, uniforms.slopes, 0)
-        GLES30.glUniform1iv(location("uIntercepts"), uniforms.intercepts.size, uniforms.intercepts, 0)
-        GLES30.glUniform1i(location("uRadialValid"), if (uniforms.radialValid) 1 else 0)
-        GLES30.glUniform2i(location("uCenter"), width shr 1, height shr 1)
-        GLES30.glUniform1f(location("uInverseMaxRadius2"), uniforms.inverseMaxRadius2)
-        GLES30.glUniform1fv(location("uCorner"), 3, RELATIVE_CORNER_ACUTANCE_CORRECTION, 0)
-        GLES30.glUniform1f(location("uLowerScale"), uniforms.lowerScale)
-        GLES30.glUniform1f(location("uUpperScale"), uniforms.upperScale)
+        GLES30.glUniform2i(GLES30.glGetUniformLocation(program, "uImageMax"), width - 1, height - 1)
+        uniforms.bind(program)
         quad.draw(program)
 
         GLES30.glFramebufferTexture2D(GLES30.GL_FRAMEBUFFER, GLES30.GL_COLOR_ATTACHMENT0,
@@ -117,10 +106,10 @@ internal class GlesMgcSharpen {
         try {
             val level1Padding = 2 * GlesMgcSharpenShaders.LEVEL1_PADDING
             val level2Padding = 2 * GlesMgcSharpenShaders.LEVEL2_PADDING
-            lumaTexture = MgcGlesSurfaces.texture(GLES30.GL_R16I, width, height, "MGC sharpen luma")
-            level1Texture = MgcGlesSurfaces.texture(GLES30.GL_R16I, width + level1Padding,
+            lumaTexture = MgcGlesSurfaces.texture(GLES30.GL_R32F, width, height, "MGC sharpen luma")
+            level1Texture = MgcGlesSurfaces.texture(GLES30.GL_R32F, width + level1Padding,
                 height + level1Padding, "MGC sharpen level1")
-            level2Texture = MgcGlesSurfaces.texture(GLES30.GL_R16I, width + level2Padding,
+            level2Texture = MgcGlesSurfaces.texture(GLES30.GL_R32F, width + level2Padding,
                 height + level2Padding, "MGC sharpen level2")
             lumaFramebuffer = MgcGlesSurfaces.framebuffer("MGC sharpen luma", lumaTexture)
             level1Framebuffer = MgcGlesSurfaces.framebuffer("MGC sharpen level1", level1Texture)
@@ -155,55 +144,42 @@ internal class GlesMgcSharpen {
     }
 
     /**
-     * The AOT entry's curve preparation, in the same unfused binary32 order (JVM Float arithmetic
-     * is never contracted): knots and y values become int16 U12 codes, then each of the four
-     * segments gets a Q8 slope and an intercept. Curves use [MgcSharpenCurveBuilder]'s
-     * [point, frequency, coordinate] layout. The corner term is normalised over
-     * [cornerWidth] x [cornerHeight]: the image for SharpenTo16Bit, the two-row padded output for
-     * GuidedUpsample.
+     * The band curves and overshoot scales of the kernel. Curves use [MgcSharpenCurveBuilder]'s
+     * [point, frequency, coordinate] layout on the encoded [0, 1] scale: per band five strictly
+     * increasing knots and their responses. Each of the four segments becomes its start knot,
+     * the response there and its slope.
      */
-    class KernelUniforms(curves: FloatArray, cornerWidth: Int, cornerHeight: Int, attenuation: Float) {
-        val knots = IntArray(9)
-        val slopes = IntArray(12)
-        val intercepts = IntArray(12)
-        val radialValid: Boolean
-        val inverseMaxRadius2: Float
-        val lowerScale = 1f - attenuation
-        val upperScale = attenuation + 1f
+    class KernelUniforms(curves: FloatArray, attenuation: Float) {
+        private val knots = FloatArray(12)
+        private val values = FloatArray(12)
+        private val slopes = FloatArray(12)
+        private val lowerScale = 1f - attenuation
+        private val upperScale = 1f + attenuation
 
         init {
             require(curves.size == 30)
             for (band in 0..2) {
-                val knot = IntArray(5) { toS16(curves[5 * band + it] * 4095f) }
-                val y = IntArray(5) { toS16(curves[15 + 5 * band + it] * 4095f) }
-                for (i in 1..3) knots[band * 3 + i - 1] = knot[i]
                 for (k in 0..3) {
-                    val dx = (knot[k + 1] - knot[k]).toShort().toInt().coerceAtLeast(1)
-                    val dy = (y[k + 1] - y[k]).toShort().toInt()
-                    val slope = dy.toFloat() / dx.toFloat()
-                    val slopeX0 = slope * knot[k].toFloat()
-                    val slopeQ8 = slope * 256f
-                    val intercept = y[k].toFloat() - slopeX0
-                    slopes[band * 4 + k] = toS16(slopeQ8)
-                    intercepts[band * 4 + k] = toS16(intercept)
+                    val x0 = curves[5 * band + k]
+                    val x1 = curves[5 * band + k + 1]
+                    val y0 = curves[15 + 5 * band + k]
+                    val y1 = curves[15 + 5 * band + k + 1]
+                    require(x1 > x0) { "Sharpen knots must increase: band=$band segment=$k" }
+                    knots[band * 4 + k] = x0
+                    values[band * 4 + k] = y0
+                    slopes[band * 4 + k] = (y1 - y0) / (x1 - x0)
                 }
             }
-            val halfWidth = cornerWidth shr 1
-            val halfHeight = cornerHeight shr 1
-            val maxRadius2 = (halfWidth * halfWidth).toFloat() + (halfHeight * halfHeight).toFloat()
-            radialValid = maxRadius2 > 0f
-            inverseMaxRadius2 = if (radialValid) 1f / maxRadius2 else 0f
         }
 
-        // Round half to even, clamp to int16 (NaN -> 0), truncate.
-        private fun toS16(value: Float): Int {
-            if (value.isNaN()) return 0
-            return Math.rint(value.toDouble()).toFloat().coerceIn(-32768f, 32767f).toInt().toShort().toInt()
+        /** Sets the [GlesMgcSharpenShaders.kernel] uniforms of the current [program]. */
+        fun bind(program: Int) {
+            fun location(name: String) = GLES30.glGetUniformLocation(program, name)
+            GLES30.glUniform1fv(location("uKnots"), knots.size, knots, 0)
+            GLES30.glUniform1fv(location("uValues"), values.size, values, 0)
+            GLES30.glUniform1fv(location("uSlopes"), slopes.size, slopes, 0)
+            GLES30.glUniform1f(location("uLowerScale"), lowerScale)
+            GLES30.glUniform1f(location("uUpperScale"), upperScale)
         }
-    }
-
-    private companion object {
-        // FinishRaw's relative corner acutance correction; the original call site passes zeros.
-        val RELATIVE_CORNER_ACUTANCE_CORRECTION = floatArrayOf(0f, 0f, 0f)
     }
 }
