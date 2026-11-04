@@ -29,7 +29,6 @@
 #include "dng_memory_stream.h"
 #include "libraw/libraw.h"
 #include "math_utils.h"
-#include "fixed_raw_calibration.h"
 #include "srgb_color_matrix_policy.h"
 
 #ifndef LOG_TAG
@@ -1066,15 +1065,6 @@ static bool isUsableSourceMatrix(const Matrix3x3 &matrix, bool forward = false) 
   return true;
 }
 
-static bool isUsableSourceColorMatrix(const Matrix3x3 &matrix, int illuminant) {
-  if (!isUsableSourceMatrix(matrix)) return false;
-  if (srgb_color_matrix_policy::isPlaceholder(matrix.m, illuminant)) {
-    LOGI("Ignoring sRGB placeholder ColorMatrix, illuminant=%d", illuminant);
-    return false;
-  }
-  return true;
-}
-
 static jfloatArray matrixToJava(JNIEnv *env, const Matrix3x3 &matrix) {
   jfloatArray result = env->NewFloatArray(9);
   if (result) {
@@ -1164,15 +1154,17 @@ static bool isSrgbPlaceholderForwardMatrixPair(const libraw_dng_color_t &first,
 }
 
 struct SourceCalibrationSelection {
-  bool useSource = false;  // false: replace with fixed_raw_calibration
+  bool useSource = false;  // false: no usable ColorMatrix1, use the legacy chain
   bool useForward = false;
   bool keepSlot2 = false;
 };
 
 // Same order as RawColorCalibrationPolicy.kt. A usable ForwardMatrix set keeps the
 // source calibration as is: ColorMatrix then only locates the scene white, so an
-// sRGB placeholder ColorMatrix is kept. Otherwise ForwardMatrix is dropped and a
-// usable ColorMatrix is used alone; otherwise the fixed DNG calibration applies.
+// sRGB placeholder ColorMatrix is kept. Otherwise ForwardMatrix is dropped and the
+// ColorMatrix is used alone, sRGB placeholder included; a placeholder second slot
+// is dropped only next to a real first slot. Without a structurally usable
+// ColorMatrix1 (including non-DNG RAW) the LibRaw fallback chain applies.
 static SourceCalibrationSelection selectSourceCalibration(
     const libraw_dng_color_t *dngColor, const Matrix3x3 &colorMatrix1,
     const Matrix3x3 &colorMatrix2, int illuminant1, int illuminant2,
@@ -1191,8 +1183,14 @@ static SourceCalibrationSelection selectSourceCalibration(
   if (hasForward1 || hasForward2) {
     LOGI("Ignoring unusable ForwardMatrix set; using ColorMatrix only");
   }
-  if (!isUsableSourceColorMatrix(colorMatrix1, illuminant1)) return {};
-  return {true, false, isUsableSourceColorMatrix(colorMatrix2, illuminant2)};
+  if (!isUsableSourceMatrix(colorMatrix1)) return {};
+  const bool placeholder1 = srgb_color_matrix_policy::isPlaceholder(colorMatrix1.m, illuminant1);
+  if (placeholder1) {
+    LOGI("Keeping sRGB placeholder ColorMatrix, illuminant=%d", illuminant1);
+  }
+  const bool keepSlot2 = isUsableSourceMatrix(colorMatrix2) &&
+      (placeholder1 || !srgb_color_matrix_policy::isPlaceholder(colorMatrix2.m, illuminant2));
+  return {true, false, keepSlot2};
 }
 
 static std::array<float, 3> multiplyMatrixVector(const Matrix3x3 &matrix,
@@ -1852,22 +1850,12 @@ static bool computeWbFromDngAsShotWhiteXY(const LibRaw &rawProcessor,
   const SourceCalibrationSelection selection = selectSourceCalibration(
       rawProcessor.imgdata.color.dng_color, colorMatrix1, colorMatrix2,
       illuminant1, illuminant2, forwardMatrix1, forwardMatrix2);
-  bool hasColor1 = selection.useSource;
-  bool hasColor2 = selection.useSource && selection.keepSlot2;
+  // Without a usable ColorMatrix1 the render path has no DNG calibration either.
   if (!selection.useSource) {
-    // AsShotWhiteXY-derived WB must use the same replacement as the render CCM.
-    memcpy(colorMatrix1.m, fixed_raw_calibration::colorMatrix1, sizeof(colorMatrix1.m));
-    memcpy(colorMatrix2.m, fixed_raw_calibration::colorMatrix2, sizeof(colorMatrix2.m));
-    illuminant1 = fixed_raw_calibration::illuminant1;
-    illuminant2 = fixed_raw_calibration::illuminant2;
-    Matrix3x3 calibration1, calibration2;
-    memcpy(calibration1.m, fixed_raw_calibration::cameraCalibration1, sizeof(calibration1.m));
-    memcpy(calibration2.m, fixed_raw_calibration::cameraCalibration2, sizeof(calibration2.m));
-    // Apply individual-camera calibration after CM normalization, as in the render path.
-    colorMatrix1 = calibration1.multiply(normalizeDngColorMatrix(colorMatrix1));
-    colorMatrix2 = calibration2.multiply(normalizeDngColorMatrix(colorMatrix2));
-    hasColor1 = hasColor2 = true;
+    return false;
   }
+  const bool hasColor1 = true;
+  const bool hasColor2 = selection.keepSlot2;
   if (!findXyzToCamera(
           whiteXy, colorMatrix1, hasColor1, colorMatrix2, hasColor2,
           illuminant1, illuminant2, xyzToCamera)) {
@@ -3543,21 +3531,6 @@ Java_com_hinnka_mycamera_raw_RawDemosaicProcessor_processDngNative(
     }
   }
 
-  const bool useFallbackCalibration = !selection.useSource;
-  if (useFallbackCalibration) {
-    memcpy(colorMatrix1.m, fixed_raw_calibration::colorMatrix1, sizeof(colorMatrix1.m));
-    memcpy(colorMatrix2.m, fixed_raw_calibration::colorMatrix2, sizeof(colorMatrix2.m));
-    hasColor1 = hasColor2 = true;
-    hasForward1 = hasForward2 = false;
-    illuminant1 = fixed_raw_calibration::illuminant1;
-    illuminant2 = fixed_raw_calibration::illuminant2;
-    memcpy(cameraCalibration1.m, fixed_raw_calibration::cameraCalibration1, sizeof(cameraCalibration1.m));
-    memcpy(cameraCalibration2.m, fixed_raw_calibration::cameraCalibration2, sizeof(cameraCalibration2.m));
-    hasCameraCalibration1 = hasCameraCalibration2 = true;
-    analogBalance = {1.0f, 1.0f, 1.0f};
-    LOGI("No usable source matrices; using fixed DNG calibration (ColorMatrix only)");
-  }
-
   if (hasColor1 || hasColor2 || hasForward1 || hasForward2) {
     hasFixedColor1 = hasColor1;
     hasFixedColor2 = hasColor2;
@@ -3569,7 +3542,7 @@ Java_com_hinnka_mycamera_raw_RawDemosaicProcessor_processDngNative(
     fixedCameraCalibration2 = cameraCalibration2;
     fixedIlluminant1 = illuminant1;
     fixedIlluminant2 = illuminant2;
-    if (!useFallbackCalibration && (RawProcessor.imgdata.color.dng_levels.parsedfields &
+    if ((RawProcessor.imgdata.color.dng_levels.parsedfields &
          LIBRAW_DNGFM_ANALOGBALANCE) != 0) {
       hasFixedAnalogBalance = true;
       fixedAnalogBalance = analogBalance;

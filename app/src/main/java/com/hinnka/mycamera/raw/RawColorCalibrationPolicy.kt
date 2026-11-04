@@ -14,8 +14,12 @@ import kotlin.math.roundToInt
  * present), so in-app rendering and third-party readers see the same matrices:
  * 1. Usable ForwardMatrix set → source calibration as is. ColorMatrix then only
  *    locates the scene white, so an sRGB placeholder ColorMatrix is kept.
- * 2. Otherwise ForwardMatrix is dropped; usable ColorMatrix → ColorMatrix only.
- * 3. Otherwise the fixed DNG calibration replaces the source.
+ * 2. Otherwise ForwardMatrix is dropped and the source ColorMatrix is used alone.
+ *    An sRGB placeholder is kept as well: another sensor's calibration is not a
+ *    better guess, and its larger gains turn the CFA mismatch into hue shifts.
+ *    A placeholder second slot is dropped only when the first slot is a real one.
+ * 3. Otherwise (no structurally usable ColorMatrix1) a D65 sRGB ColorMatrix, i.e.
+ *    white-balanced camera RGB rendered as linear sRGB.
  */
 internal object RawColorCalibrationPolicy {
     data class CameraCalibration(
@@ -36,10 +40,26 @@ internal object RawColorCalibrationPolicy {
         )
     }
 
-    private data class Selection(val useForward: Boolean, val keepSlot2: Boolean)
+    internal data class Selection(
+        val useForward: Boolean,
+        val keepSlot2: Boolean,
+        val droppedForward: Boolean = false,
+        val placeholderColor: Boolean = false,
+    )
 
-    /** ForwardMatrices must already have passed original-payload placeholder rejection. */
-    private fun select(
+    /** XYZ(D65) -> linear sRGB, so a D65 white maps to camera (1, 1, 1). */
+    internal val SRGB_D65_COLOR_MATRIX = floatArrayOf(
+        3.2404542f, -1.5371385f, -0.4985314f,
+        -0.9692660f, 1.8760108f, 0.0415560f,
+        0.0556434f, -0.2040259f, 1.0572252f,
+    )
+    private const val ILLUMINANT_D65 = 21
+
+    /**
+     * ForwardMatrices must already have passed original-payload placeholder rejection.
+     * Pure, so callers log; null means no structurally usable ColorMatrix1.
+     */
+    internal fun select(
         colorMatrix1: FloatArray?, colorMatrix2: FloatArray?,
         illuminant1: Int, illuminant2: Int,
         forwardMatrix1: FloatArray?, forwardMatrix2: FloatArray?,
@@ -49,11 +69,29 @@ internal object RawColorCalibrationPolicy {
         if (forwardUsable && isUsableMatrix(colorMatrix1)) {
             return Selection(useForward = true, keepSlot2 = isUsableMatrix(colorMatrix2))
         }
-        if (forwardMatrix1 != null || forwardMatrix2 != null) {
-            PLog.w(TAG, "Ignoring unusable ForwardMatrix set; using ColorMatrix only")
+        if (!isUsableMatrix(colorMatrix1)) return null
+        val placeholder1 = SrgbColorMatrixPolicy.isPlaceholder(requireNotNull(colorMatrix1), illuminant1)
+        val keepSlot2 = isUsableMatrix(colorMatrix2) &&
+            (placeholder1 || !SrgbColorMatrixPolicy.isPlaceholder(requireNotNull(colorMatrix2), illuminant2))
+        return Selection(
+            useForward = false,
+            keepSlot2 = keepSlot2,
+            droppedForward = forwardMatrix1 != null || forwardMatrix2 != null,
+            placeholderColor = placeholder1,
+        )
+    }
+
+    private fun log(selection: Selection?, source: String) {
+        if (selection == null) {
+            PLog.w(TAG, "No usable $source ColorMatrix1; using D65 sRGB ColorMatrix")
+            return
         }
-        if (!isUsableColorMatrix(colorMatrix1, illuminant1)) return null
-        return Selection(useForward = false, keepSlot2 = isUsableColorMatrix(colorMatrix2, illuminant2))
+        if (selection.droppedForward) {
+            PLog.w(TAG, "Ignoring unusable $source ForwardMatrix set; using ColorMatrix only")
+        }
+        if (selection.placeholderColor) {
+            PLog.w(TAG, "Keeping $source sRGB placeholder ColorMatrix")
+        }
     }
 
     // CameraCharacteristics is immutable; one capture resolves the same instance many times.
@@ -72,13 +110,11 @@ internal object RawColorCalibrationPolicy {
         val selection = select(
             cm1?.toMatrix(), cm2?.toMatrix(), illuminant1, illuminant2, fm1?.toMatrix(), fm2?.toMatrix(),
         )
+        log(selection, "source")
         if (selection == null) {
-            PLog.w(TAG, "No usable source matrices; using fixed DNG calibration")
             return CameraCalibration(
-                FixedRawCalibration.colorMatrix1().toTransform(), FixedRawCalibration.colorMatrix2().toTransform(),
-                null, null,
-                FixedRawCalibration.ILLUMINANT1, FixedRawCalibration.ILLUMINANT2,
-                FixedRawCalibration.cameraCalibration1().toTransform(), FixedRawCalibration.cameraCalibration2().toTransform(),
+                SRGB_D65_COLOR_MATRIX.toTransform(), null, null, null,
+                ILLUMINANT_D65, 0, null, null,
             )
         }
         val keep2 = selection.keepSlot2
@@ -102,6 +138,7 @@ internal object RawColorCalibrationPolicy {
             profile.calibrationIlluminant1, profile.calibrationIlluminant2,
             profile.forwardMatrix1, profile.forwardMatrix2,
         )
+        log(selection, "embedded")
         if (selection != null) {
             val keep2 = selection.keepSlot2
             return profile.copy(
@@ -113,31 +150,21 @@ internal object RawColorCalibrationPolicy {
                 hueSatDeltas2 = profile.hueSatDeltas2.takeIf { keep2 },
             )
         }
-        PLog.w(TAG, "No usable embedded matrices; using fixed DNG calibration")
         return profile.copy(
-            colorMatrix1 = FixedRawCalibration.colorMatrix1(), colorMatrix2 = FixedRawCalibration.colorMatrix2(),
+            colorMatrix1 = SRGB_D65_COLOR_MATRIX.copyOf(), colorMatrix2 = null,
             forwardMatrix1 = null, forwardMatrix2 = null,
-            calibrationIlluminant1 = FixedRawCalibration.ILLUMINANT1,
-            calibrationIlluminant2 = FixedRawCalibration.ILLUMINANT2,
+            calibrationIlluminant1 = ILLUMINANT_D65,
+            calibrationIlluminant2 = 0,
             analogBalance = null,
-            cameraCalibration1 = FixedRawCalibration.cameraCalibration1(),
-            cameraCalibration2 = FixedRawCalibration.cameraCalibration2(),
-            // Tables tied to the rejected source calibration do not belong to this
-            // replacement, which uses only the selected DNG's fixed calibration.
+            cameraCalibration1 = null,
+            cameraCalibration2 = null,
+            // Tables tied to the missing source calibration do not belong to this
+            // replacement, which renders white-balanced camera RGB as sRGB.
             hueSatDeltas1 = null, hueSatDeltas2 = null, lookTable = null,
         )
     }
 
-    fun isUsableColorMatrix(matrix: FloatArray?, illuminant: Int): Boolean {
-        if (!isUsableMatrix(matrix)) return false
-        if (SrgbColorMatrixPolicy.isPlaceholder(requireNotNull(matrix), illuminant)) {
-            PLog.w(TAG, "Ignoring sRGB placeholder ColorMatrix, illuminant=$illuminant")
-            return false
-        }
-        return true
-    }
-
-    // Structural check only; ColorMatrix-only selection also rejects placeholders.
+    // Structural check only; sRGB placeholders are handled by the selection order.
     fun isUsableMatrix(matrix: FloatArray?): Boolean {
         if (matrix == null || matrix.size != 9 || matrix.any { !it.isFinite() }) return false
         if (matrix.sumOf { abs(it).toDouble() } <= 0.01) return false
