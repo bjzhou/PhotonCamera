@@ -69,7 +69,9 @@ internal class RawAdjustmentPass(
             GLES30.glGetUniformLocation(activeProgram, "uToneBaseOnly"),
             if (toneBaseOnly) 1 else 0,
         )
-        if (!toneBaseOnly) {
+        if (toneBaseOnly) {
+            toneBase.bindPlaceholders(activeProgram)
+        } else {
             toneBase.bind(activeProgram)
         }
         GLES30.glActiveTexture(GLES30.GL_TEXTURE0)

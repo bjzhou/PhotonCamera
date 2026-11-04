@@ -33,6 +33,7 @@ internal class ToneBaseGl(private val tag: String) {
     private var statsFailed = false
     private var statsTexture = 0
     private var statsFramebuffer = 0
+    private var placeholderTexture = 0
     private val uniformLocations = mutableMapOf<Int, Int>()
 
     /** Size of level 0. Returns false when the target cannot be allocated. */
@@ -94,25 +95,58 @@ internal class ToneBaseGl(private val tag: String) {
         GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, 0)
     }
 
-    /** Binds the 1x1 statistics texture as `uToneStats` (unit 12). */
-    private fun bindStats(program: Int) {
-        if (statsTexture == 0) return
-        GLES30.glActiveTexture(GLES30.GL_TEXTURE0 + STATS_TEXTURE_UNIT)
-        GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, statsTexture)
+    /**
+     * Assigns the sampler units without binding the bases.
+     *
+     * The host draws level 0 with the same colour program it later uses for the adjusted frame, so
+     * a program can be sampled before any base exists. A freshly linked program leaves its sampler
+     * uniforms at the GL default of unit 0, where hosts bind the external camera texture: a
+     * `sampler2D` reading an external target raises `GL_INVALID_OPERATION` on Adreno, and the
+     * driver validates every active sampler at draw time whether or not the shader's `uToneBaseOnly`
+     * branch would read it. The units are therefore part of the program contract and are always
+     * assigned together with the textures, never by the texture binding alone.
+     */
+    fun bindSamplerUnits(program: Int) {
+        val units = ShadowsHighlightsShader.TONE_BASE_TEXTURE_UNITS
+        for (index in 0 until LEVEL_COUNT) {
+            GLES30.glUniform1i(location(program, "uToneBase${index + 1}"), units[index])
+        }
         GLES30.glUniform1i(location(program, "uToneStats"), STATS_TEXTURE_UNIT)
     }
 
-    /** Binds levels 0..2 as `uToneBase1..3` on the units declared by the shader object. */
+    /**
+     * Binds a 1x1 placeholder on every tone-base unit for the level-0 pass.
+     *
+     * That pass writes the target the first base texture aliases, so the bases cannot be bound
+     * there; leaving the units on whatever the previous frame left behind would either sample the
+     * render target or an unrelated 2D texture. The shader returns before reading them.
+     */
+    fun bindPlaceholders(program: Int) {
+        bindSamplerUnits(program)
+        val placeholder = ensurePlaceholderTarget()
+        if (placeholder == 0) return
+        for (unit in ShadowsHighlightsShader.TONE_BASE_TEXTURE_UNITS) {
+            GLES30.glActiveTexture(GLES30.GL_TEXTURE0 + unit)
+            GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, placeholder)
+        }
+        GLES30.glActiveTexture(GLES30.GL_TEXTURE0 + STATS_TEXTURE_UNIT)
+        GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, placeholder)
+        GLES30.glActiveTexture(GLES30.GL_TEXTURE0)
+    }
+
+    /** Binds levels 0..2 as `uToneBase1..3` and the 1x1 statistics texture as `uToneStats`. */
     fun bind(program: Int) {
         val units = ShadowsHighlightsShader.TONE_BASE_TEXTURE_UNITS
+        bindSamplerUnits(program)
         for (index in 0 until LEVEL_COUNT) {
-            val level = levels[index]
-            val unit = units[index]
-            GLES30.glActiveTexture(GLES30.GL_TEXTURE0 + unit)
-            GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, level.texture)
-            GLES30.glUniform1i(location(program, "uToneBase${index + 1}"), unit)
+            GLES30.glActiveTexture(GLES30.GL_TEXTURE0 + units[index])
+            GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, levels[index].texture)
         }
-        bindStats(program)
+        GLES30.glActiveTexture(GLES30.GL_TEXTURE0 + STATS_TEXTURE_UNIT)
+        GLES30.glBindTexture(
+            GLES30.GL_TEXTURE_2D,
+            if (statsTexture != 0) statsTexture else ensurePlaceholderTarget(),
+        )
         GLES30.glActiveTexture(GLES30.GL_TEXTURE0)
     }
 
@@ -128,6 +162,7 @@ internal class ToneBaseGl(private val tag: String) {
             level.height = 0
         }
         releaseStatsTarget()
+        releasePlaceholderTarget()
         if (program != 0) {
             GLES30.glDeleteProgram(program)
             program = 0
@@ -152,6 +187,7 @@ internal class ToneBaseGl(private val tag: String) {
         statsProgram = 0
         statsTexture = 0
         statsFramebuffer = 0
+        placeholderTexture = 0
         uniformLocations.clear()
         programFailed = false
         statsFailed = false
@@ -182,6 +218,39 @@ internal class ToneBaseGl(private val tag: String) {
         GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, levels[LEVEL_COUNT - 1].texture)
         GLES30.glUniform1i(location(activeProgram, "uToneStatsSource"), 0)
         drawQuad(activeProgram)
+    }
+
+    /**
+     * Complete 1x1 2D texture kept only so the tone-base units always reference a valid sampler
+     * target. Its contents are never read.
+     *
+     * Creation restores the 2D binding of the current unit, so hosts may call it between their own
+     * texture bindings.
+     */
+    private fun ensurePlaceholderTarget(): Int {
+        if (placeholderTexture != 0) return placeholderTexture
+        val previous = IntArray(1)
+        GLES30.glGetIntegerv(GLES30.GL_TEXTURE_BINDING_2D, previous, 0)
+        val textures = IntArray(1)
+        GLES30.glGenTextures(1, textures, 0)
+        val texture = textures[0]
+        if (texture == 0) return 0
+        GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, texture)
+        GLES30.glTexStorage2D(GLES30.GL_TEXTURE_2D, 1, GLES30.GL_RGBA8, 1, 1)
+        GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_MIN_FILTER, GLES30.GL_NEAREST)
+        GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_MAG_FILTER, GLES30.GL_NEAREST)
+        GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_WRAP_S, GLES30.GL_CLAMP_TO_EDGE)
+        GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_WRAP_T, GLES30.GL_CLAMP_TO_EDGE)
+        GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, previous[0])
+        placeholderTexture = texture
+        return texture
+    }
+
+    private fun releasePlaceholderTarget() {
+        if (placeholderTexture != 0) {
+            GLES30.glDeleteTextures(1, intArrayOf(placeholderTexture), 0)
+            placeholderTexture = 0
+        }
     }
 
     private fun ensureStatsTarget(): Boolean {

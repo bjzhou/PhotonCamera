@@ -20,6 +20,7 @@
 | MRT attachment 残留 | 已确认，Adreno | render-target 数减少时显式 detach 尾部 attachment |
 | `uint16 -> float` | 已确认，Mali | 首次转换走 compute image load/store，不走 fragment sampler 直接转换 |
 | 纹理/sampler 状态 | 跨驱动约束 | 每次 draw 显式绑定 program、framebuffer、texture unit 和所有 sampler |
+| sampler 未赋值落 unit 0 | 已确认，Adreno 840 | 首个 draw 前显式赋 unit；不能绑定真实纹理时用 1x1 占位，避免读到 unit 0 的外部纹理 |
 | 浮点纹理 sampler 精度 | 规范约束 | 线性 RGB 与浮点曲线/增益纹理显式声明 `highp` sampler；`highp float` 不覆盖 sampler |
 | `imageStore` 可见性 | 跨驱动约束 | barrier 必须覆盖下一位 consumer，而非只覆盖 producer |
 | CPU/GPU Float 除法 | 已确认，Adreno；跨驱动精度约束 | CPU 算法迁到 GPU 时不能假定 `/` 与 JVM Float 逐位一致 |
@@ -165,6 +166,25 @@ shader storage block binding gets value 12, out of range [0 - 7]
 - 即使颜色分支关闭，也为 shader 中可能读取的 sampler 设置明确 unit 和有效纹理。
 - 保持 pass 间颜色空间契约；线性 RGB 不能未经输出转换直接显示或传给要求 sRGB 的 LUT。
 - 不依赖 helper 调用顺序或上一帧遗留的 active unit、framebuffer、program、texture binding。
+
+### 未赋值 sampler 落在 unit 0：`sampler2D` 读到外部纹理
+
+**证据**：PMA110 / Adreno 840 / GLES 3.2 V@0842.44。
+
+local Laplacian 高光/阴影的金字塔复用颜色 program：先用该 program 渲染 level 0，再绑定金字塔纹理
+渲染调整后的帧。新链接的 program 里 `uToneBase1..3`、`uToneStats` 仍是 GL 默认的 unit 0，而 unit 0
+上绑的是相机 `GL_TEXTURE_EXTERNAL_OES`，于是 level-0 pass 的 `glDrawElements` 报
+`GL_INVALID_OPERATION (1282)`。shader 在该 pass 由 `uToneBaseOnly` 提前 return、根本不采样这些
+sampler，驱动仍按 active sampler 校验对应 unit 上的目标类型。错误只出现在该 program 的第一次
+draw：之后 sampler 已被赋到真实 unit，稳态帧干净，因此容易被误判为“偶发”。
+
+实现契约：
+
+- sampler 的 unit 归属与纹理绑定放在同一处，并在任何 draw 之前显式赋值，不依赖 GL 默认值 0。
+- 某个 pass 不能绑定真实纹理时（例如它正在写入该纹理），绑定 1x1 占位纹理，避免采样 render target
+  或上一帧遗留的绑定。
+- 颜色 program 变体多，首个 draw 常常正是“辅助 sampler 尚未赋值”的 pass；验证要按 program 变体
+  检查首个 draw 的 GL error，只看稳态帧会漏掉。
 
 ## SSBO 与 image format
 

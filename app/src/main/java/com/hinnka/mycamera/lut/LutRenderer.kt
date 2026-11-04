@@ -881,8 +881,12 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
         }
         colorProgramCache.bindLogInput(locations)
         enginePreview.bind(locations.uEnginePreviewLutLocation)
-        if (shadowsHighlightsActive && !toneBaseOnly) {
-            toneBase.bind(locations.programId)
+        if (shadowsHighlightsActive) {
+            if (toneBaseOnly) {
+                toneBase.bindPlaceholders(locations.programId)
+            } else {
+                toneBase.bind(locations.programId)
+            }
         }
 
         GLES30.glActiveTexture(GLES30.GL_TEXTURE0)

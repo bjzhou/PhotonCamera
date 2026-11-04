@@ -837,8 +837,12 @@ class LutImageProcessor(context: Context? = null) {
             GLES30.glGetUniformLocation(program, "uToneBaseOnly"),
             if (toneBaseOnly) 1 else 0,
         )
-        if (shadowsHighlightsActive && !toneBaseOnly) {
-            toneBase.bind(program)
+        if (shadowsHighlightsActive) {
+            if (toneBaseOnly) {
+                toneBase.bindPlaceholders(program)
+            } else {
+                toneBase.bind(program)
+            }
         }
         logInput.bind(GLES30.glGetUniformLocation(program, "uInverseAcr3Texture"), textureUnit = 7)
 

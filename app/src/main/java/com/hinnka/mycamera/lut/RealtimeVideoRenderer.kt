@@ -484,8 +484,12 @@ class RealtimeVideoRenderer(
         GLES30.glUseProgram(locations.programId)
         GLES30.glUniform1i(locations.uToneBaseOnlyLocation, if (toneBaseOnly) 1 else 0)
         colorProgramCache.bindLogInput(locations)
-        if (shadowsHighlightsActive && !toneBaseOnly) {
-            toneBase.bind(locations.programId)
+        if (shadowsHighlightsActive) {
+            if (toneBaseOnly) {
+                toneBase.bindPlaceholders(locations.programId)
+            } else {
+                toneBase.bind(locations.programId)
+            }
         }
 
         GLES30.glActiveTexture(GLES30.GL_TEXTURE0)
