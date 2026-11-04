@@ -32,12 +32,19 @@ internal class PhotonMultiScaleDenoiser {
     private var synthesizeProgram = 0
     private var synthesizeDebugProgram = 0
     private var estimateProgram = 0
+    private var prefilterProgram = 0
+
+    /** §6.0 level-0 luma correction of the current [denoise] call (R32F), 0 when not run. */
+    private var prefilterTexture = 0
     private var resolveProgram = 0
 
     fun initialize(debug: Boolean = false): Boolean {
         if (analyzeProgram == 0) analyzeProgram = RawGlesProgram.compileCompute(PhotonDenoiseShaders.ANALYZE, "PhotonDenoiseAnalyze")
         if (synthesizeProgram == 0) {
             synthesizeProgram = RawGlesProgram.compileCompute(PhotonDenoiseShaders.synthesize(false), "PhotonDenoiseSynthesize")
+        }
+        if (prefilterProgram == 0) {
+            prefilterProgram = RawGlesProgram.compileCompute(PhotonDenoiseShaders.PREFILTER, "PhotonDenoisePrefilter")
         }
         if (estimateProgram == 0) estimateProgram = RawGlesProgram.compileCompute(PhotonDenoiseShaders.ESTIMATE, "PhotonDenoiseEstimate")
         if (resolveProgram == 0) resolveProgram = RawGlesProgram.compileCompute(PhotonDenoiseShaders.RESOLVE, "PhotonDenoiseResolve")
@@ -46,17 +53,20 @@ internal class PhotonMultiScaleDenoiser {
                 RawGlesProgram.compileCompute(PhotonDenoiseShaders.synthesize(true), "PhotonDenoiseSynthesizeDebug")
         }
         return analyzeProgram != 0 && synthesizeProgram != 0 && estimateProgram != 0 && resolveProgram != 0 &&
+            prefilterProgram != 0 &&
             (!debug || synthesizeDebugProgram != 0)
     }
 
     fun release() {
-        intArrayOf(analyzeProgram, synthesizeProgram, synthesizeDebugProgram, estimateProgram, resolveProgram).forEach {
+        intArrayOf(analyzeProgram, synthesizeProgram, synthesizeDebugProgram, estimateProgram, resolveProgram,
+            prefilterProgram).forEach {
             if (it != 0) GLES31.glDeleteProgram(it)
         }
         analyzeProgram = 0
         synthesizeProgram = 0
         synthesizeDebugProgram = 0
         estimateProgram = 0
+        prefilterProgram = 0
         resolveProgram = 0
     }
 
@@ -127,6 +137,23 @@ internal class PhotonMultiScaleDenoiser {
             }
             GLES31.glBindBufferBase(GLES31.GL_SHADER_STORAGE_BUFFER, 0, strengthBuffer)
 
+            prefilterTexture = 0
+            if (params.lumaLevels > 0 && params.lumaStrength > 0f) {
+                prefilterTexture = texture(sizes[0], GLES30.GL_R32F)
+                timing.gpu("prefilter", "L0 ${width}x$height") {
+                    GLES31.glUseProgram(prefilterProgram)
+                    bindCommon(prefilterProgram, inputTexture, lscTexture, params)
+                    bindModelNoise(prefilterProgram, mergeTexture, 0, params)
+                    bindSampler(prefilterProgram, "uNoisyCoarse", UNIT_NOISY_COARSE, gaussians[1])
+                    uniform2i(prefilterProgram, "uSize", sizes[0])
+                    uniform2i(prefilterProgram, "uCoarseSize", sizes[1])
+                    uniform1f(prefilterProgram, "uAmount", minOf(params.lumaStrength, 1f))
+                    bindImage(0, prefilterTexture, GLES30.GL_R32F)
+                    dispatch(prefilterProgram, sizes[0])
+                }
+                sink?.onPass("prefilter0", prefilterTexture, width, height, true)
+            }
+
             var denoisedCoarse = gaussians[params.levels]
             for (level in params.levels - 1 downTo 0) {
                 val size = sizes[level]
@@ -189,6 +216,7 @@ internal class PhotonMultiScaleDenoiser {
             throw error
         } finally {
             if (owned.isNotEmpty()) GLES30.glDeleteTextures(owned.size, owned.toIntArray(), 0)
+            prefilterTexture = 0
             GLES31.glBindBufferBase(GLES31.GL_SHADER_STORAGE_BUFFER, 0, 0)
             GLES31.glBindBufferBase(GLES31.GL_SHADER_STORAGE_BUFFER, 1, 0)
             GLES31.glDeleteBuffers(2, buffers, 0)
@@ -378,6 +406,9 @@ internal class PhotonMultiScaleDenoiser {
         bindCommon(program, inputTexture, lscTexture, params)
         bindSampler(program, "uFine", UNIT_FINE, if (level == 0) inputTexture else gaussians[level])
         bindSampler(program, "uNoisyCoarse", UNIT_NOISY_COARSE, gaussians[level + 1])
+        // The sampler needs a valid texture even when the correction is off.
+        bindSampler(program, "uPrefilter", UNIT_PREFILTER, if (prefilterTexture != 0) prefilterTexture else inputTexture)
+        uniform1i(program, "uPrefilterEnabled", if (prefilterTexture != 0) 1 else 0)
         bindSampler(program, "uDenoisedCoarse", UNIT_DENOISED_COARSE, denoisedCoarse)
         uniform1i(program, "uFineIsInput", if (level == 0) 1 else 0)
         uniform2i(program, "uSize", sizes[level])
@@ -506,5 +537,6 @@ internal class PhotonMultiScaleDenoiser {
         const val UNIT_NOISY_COARSE = 3
         const val UNIT_DENOISED_COARSE = 4
         const val UNIT_MERGE = 5
+        const val UNIT_PREFILTER = 6
     }
 }

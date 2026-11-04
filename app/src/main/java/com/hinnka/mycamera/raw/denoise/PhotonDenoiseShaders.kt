@@ -25,6 +25,9 @@ internal object PhotonDenoiseShaders {
     const val MAX_STRENGTH = 4096f
     const val ESTIMATE_PASSES = 3
     private const val FLAT_GATE = "0.5"
+    private const val PREFILTER_K = "2.5"
+    private const val PREFILTER_GUARD = 2
+    private const val PREFILTER_FLAT = "3.0"
     private const val SPIKE = "1.5"
     private const val MAX_GROWTH = "2.0"
 
@@ -193,6 +196,114 @@ internal object PhotonDenoiseShaders {
             return modelNoiseGain(p, base, lscGain(levelCentre(p, uLevel)), mu);
         }
     """
+
+    /** §5.1 strength table (SSBO binding 0) and its lookup at this level (uLevel, uScale). */
+    private val STRENGTH_LOOKUP = """
+        // Per level, STRENGTH_BINS luma bins of (S_Y, S_Cb, S_Cr).
+        layout(std430, binding = 0) readonly buffer StrengthTable { float uStrength[]; };
+
+        // §5.1 (S_Y, S_Cb, S_Cr) of this level at base luma y: bins interpolated in log2(y / K).
+        vec3 strengthAt(float y) {
+            float x = clamp(log2(max(y / uScale, 1e-12)) - $STRENGTH_LOW - 0.5, 0.0, float($STRENGTH_BINS - 1));
+            int i0 = int(floor(x));
+            int i1 = min(i0 + 1, $STRENGTH_BINS - 1);
+            float f = x - float(i0);
+            int o0 = (uLevel * $STRENGTH_BINS + i0) * 3;
+            int o1 = (uLevel * $STRENGTH_BINS + i1) * 3;
+            vec3 s0 = vec3(uStrength[o0], uStrength[o0 + 1], uStrength[o0 + 2]);
+            vec3 s1 = vec3(uStrength[o1], uStrength[o1 + 1], uStrength[o1 + 2]);
+            return s0 + f * (s1 - s0);
+        }
+    """
+
+    /**
+     * §6.0 level-0 outlier correction: a luma sample far from its 3×3 median whose deviation has at
+     * most PREFILTER_GUARD same-signed neighbours (a dot, not a line) in a noise-like neighbourhood
+     * (mean L0² of the 5×5 ring below PREFILTER_FLAT σ²) is moved to the median, scaled by
+     * uAmount = min(luma strength, 1). Writes that correction (R32F, 0 elsewhere); σ² is the L0
+     * model noise times the §5.1 strength at the noisy base.
+     */
+    val PREFILTER = """
+        #version 310 es
+        $COMMON
+        $LENS_SHADING
+        $WORKING
+        uniform sampler2D uNoisyCoarse;
+        uniform ivec2 uSize;
+        uniform ivec2 uCoarseSize;
+        uniform float uAmount;
+        $UPSAMPLE
+        $MODEL_NOISE
+        $STRENGTH_LOOKUP
+        layout(r32f, binding = 0) writeonly uniform highp image2D uDelta;
+
+        const int TILE = $LOCAL;
+        const int BORDER = 2;
+        const int SIDE = TILE + 2 * BORDER;
+        shared float sFine[SIDE * SIDE];
+        shared float sLap[SIDE * SIDE];
+        shared float sNoise[SIDE * SIDE];
+
+        int sideIndex(ivec2 c) { ivec2 r = c - (groupId() * TILE - BORDER); return r.y * SIDE + r.x; }
+
+        void main() {
+            int lid = int(gl_LocalInvocationIndex);
+            ivec2 origin = groupId() * TILE;
+            for (int i = lid; i < SIDE * SIDE; i += TILE * TILE) {
+                ivec2 c = origin - BORDER + ivec2(i % SIDE, i / SIDE);
+                ivec2 p = mirror2(c, uSize);
+                float fine = working0(p).x;
+                vec3 base = upAt(uNoisyCoarse, p);
+                vec3 mu;
+                float noise = modelNoise(p, base, mu).x * strengthAt(base.x).x;
+                sFine[i] = fine;
+                sLap[i] = unpackHalf2x16(packHalf2x16(vec2(fine - base.x, 0.0))).x;
+                sNoise[i] = noise;
+            }
+            memoryBarrierShared();
+            barrier();
+
+            ivec2 p = globalId();
+            if (any(greaterThanEqual(p, uSize))) return;
+            float v[9];
+            for (int j = 0; j < 9; ++j) v[j] = sFine[sideIndex(p + ivec2(j % 3 - 1, j / 3 - 1))];
+            for (int i = 1; i < 9; ++i) {
+                float x = v[i];
+                int j = i - 1;
+                while (j >= 0 && v[j] > x) {
+                    v[j + 1] = v[j];
+                    --j;
+                }
+                v[j + 1] = x;
+            }
+            float m = v[4];
+            float fineP = sFine[sideIndex(p)];
+            float sigma = sqrt(sNoise[sideIndex(p)]);
+            float dev = fineP - m;
+            float delta = 0.0;
+            if (sigma > 0.0 && abs(dev) > $PREFILTER_K * sigma) {
+                int count = 0;
+                for (int j = 0; j < 9; ++j) {
+                    if (j == 4) continue;
+                    float d = sFine[sideIndex(p + ivec2(j % 3 - 1, j / 3 - 1))] - m;
+                    if (abs(d) > $PREFILTER_K * sigma && sign(d) == sign(dev)) ++count;
+                }
+                if (count <= $PREFILTER_GUARD) {
+                    float sum = 0.0;
+                    for (int dy = -2; dy <= 2; ++dy) {
+                        for (int dx = -2; dx <= 2; ++dx) {
+                            float l = sLap[sideIndex(p + ivec2(dx, dy))];
+                            sum += l * l;
+                        }
+                    }
+                    float lp = sLap[sideIndex(p)];
+                    float energy = (sum - lp * lp) / 24.0;
+                    if (energy < $PREFILTER_FLAT * sigma * sigma) delta = (m - fineP) * uAmount;
+                }
+            }
+            imageStore(uDelta, p, vec4(delta, 0.0, 0.0, 0.0));
+        }
+    """.trimIndent()
 
     /** Analyze: G_{l+1} = ↓2(h * G_l), luma taps on Y and chroma taps on Cb/Cr. */
     val ANALYZE = """
@@ -505,8 +616,10 @@ internal object PhotonDenoiseShaders {
         uniform ivec2 uCoarseSize;
         $UPSAMPLE
         $MODEL_NOISE
-        // §5.1 strength table: per level, STRENGTH_BINS luma bins of (S_Y, S_Cb, S_Cr).
-        layout(std430, binding = 0) readonly buffer StrengthTable { float uStrength[]; };
+        $STRENGTH_LOOKUP
+        // §6.0 level-0 isolated-outlier correction of the input luma (PREFILTER); used when uFineIsInput.
+        uniform sampler2D uPrefilter;
+        uniform int uPrefilterEnabled;
         uniform float uOutlier;
         uniform float uAlpha;
         uniform int uLumaEnabled;
@@ -527,6 +640,8 @@ internal object PhotonDenoiseShaders {
         const int BAND_SIDE = TILE + 2 * BAND_BORDER;
         const int PILOT_SIDE = TILE + 2 * PILOT_BORDER;
         const float BASE_RADIUS = 1.25;
+        const float CENTRE_LOW = 6.0;
+        const float CENTRE_HIGH = 10.0;
 
         // L and base (six halves) and the pilot (four halves) are held as packed float16 bits.
         // Integer storage makes the float16 rounding unconditional: a compiler may legally fold
@@ -565,19 +680,6 @@ internal object PhotonDenoiseShaders {
         int bandIndex(ivec2 c) { ivec2 r = c - (tileOrigin() - BAND_BORDER); return r.y * BAND_SIDE + r.x; }
         int pilotIndex(ivec2 c) { ivec2 r = c - (tileOrigin() - PILOT_BORDER); return r.y * PILOT_SIDE + r.x; }
 
-        // §5.1 (S_Y, S_Cb, S_Cr) of this level at base luma y: bins interpolated in log2(y / K).
-        vec3 strengthAt(float y) {
-            float x = clamp(log2(max(y / uScale, 1e-12)) - $STRENGTH_LOW - 0.5, 0.0, float($STRENGTH_BINS - 1));
-            int i0 = int(floor(x));
-            int i1 = min(i0 + 1, $STRENGTH_BINS - 1);
-            float f = x - float(i0);
-            int o0 = (uLevel * $STRENGTH_BINS + i0) * 3;
-            int o1 = (uLevel * $STRENGTH_BINS + i1) * 3;
-            vec3 s0 = vec3(uStrength[o0], uStrength[o0 + 1], uStrength[o0 + 2]);
-            vec3 s1 = vec3(uStrength[o1], uStrength[o1 + 1], uStrength[o1 + 2]);
-            return s0 + f * (s1 - s0);
-        }
-
         // Band at image pixel p = mirror(c): L = G_l − ↑G_{l+1}, base = ↑G̃_{l+1}, noise = §2.1 × §5.1.
         // Stored at c, so shared memory holds the mirrored values at their raw coordinates.
         void computeBand(ivec2 c) {
@@ -585,6 +687,7 @@ internal object PhotonDenoiseShaders {
             // Level 0 reads the input at uLevel = 0: one gain serves the input and the clip test.
             vec3 gain = lscGain(levelCentre(p, uLevel));
             vec3 fine = uFineIsInput == 1 ? working0Gain(p, gain) : texelFetch(uFine, p, 0).rgb;
+            if (uFineIsInput == 1 && uPrefilterEnabled == 1) fine.x += texelFetch(uPrefilter, p, 0).r;
             vec3 base = upCached(1, p);
             vec3 lap = fine - upCached(0, p);
             vec3 mu;
@@ -653,6 +756,10 @@ internal object PhotonDenoiseShaders {
             float c = cos(theta);
             float s = sin(theta);
             float sigma = sqrt(noiseP);
+            // §6.1 step 2: the Huber weights are relative to the centre, so a noise sample a few σ
+            // out would down-weight every neighbour and carry the energy by itself. The centre
+            // enters only as a strong (≥ CENTRE_HIGH σ) point; sigma = 0 keeps it.
+            float centre = sigma > 0.0 ? smoothstep(CENTRE_LOW, CENTRE_HIGH, abs(lapP) / sigma) : 1.0;
             float num = 0.0;
             float den = 0.0;
             for (int dy = -2; dy <= 2; ++dy) {
@@ -660,6 +767,7 @@ internal object PhotonDenoiseShaders {
                     ivec2 d = ivec2(dx, dy);
                     float lapQ = lapAt(p + d).x;
                     float w = windowWeight(d, lapP, lapQ, sigma, anisotropy, c, s);
+                    if (dx == 0 && dy == 0) w *= centre;
                     num += w * (lapQ * lapQ - noiseAt(p + d).x);
                     den += w;
                 }
@@ -708,7 +816,8 @@ internal object PhotonDenoiseShaders {
                 float sumS2 = 0.0;
                 for (int dy = -1; dy <= 1; ++dy) {
                     for (int dx = -1; dx <= 1; ++dx) {
-                        float l = lapAt(p + ivec2(dx, dy)).x;
+                        // §7.2: denoised luma (the pilot) opens the gate, not a luma noise sample.
+                        float l = uLumaEnabled == 1 ? pilotAt(p + ivec2(dx, dy)).x : lapAt(p + ivec2(dx, dy)).x;
                         sumL2 += l * l;
                         sumS2 += noiseAt(p + ivec2(dx, dy)).x;
                     }
