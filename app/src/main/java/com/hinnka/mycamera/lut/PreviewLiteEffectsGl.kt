@@ -9,11 +9,11 @@ import kotlin.math.max
  * Single-pass approximations of the multi-pass spatial effects for realtime preview.
  *
  * One quarter-resolution downsample of the colour pass source (rgb, highlight mask in alpha) plus
- * its mip chain stands in for every blur: clarity, soft light, bloom, red halation and the local
- * adaptation of highlights / shadows sample it at fixed levels inside the colour pass. The blur
- * is taken before the recipe, so glows and detail bands live in camera colour rather than in the
- * graded output; capture keeps the full implementations, and for highlights / shadows this is the
- * only implementation.
+ * its mip chain stands in for every blur: clarity, soft light, bloom and red halation sample it at
+ * fixed levels inside the colour pass. The blur is taken before the recipe, so glows and detail
+ * bands live in camera colour rather than in the graded output; capture keeps the full
+ * implementations. Highlights / shadows are not part of this class: they use the shared
+ * [ShadowsHighlightsShader] operator with the [ToneBaseGl] pyramid in every host.
  */
 internal class PreviewLiteEffectsGl(private val tag: String) {
     private var oesProgram = 0
@@ -179,8 +179,8 @@ internal class PreviewLiteEffectsGl(private val tag: String) {
         """
 
         /**
-         * Colour pass functions. The host declares `uHighlights`, `uShadows`, `uExposure`, `W` and the
-         * sRGB transfer helpers; [uvCoord] is the source coordinate the blur was rendered in.
+         * Colour pass functions. The host declares `uExposure`, `W` and the sRGB transfer helpers;
+         * [uv] is the output coordinate the blur was rendered in.
          */
         const val GLSL = """
             uniform sampler2D uPreviewBlur;
@@ -188,23 +188,6 @@ internal class PreviewLiteEffectsGl(private val tag: String) {
             uniform float uPreviewSoftLight;
             uniform float uPreviewBloom;
             uniform float uPreviewRedHalation;
-
-            // Global-plus-local tone curve: the coarse blur supplies the adaptation level, highlights /
-            // shadows act as gains on linear RGB.
-            vec3 applyPreviewShadowsHighlights(vec3 color, vec2 uv) {
-                float fill = clamp(uShadows, -1.0, 1.0);
-                float highlight = clamp(uHighlights, -1.0, 1.0);
-                if (abs(fill) < 0.0005 && abs(highlight) < 0.0005) return color;
-                vec3 linearColor = srgbToLinear(max(color, vec3(0.0)));
-                float y = dot(linearColor, W);
-                float local = dot(srgbToLinear(textureLod(uPreviewBlur, uv, 3.0).rgb), W) * exp2(uExposure);
-                float level = sqrt(clamp(mix(y, local, 0.65), 0.0, 1.0));
-                float shadowWeight = 1.0 - smoothstep(0.0, 0.6, level);
-                float highlightWeight = smoothstep(0.4, 1.0, level);
-                float ev = fill * 1.6 * shadowWeight * shadowWeight +
-                    highlight * 1.2 * highlightWeight * highlightWeight;
-                return linearToSrgb(linearColor * exp2(ev));
-            }
 
             // Detail bands from the source-domain blur, applied as a luminance ratio like the
             // pyramid composite.

@@ -54,6 +54,7 @@ internal object PreviewColorShader {
             uniform float uVibrance;
             uniform float uHighlights;
             uniform float uShadows;
+            uniform int uToneBaseOnly;
             ${if (variant.includeSharpening) "uniform float uSharpening;" else ""}
             ${if (variant.includePreLogFilmGrain || variant.includeFinalFilmGrain) """
             uniform float uFilmGrain;
@@ -137,6 +138,8 @@ internal object PreviewColorShader {
             ${if (variant.includeLchMixer) PreviewColorShaderModules.LCH_MIXER else PreviewColorShaderModules.LCH_MIXER_STUB}
             ${if (variant.includeLutMask) PreviewColorShaderModules.LUT_MASK else PreviewColorShaderModules.LUT_MASK_STUB}
             ${if (variant.includeExtendedLutCurves) PreviewColorShaderModules.EXTENDED_LUT_CURVES else PreviewColorShaderModules.SIMPLE_LUT_CURVES}
+            ${ShadowsHighlightsShader.GLSL}
+
             ${if (variant.includePreLogFilmGrain) FilmGrainShaders.FUNCTIONS else ""}
             ${if (variant.includeFinalFilmGrain) PreviewLiteEffectsGl.GRAIN_GLSL else ""}
             ${if (variant.includePreviewBlur) PreviewLiteEffectsGl.GLSL else ""}
@@ -197,8 +200,20 @@ internal object PreviewColorShader {
                     }
                     """)}
 
-                    ${if (variant.includeLiteShadowsHighlights) """
-                    color.rgb = applyPreviewShadowsHighlights(color.rgb, uvCoord);
+                    ${if (variant.includeShadowsHighlights) """
+                    if (uToneBaseOnly != 0) {
+                        fragColor = vec4(
+                            shLogLuminance(srgbToLinear(max(color.rgb, 0.0))),
+                            0.0,
+                            0.0,
+                            1.0
+                        );
+                        return;
+                    }
+                    color.rgb = linearToSrgb(applyShadowsHighlightsLinear(
+                        srgbToLinear(max(color.rgb, 0.0)),
+                        vOutputCoord
+                    ));
                     color.rgb = sanitizeColor(color.rgb);
                     """ else ""}
 

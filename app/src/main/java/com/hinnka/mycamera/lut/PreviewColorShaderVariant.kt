@@ -23,8 +23,8 @@ internal data class PreviewColorShaderVariant(
     val includeEnginePreview: Boolean = false,
     val includeChromaticAberration: Boolean = false,
     val includeColorRecipe: Boolean = true,
-    /** Highlights / shadows through [PreviewLiteEffectsGl], the only preview implementation. */
-    val includeLiteShadowsHighlights: Boolean = false,
+    /** Local Laplacian highlights / shadows from [ShadowsHighlightsShader]. */
+    val includeShadowsHighlights: Boolean = false,
     /** Preview-only single-pass stand-ins for the multi-pass effects, see [PreviewLiteEffectsGl]. */
     val includeLiteClarity: Boolean = false,
     val includeLiteSoftLight: Boolean = false,
@@ -39,7 +39,7 @@ internal data class PreviewColorShaderVariant(
     val recipeOps: Int = RecipeOps.ALL,
 ) {
     val includePreviewBlur: Boolean
-        get() = includeLiteShadowsHighlights || includeLiteClarity || includeLiteSoftLight ||
+        get() = includeLiteClarity || includeLiteSoftLight ||
             includeLiteBloom || includeLiteRedHalation
 
     companion object {
@@ -71,7 +71,7 @@ internal data class PreviewColorShaderVariant(
                 includeSharpening = abs(params.sharpness) > 0.0001f,
                 includeChromaticAberration = params.chromaticAberration > 0.001f,
                 includeColorRecipe = recipe,
-                includeLiteShadowsHighlights = shadowsHighlights && previewLite,
+                includeShadowsHighlights = shadowsHighlights,
                 includeLiteClarity = lite && abs(params.clarity) > EPSILON,
                 includeLiteSoftLight = lite && params.softLight > EPSILON,
                 includeLiteBloom = lite && params.bloom > EPSILON,

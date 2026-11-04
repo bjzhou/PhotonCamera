@@ -194,6 +194,7 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
     private val filmGrainGl = FilmGrainGl(TAG)
     private val highlightDiffusionGl = HighlightDiffusionGl(TAG)
     private val previewLiteEffects = PreviewLiteEffectsGl(TAG)
+    private val toneBase = ToneBaseGl(TAG)
     private var filmGrainSourceTextureId: Int = 0
     private var filmGrainSourceFboId: Int = 0
     private var filmGrainSourceWidth: Int = 0
@@ -584,6 +585,7 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
     private fun resetGlResourceState() {
         colorProgramCache.reset()
         previewLiteEffects.reset()
+        toneBase.reset()
         enginePreview.reset()
         mgcEisHardwareBufferRenderer.resetAfterContextLoss()
         mgcEisYuvRenderer.resetAfterContextLoss()
@@ -820,8 +822,36 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
         curveTextureId: Int,
         curveEnabled: Boolean,
         enableVideoLog: Boolean,
+        toneBaseOnly: Boolean = false,
     ) {
-        val previewBlurTextureId = if (locations.previewBlur) {
+        val shadowsHighlightsActive =
+            ShadowsHighlightsShader.isActive(params.highlights, params.shadows)
+        if (!toneBaseOnly && shadowsHighlightsActive &&
+            toneBase.prepare(width, height) && toneBase.bindLevel0()
+        ) {
+            drawColorPass(
+                locations = locations,
+                targetFboId = targetFboId,
+                width = width,
+                height = height,
+                sourceTextureTarget = sourceTextureTarget,
+                sourceTextureId = sourceTextureId,
+                sourceStMatrix = sourceStMatrix,
+                sourceCropRect = sourceCropRect,
+                targetMvpMatrix = targetMvpMatrix,
+                lutConfig = lutConfig,
+                lutTextureId = lutTextureId,
+                lutSize = lutSize,
+                lutEnabled = lutEnabled,
+                params = params,
+                curveTextureId = curveTextureId,
+                curveEnabled = curveEnabled,
+                enableVideoLog = enableVideoLog,
+                toneBaseOnly = true,
+            )
+            toneBase.buildLevels(::drawSimpleQuad)
+        }
+        val previewBlurTextureId = if (locations.previewBlur && !toneBaseOnly) {
             val oesSource = sourceTextureTarget == GLES11Ext.GL_TEXTURE_EXTERNAL_OES
             previewLiteEffects.render(
                 sourceTarget = sourceTextureTarget,
@@ -833,10 +863,13 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
         } else {
             0
         }
-        GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, targetFboId)
-        GLES30.glViewport(0, 0, width, height)
-        GLES30.glClear(GLES30.GL_COLOR_BUFFER_BIT)
+        if (!toneBaseOnly) {
+            GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, targetFboId)
+            GLES30.glViewport(0, 0, width, height)
+            GLES30.glClear(GLES30.GL_COLOR_BUFFER_BIT)
+        }
         GLES30.glUseProgram(locations.programId)
+        GLES30.glUniform1i(locations.uToneBaseOnlyLocation, if (toneBaseOnly) 1 else 0)
         if (locations.previewBlur) {
             GLES30.glActiveTexture(GLES30.GL_TEXTURE0 + PreviewLiteEffectsGl.TEXTURE_UNIT)
             GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, previewBlurTextureId)
@@ -848,6 +881,9 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
         }
         colorProgramCache.bindLogInput(locations)
         enginePreview.bind(locations.uEnginePreviewLutLocation)
+        if (shadowsHighlightsActive && !toneBaseOnly) {
+            toneBase.bind(locations.programId)
+        }
 
         GLES30.glActiveTexture(GLES30.GL_TEXTURE0)
         GLES30.glBindTexture(sourceTextureTarget, sourceTextureId)
@@ -3199,6 +3235,7 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
         clarityCompositeProgram = 0
         releaseClarityPreviewFramebuffers()
         previewLiteEffects.release()
+        toneBase.release()
         filmGrainGl.release()
         highlightDiffusionGl.release()
         releaseFilmGrainSourceFramebuffer()

@@ -81,6 +81,7 @@ class RealtimeVideoRenderer(
             }
         }
     private val colorProgramCache = PreviewColorProgramCache()
+    private val toneBase = ToneBaseGl(TAG)
     private val basicToneTextures = BasicToneGlTextures()
     private val filmGrainGl = FilmGrainGl(TAG)
     private val mgcEisHardwareBufferRenderer = MgcEisHardwareBufferRenderer(TAG)
@@ -439,6 +440,7 @@ class RealtimeVideoRenderer(
         mvpMatrix: FloatArray,
         enableVideoLog: Boolean,
         presentationTimeNs: Long,
+        toneBaseOnly: Boolean = false,
     ) {
         val lutEnabled = layer.lutConfig != null && layer.lutTextureId != 0
         val variant = PreviewColorShaderVariant.forPass(
@@ -451,12 +453,40 @@ class RealtimeVideoRenderer(
         val locations = colorProgramCache.get(variant)
             ?: throw IllegalStateException("Cannot create realtime video color shader: $variant")
 
-        GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, targetFboId)
-        GLES30.glViewport(0, 0, encoderOutputSize.width, encoderOutputSize.height)
-        GLES30.glClearColor(0f, 0f, 0f, 1f)
-        GLES30.glClear(GLES30.GL_COLOR_BUFFER_BIT)
+        val shadowsHighlightsActive =
+            ShadowsHighlightsShader.isActive(layer.params.highlights, layer.params.shadows)
+        if (!toneBaseOnly && shadowsHighlightsActive &&
+            toneBase.prepare(encoderOutputSize.width, encoderOutputSize.height) &&
+            toneBase.bindLevel0()
+        ) {
+            drawLayer(
+                layer = layer,
+                targetFboId = targetFboId,
+                textureSource = textureSource,
+                textureTarget = textureTarget,
+                textureId = textureId,
+                sourceStMatrix = sourceStMatrix,
+                cropRect = cropRect,
+                mvpMatrix = mvpMatrix,
+                enableVideoLog = enableVideoLog,
+                presentationTimeNs = presentationTimeNs,
+                toneBaseOnly = true,
+            )
+            toneBase.buildLevels(::drawSimpleQuad)
+        }
+
+        if (!toneBaseOnly) {
+            GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, targetFboId)
+            GLES30.glViewport(0, 0, encoderOutputSize.width, encoderOutputSize.height)
+            GLES30.glClearColor(0f, 0f, 0f, 1f)
+            GLES30.glClear(GLES30.GL_COLOR_BUFFER_BIT)
+        }
         GLES30.glUseProgram(locations.programId)
+        GLES30.glUniform1i(locations.uToneBaseOnlyLocation, if (toneBaseOnly) 1 else 0)
         colorProgramCache.bindLogInput(locations)
+        if (shadowsHighlightsActive && !toneBaseOnly) {
+            toneBase.bind(locations.programId)
+        }
 
         GLES30.glActiveTexture(GLES30.GL_TEXTURE0)
         GLES30.glBindTexture(textureTarget, textureId)
@@ -974,6 +1004,7 @@ class RealtimeVideoRenderer(
         mgcEisHardwareBufferRenderer.release()
         mgcEisYuvRenderer.release()
         colorProgramCache.release()
+        toneBase.release()
         basicToneTextures.release()
 
         if (eglDisplay != EGL14.EGL_NO_DISPLAY) {

@@ -2,6 +2,7 @@ package com.hinnka.mycamera.raw
 
 import android.opengl.GLES30
 import com.hinnka.mycamera.lut.ShadowsHighlightsShader
+import com.hinnka.mycamera.lut.ToneBaseGl
 import com.hinnka.mycamera.utils.PLog
 import kotlin.math.max
 
@@ -29,6 +30,7 @@ internal class RawAdjustmentPass(
 
     private var program = 0
     private var loggedUniformLocations = false
+    private val toneBase = ToneBaseGl(TAG)
 
     fun render(input: Input): Output? {
         val activeProgram = getOrCreateProgram()
@@ -44,10 +46,32 @@ internal class RawAdjustmentPass(
                 "source=${input.textureId} target=${input.targetTextureId} " +
                 "size=${input.width}x${input.height}",
         )
-        GLES30.glUseProgram(activeProgram)
+        val shadowsHighlightsActive =
+            ShadowsHighlightsShader.isActive(input.highlights, input.shadows)
+        if (shadowsHighlightsActive &&
+            toneBase.prepare(input.width, input.height) &&
+            toneBase.bindLevel0()
+        ) {
+            draw(input, activeProgram, toneBaseOnly = true)
+            toneBase.buildLevels { quad.draw(it) }
+        }
         GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, input.targetFramebufferId)
         GLES30.glViewport(0, 0, input.width, input.height)
         GLES30.glClear(GLES30.GL_COLOR_BUFFER_BIT)
+        draw(input, activeProgram, toneBaseOnly = false)
+        RawGlesProgram.logErrors("RawAdjustmentPass.render")
+        return Output(input.targetTextureId, input.width, input.height)
+    }
+
+    private fun draw(input: Input, activeProgram: Int, toneBaseOnly: Boolean) {
+        GLES30.glUseProgram(activeProgram)
+        GLES30.glUniform1i(
+            GLES30.glGetUniformLocation(activeProgram, "uToneBaseOnly"),
+            if (toneBaseOnly) 1 else 0,
+        )
+        if (!toneBaseOnly) {
+            toneBase.bind(activeProgram)
+        }
         GLES30.glActiveTexture(GLES30.GL_TEXTURE0)
         GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, input.textureId)
         GLES30.glUniform1i(
@@ -86,8 +110,6 @@ internal class RawAdjustmentPass(
         )
         quad.bindIdentityTextureMatrix(activeProgram)
         quad.draw(activeProgram)
-        RawGlesProgram.logErrors("RawAdjustmentPass.render")
-        return Output(input.targetTextureId, input.width, input.height)
     }
 
     fun release() {
@@ -95,6 +117,7 @@ internal class RawAdjustmentPass(
             GLES30.glDeleteProgram(program)
             program = 0
         }
+        toneBase.release()
     }
 
     private fun getOrCreateProgram(): Int {
@@ -121,26 +144,7 @@ internal class RawAdjustmentPass(
             uniform float uShadows;
             uniform float uBlacks;
             uniform float uWhites;
-
-            vec3 sampleToneSource(vec2 uv) {
-                return texture(uInputTexture, clamp(uv, vec2(0.0), vec2(1.0))).rgb;
-            }
-
-            vec3 shRgbToXyz(vec3 rgb) {
-                return mat3(
-                    0.4360747, 0.2225045, 0.0139322,
-                    0.3850649, 0.7168786, 0.0971045,
-                    0.1430804, 0.0606169, 0.7141733
-                ) * rgb;
-            }
-
-            vec3 shXyzToRgb(vec3 xyz) {
-                return mat3(
-                     3.1338561, -0.9787684,  0.0719453,
-                    -1.6168667,  1.9161415, -0.2289914,
-                    -0.4906146,  0.0334540,  1.4052427
-                ) * xyz;
-            }
+            uniform int uToneBaseOnly;
 
             ${ShadowsHighlightsShader.GLSL}
 
@@ -177,7 +181,11 @@ internal class RawAdjustmentPass(
 
             void main() {
                 vec3 color = texture(uInputTexture, vTexCoord).rgb;
-                color = applyShadowsHighlights(color, vTexCoord);
+                if (uToneBaseOnly != 0) {
+                    fragColor = vec4(shLogLuminance(color), 0.0, 0.0, 1.0);
+                    return;
+                }
+                color = applyShadowsHighlightsLinear(color, vTexCoord);
                 color = applyBlackWhiteLevels(color);
                 fragColor = vec4(color, 1.0);
             }

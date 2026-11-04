@@ -101,6 +101,7 @@ class LutImageProcessor(context: Context? = null) {
     private var lutSharpenHeight = 0
     private val filmGrainGl = FilmGrainGl(TAG)
     private val highlightDiffusionGl = HighlightDiffusionGl(TAG)
+    private val toneBase = ToneBaseGl(TAG)
 
     // HDF (Highlight Diffusion) 光晕效果资源
     private var hdfExtractBlurHProgram = 0
@@ -780,6 +781,7 @@ class LutImageProcessor(context: Context? = null) {
         colorRecipeParams: ColorRecipeParams?,
         sharpening: Float,
         lutMaskType: Int,
+        toneBaseOnly: Boolean = false,
     ): Bitmap {
         val colorRecipeEnabled = colorRecipeParams != null && !colorRecipeParams.isDefault()
         val exposure = colorRecipeParams?.exposure ?: 0f
@@ -807,12 +809,37 @@ class LutImageProcessor(context: Context? = null) {
         val lchAdjustments = ColorRecipeGl.lchAdjustments(colorRecipeParams)
         val primaryCalibrationMatrix = CameraRawCalibrationMatrix.build(colorRecipeParams)
         val program = shaderProgram
-        GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, framebufferId)
-        GLES30.glViewport(0, 0, width, height)
-
-        // 绘制
-        GLES30.glClear(GLES30.GL_COLOR_BUFFER_BIT)
+        val shadowsHighlightsActive = ShadowsHighlightsShader.isActive(highlights, shadows)
+        if (!toneBaseOnly && shadowsHighlightsActive &&
+            toneBase.prepare(width, height) && toneBase.bindLevel0()
+        ) {
+            performRender(
+                width = width,
+                height = height,
+                inputTextureId = inputTextureId,
+                inputColorSpace = inputColorSpace,
+                lutConfig = lutConfig,
+                colorRecipeParams = colorRecipeParams,
+                sharpening = sharpening,
+                lutMaskType = lutMaskType,
+                toneBaseOnly = true,
+            )
+            toneBase.buildLevels(::drawQuad)
+        }
+        if (!toneBaseOnly) {
+            GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, framebufferId)
+            GLES30.glViewport(0, 0, width, height)
+            // 绘制
+            GLES30.glClear(GLES30.GL_COLOR_BUFFER_BIT)
+        }
         GLES30.glUseProgram(program)
+        GLES30.glUniform1i(
+            GLES30.glGetUniformLocation(program, "uToneBaseOnly"),
+            if (toneBaseOnly) 1 else 0,
+        )
+        if (shadowsHighlightsActive && !toneBaseOnly) {
+            toneBase.bind(program)
+        }
         logInput.bind(GLES30.glGetUniformLocation(program, "uInverseAcr3Texture"), textureUnit = 7)
 
         // 设置纹理 uniform
@@ -973,6 +1000,12 @@ class LutImageProcessor(context: Context? = null) {
 
         if (positionHandle >= 0) GLES30.glDisableVertexAttribArray(positionHandle)
         if (texCoordHandle >= 0) GLES30.glDisableVertexAttribArray(texCoordHandle)
+
+        if (toneBaseOnly) {
+            // Recursive call from the tone-base prepass: the base pyramid already holds the
+            // pre-adjustment log luminance, so post-processing and readback are not run.
+            return Bitmap.createBitmap(1, 1, Bitmap.Config.ARGB_8888)
+        }
 
         val clarityApplied = kotlin.math.abs(clarity) > 0.001f &&
             renderClarity(outputTextureId, width, height, clarity)
@@ -2261,6 +2294,7 @@ class LutImageProcessor(context: Context? = null) {
         releaseClarityFramebuffers()
         filmGrainGl.release()
         highlightDiffusionGl.release()
+        toneBase.release()
         for (i in 0..1) {
             if (hdfTexId[i] != 0) GLES30.glDeleteTextures(1, intArrayOf(hdfTexId[i]), 0)
             if (hdfFboId[i] != 0) GLES30.glDeleteFramebuffers(1, intArrayOf(hdfFboId[i]), 0)
@@ -2383,6 +2417,7 @@ class LutImageProcessor(context: Context? = null) {
             uniform float uVibrance;      // 0.0 ~ 2.0 (蓝色增强)
             uniform float uHighlights;    // -1.0 ~ +1.0 (高光调整)
             uniform float uShadows;       // -1.0 ~ +1.0 (阴影调整)
+            uniform int uToneBaseOnly;
             uniform float uVignette;      // -1.0 ~ +1.0 (晕影)
             uniform float uFlash;         // 0.0 ~ 1.0 (镜头轴向直闪模拟)
             uniform float uBleachBypass;  // 0.0 ~ 1.0 (留银冲洗强度)
@@ -2428,36 +2463,6 @@ class LutImageProcessor(context: Context? = null) {
             ${ThreeWayColorGradingShader.GLSL}
             ${PreviewColorShaderModules.SANITIZE}
             ${BasicToneLutShader.GLSL}
-
-            vec3 prepareToneSample(vec3 sampleColor) {
-                vec3 prepared = sampleColor;
-                if (abs(uExposure) > 0.001) {
-                    prepared = applyExposureInLinearSpace(prepared, uExposure);
-                }
-                return sanitizeColor(prepared);
-            }
-
-            vec3 sampleToneSource(vec2 uv) {
-                return prepareToneSample(sampleImage(clamp(uv, vec2(0.0), vec2(1.0))).rgb);
-            }
-
-            vec3 shRgbToXyz(vec3 rgb) {
-                vec3 linearRgb = srgbToLinear(rgb);
-                return mat3(
-                    0.4360747, 0.2225045, 0.0139322,
-                    0.3850649, 0.7168786, 0.0971045,
-                    0.1430804, 0.0606169, 0.7141733
-                ) * linearRgb;
-            }
-
-            vec3 shXyzToRgb(vec3 xyz) {
-                vec3 linearRgb = mat3(
-                     3.1338561, -0.9787684,  0.0719453,
-                    -1.6168667,  1.9161415, -0.2289914,
-                    -0.4906146,  0.0334540,  1.4052427
-                ) * xyz;
-                return linearToSrgb(linearRgb);
-            }
 
             ${ShadowsHighlightsShader.GLSL}
 
@@ -2534,8 +2539,20 @@ class LutImageProcessor(context: Context? = null) {
                         color.rgb = sanitizeColor(color.rgb);
                     }
 
-                    // 2. 高光/阴影调整：RT 风格 tonal width + 局部 base mask，避免线性乘法洗白全图
-                    color.rgb = applyShadowsHighlights(color.rgb, uvCoord);
+                    // 2. 高光/阴影调整：Local Laplacian 三带局部色调映射
+                    if (uToneBaseOnly != 0) {
+                        fragColor = vec4(
+                            shLogLuminance(srgbToLinear(max(color.rgb, 0.0))),
+                            0.0,
+                            0.0,
+                            1.0
+                        );
+                        return;
+                    }
+                    color.rgb = linearToSrgb(applyShadowsHighlightsLinear(
+                        srgbToLinear(max(color.rgb, 0.0)),
+                        vTexCoord
+                    ));
                     color.rgb = sanitizeColor(color.rgb);
 
                     // 3. 对比度（固定 0.5 中点的 S 曲线）

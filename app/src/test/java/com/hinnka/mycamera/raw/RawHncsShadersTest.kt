@@ -30,10 +30,7 @@ class RawHncsShadersTest {
 
     @Test
     fun hncsShaderKeepsFilmCurveBeforeGammaAndOmitsHighlightStrength() {
-        val shader = RawEngineTonePass.combinedFragmentShaderFor(
-            colorEngine = RawRenderingEngine.Hncs,
-            includeShadowsHighlights = false,
-        )
+        val shader = RawEngineTonePass.combinedFragmentShaderFor(RawRenderingEngine.Hncs)
         val filmCurve = shader.indexOf("color = hncsApplyFilmCurve(color);")
         val gamma = shader.indexOf("color = hncsGammaEncode(color);")
 
@@ -65,18 +62,10 @@ class RawHncsShadersTest {
             RawEngineTonePass.combinedFragmentShaderFor(RawRenderingEngine.AdobeCurve),
             RawEngineTonePass.hdrReferenceFragmentShaderFor(RawRenderingEngine.AdobeCurve),
             RawEngineTonePass.hdrBaseCurveFragmentShaderFor(RawRenderingEngine.AdobeCurve),
-            RawEngineTonePass.combinedFragmentShaderFor(
-                colorEngine = RawRenderingEngine.Hncs,
-                includeShadowsHighlights = false,
-            ),
-            RawEngineTonePass.combinedFragmentShaderFor(
-                colorEngine = RawRenderingEngine.Hncs,
-                includeShadowsHighlights = true,
-            ),
+            RawEngineTonePass.combinedFragmentShaderFor(RawRenderingEngine.Hncs),
             RawEngineTonePass.combinedFragmentShaderFor(RawRenderingEngine.Lumix),
             RawEngineTonePass.fragmentShaderFor(RawRenderingEngine.Canon),
             RawEngineTonePass.combinedFragmentShaderFor(RawRenderingEngine.Canon),
-            RawEngineTonePass.combinedFragmentShaderFor(RawRenderingEngine.Canon, false),
             RawEngineTonePass.hdrReferenceFragmentShaderFor(RawRenderingEngine.Canon),
             RawEngineTonePass.hdrBaseCurveFragmentShaderFor(RawRenderingEngine.Canon),
             RawEngineTonePass.hdrReferenceFragmentShaderFor(RawRenderingEngine.Hncs),
