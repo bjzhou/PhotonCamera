@@ -52,7 +52,7 @@ internal object PhotonDenoiseDump {
         val directory = directory(context)
         val stem = "${System.currentTimeMillis()}_${label}_${params.originX}_${params.originY}"
         runCatching {
-            val pixels = readTexture(inputTexture, width, height, float32 = false)
+            val pixels = readTexture(inputTexture, 0, 0, width, height, float32 = false)
             FileOutputStream(File(directory, "$stem.rgba16f")).use { Channels.newChannel(it).write(pixels) }
             File(directory, "$stem.json").writeText(describe(width, height, metadata, params, lensShadingSource).toString(2))
             File(directory, "$stem.params.json").writeText(params.toJson().toString(2))
@@ -71,7 +71,8 @@ internal object PhotonDenoiseDump {
 
     private fun directory(context: Context) = File(context.getExternalFilesDir(null), DIRECTORY).apply { mkdirs() }
 
-    private fun readTexture(texture: Int, width: Int, height: Int, float32: Boolean): ByteBuffer {
+    /** Reads the [width] × [height] region at ([x], [y]) of [texture]. */
+    private fun readTexture(texture: Int, x: Int, y: Int, width: Int, height: Int, float32: Boolean): ByteBuffer {
         val buffer = ByteBuffer.allocateDirect(width * height * 4 * if (float32) 4 else 2).order(ByteOrder.nativeOrder())
         val framebuffer = IntArray(1)
         GLES30.glGenFramebuffers(1, framebuffer, 0)
@@ -83,7 +84,7 @@ internal object PhotonDenoiseDump {
                 "Texture $texture is not readable"
             }
             GLES30.glPixelStorei(GLES30.GL_PACK_ALIGNMENT, 4)
-            GLES30.glReadPixels(0, 0, width, height, GLES30.GL_RGBA,
+            GLES30.glReadPixels(x, y, width, height, GLES30.GL_RGBA,
                 if (float32) GLES30.GL_FLOAT else GLES30.GL_HALF_FLOAT, buffer)
         } finally {
             GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, 0)
@@ -104,8 +105,16 @@ internal object PhotonDenoiseDump {
         runCatching {
             var strength: FloatArray? = null
             val sink = object : PhotonMultiScaleDenoiser.PassSink {
-                override fun onPass(name: String, textureId: Int, width: Int, height: Int, float32: Boolean) {
-                    val buffer = readTexture(textureId, width, height, float32)
+                override fun onPass(
+                    name: String,
+                    textureId: Int,
+                    x: Int,
+                    y: Int,
+                    width: Int,
+                    height: Int,
+                    float32: Boolean,
+                ) {
+                    val buffer = readTexture(textureId, x, y, width, height, float32)
                     val suffix = if (float32) "f32" else "f16"
                     FileOutputStream(File(directory, "$stem.$name.$suffix")).use { Channels.newChannel(it).write(buffer) }
                     passes.put(JSONObject().apply {

@@ -10,6 +10,16 @@ import com.hinnka.mycamera.raw.RawDenoiseHistory
  * Band = band, Pilot = pilot, Final = final + output. Arithmetic is highp; stores round to the
  * image format (RGBA16F, noise RGBA32F). Pyramid borders reflect without edge repetition.
  */
+/** Stage switches of one synthesis program; [prefilter] applies only with [fineIsInput]. */
+internal data class PhotonSynthesisVariant(
+    val fineIsInput: Boolean,
+    val writeOutput: Boolean,
+    val prefilter: Boolean,
+    val luma: Boolean,
+    val chroma: Boolean,
+    val bilateral: Boolean,
+)
+
 internal object PhotonDenoiseShaders {
     private const val LOCAL = GlesComputeWorkGroup.IMAGE_TILE_SIZE
 
@@ -38,10 +48,7 @@ internal object PhotonDenoiseShaders {
 
         layout(local_size_x = $LOCAL, local_size_y = $LOCAL) in;
 
-        // Work-group offset of a partial dispatch (row bands of the synthesis); 0 for a whole level.
-        uniform ivec2 uGroupOffset;
-        ivec2 groupId() { return ivec2(gl_WorkGroupID.xy) + uGroupOffset; }
-        ivec2 globalId() { return groupId() * $LOCAL + ivec2(gl_LocalInvocationID.xy); }
+        ivec2 globalId() { return ivec2(gl_GlobalInvocationID.xy); }
 
         const float LUMA_TAPS[7] = float[7](
             -1.0 / 32.0, 0.0, 9.0 / 32.0, 16.0 / 32.0, 9.0 / 32.0, 0.0, -1.0 / 32.0);
@@ -217,14 +224,11 @@ internal object PhotonDenoiseShaders {
     """
 
     /**
-     * §6.0 level-0 outlier correction: a luma sample far from its 3×3 median whose deviation has at
-     * most PREFILTER_GUARD same-signed neighbours (a dot, not a line) in a noise-like neighbourhood
-     * (mean L0² of the 5×5 ring below PREFILTER_FLAT σ²) is moved to the median, scaled by
-     * uAmount = min(luma strength, 1). Writes that correction (R32F, 0 elsewhere); σ² is the L0
-     * model noise times the §5.1 strength at the noisy base.
+     * Declarations of both prefilter programs. The samples image covers the strip plus 2 pixels on
+     * every side; uSampleOrigin is the raw coordinate of its texel (0, 0), uExtent the size of the
+     * dispatched region.
      */
-    val PREFILTER = """
-        #version 310 es
+    private val PREFILTER_COMMON = """
         $COMMON
         $LENS_SHADING
         $WORKING
@@ -232,41 +236,57 @@ internal object PhotonDenoiseShaders {
         uniform ivec2 uSize;
         uniform ivec2 uCoarseSize;
         uniform float uAmount;
+        uniform ivec2 uSampleOrigin;
+        uniform ivec2 uExtent;
         $UPSAMPLE
         $MODEL_NOISE
         $STRENGTH_LOOKUP
-        layout(r32f, binding = 0) writeonly uniform highp image2D uDelta;
+    """
 
-        const int TILE = $LOCAL;
-        const int BORDER = 2;
-        const int SIDE = TILE + 2 * BORDER;
-        shared float sFine[SIDE * SIDE];
-        shared float sLap[SIDE * SIDE];
-        shared float sNoise[SIDE * SIDE];
-
-        int sideIndex(ivec2 c) { ivec2 r = c - (groupId() * TILE - BORDER); return r.y * SIDE + r.x; }
+    /**
+     * §6.0 level-0 outlier correction: a luma sample far from its 3×3 median whose deviation has at
+     * most PREFILTER_GUARD same-signed neighbours (a dot, not a line) in a noise-like neighbourhood
+     * (mean L0² of the 5×5 ring below PREFILTER_FLAT σ²) is moved to the median, scaled by
+     * uAmount = min(luma strength, 1). Writes that correction (R32F, 0 elsewhere); σ² is the L0
+     * model noise times the §5.1 strength at the noisy base. Per row strip this program writes the
+     * samples (fine luma, L rounded to float16, σ²) of the strip and its border, [PREFILTER] the
+     * correction.
+     */
+    val PREFILTER_SAMPLES = """
+        #version 310 es
+        $PREFILTER_COMMON
+        layout(rgba32f, binding = 0) writeonly uniform highp image2D uSamplesOut;
 
         void main() {
-            int lid = int(gl_LocalInvocationIndex);
-            ivec2 origin = groupId() * TILE;
-            for (int i = lid; i < SIDE * SIDE; i += TILE * TILE) {
-                ivec2 c = origin - BORDER + ivec2(i % SIDE, i / SIDE);
-                ivec2 p = mirror2(c, uSize);
-                float fine = working0(p).x;
-                vec3 base = upAt(uNoisyCoarse, p);
-                vec3 mu;
-                float noise = modelNoise(p, base, mu).x * strengthAt(base.x).x;
-                sFine[i] = fine;
-                sLap[i] = unpackHalf2x16(packHalf2x16(vec2(fine - base.x, 0.0))).x;
-                sNoise[i] = noise;
-            }
-            memoryBarrierShared();
-            barrier();
+            ivec2 t = globalId();
+            if (any(greaterThanEqual(t, uExtent))) return;
+            ivec2 p = mirror2(uSampleOrigin + t, uSize);
+            float fine = working0(p).x;
+            vec3 base = upAt(uNoisyCoarse, p);
+            vec3 mu;
+            float noise = modelNoise(p, base, mu).x * strengthAt(base.x).x;
+            float lap = unpackHalf2x16(packHalf2x16(vec2(fine - base.x, 0.0))).x;
+            imageStore(uSamplesOut, t, vec4(fine, lap, noise, 0.0));
+        }
+    """.trimIndent()
 
-            ivec2 p = globalId();
-            if (any(greaterThanEqual(p, uSize))) return;
+    /** §6.0 correction of the strip rows from the [PREFILTER_SAMPLES] image (uSamples). */
+    val PREFILTER = """
+        #version 310 es
+        $PREFILTER_COMMON
+        uniform sampler2D uSamples;
+        uniform ivec2 uOutputOrigin;       // pixel of texel 0
+        layout(r32f, binding = 0) writeonly uniform highp image2D uDelta;
+
+        // Raw coordinates: the samples hold the values of the mirrored coordinate.
+        vec4 sampleAt(ivec2 c) { return texelFetch(uSamples, c - uSampleOrigin, 0); }
+
+        void main() {
+            ivec2 t = globalId();
+            if (any(greaterThanEqual(t, uExtent))) return;
+            ivec2 p = uOutputOrigin + t;
             float v[9];
-            for (int j = 0; j < 9; ++j) v[j] = sFine[sideIndex(p + ivec2(j % 3 - 1, j / 3 - 1))];
+            for (int j = 0; j < 9; ++j) v[j] = sampleAt(p + ivec2(j % 3 - 1, j / 3 - 1)).x;
             for (int i = 1; i < 9; ++i) {
                 float x = v[i];
                 int j = i - 1;
@@ -277,26 +297,27 @@ internal object PhotonDenoiseShaders {
                 v[j + 1] = x;
             }
             float m = v[4];
-            float fineP = sFine[sideIndex(p)];
-            float sigma = sqrt(sNoise[sideIndex(p)]);
+            vec4 centre = sampleAt(p);
+            float fineP = centre.x;
+            float sigma = sqrt(centre.z);
             float dev = fineP - m;
             float delta = 0.0;
             if (sigma > 0.0 && abs(dev) > $PREFILTER_K * sigma) {
                 int count = 0;
                 for (int j = 0; j < 9; ++j) {
                     if (j == 4) continue;
-                    float d = sFine[sideIndex(p + ivec2(j % 3 - 1, j / 3 - 1))] - m;
+                    float d = sampleAt(p + ivec2(j % 3 - 1, j / 3 - 1)).x - m;
                     if (abs(d) > $PREFILTER_K * sigma && sign(d) == sign(dev)) ++count;
                 }
                 if (count <= $PREFILTER_GUARD) {
                     float sum = 0.0;
                     for (int dy = -2; dy <= 2; ++dy) {
                         for (int dx = -2; dx <= 2; ++dx) {
-                            float l = sLap[sideIndex(p + ivec2(dx, dy))];
+                            float l = sampleAt(p + ivec2(dx, dy)).y;
                             sum += l * l;
                         }
                     }
-                    float lp = sLap[sideIndex(p)];
+                    float lp = centre.y;
                     float energy = (sum - lp * lp) / 24.0;
                     if (energy < $PREFILTER_FLAT * sigma * sigma) delta = (m - fineP) * uAmount;
                 }
@@ -304,6 +325,7 @@ internal object PhotonDenoiseShaders {
             imageStore(uDelta, p, vec4(delta, 0.0, 0.0, 0.0));
         }
     """.trimIndent()
+
 
     /** Analyze: G_{l+1} = ↓2(h * G_l), luma taps on Y and chroma taps on Cb/Cr. */
     val ANALYZE = """
@@ -337,42 +359,13 @@ internal object PhotonDenoiseShaders {
         }
     """.trimIndent()
 
-    /**
-     * Fused per-level synthesis: Band → Pilot → Final in one dispatch (§10.1).
-     *
-     * A work group owns an 8×8 output tile. Band values (L, base, noise) are computed into shared
-     * memory for the tile plus a 4-pixel border, pilot values for the tile plus a 2-pixel border.
-     * Shared memory is addressed by raw image coordinate and holds the value of the mirrored
-     * coordinate (the reference's reflection without edge repetition), so neighbourhood reads are
-     * plain offsets and border pixels see the same values as the unfused reference. L, base and pilot
-     * are stored as packed float16 bits, rounding them exactly as their textures were rounded in
-     * the unfused passes.
-     *
-     * [debugOutputs] compiles the parity variant: instead of the result it writes band, base,
-     * noise and pilot of the tile core (tools/photon_denoise/compare_passes.py); four images, the
-     * GLES 3.1 minimum. The production variant writes only the result.
-     */
-    private const val DEBUG_IMAGES = """
-        layout(rgba16f, binding = 0) writeonly uniform highp image2D uBandOut;
-        layout(rgba16f, binding = 1) writeonly uniform highp image2D uBaseOut;
-        layout(rgba32f, binding = 2) writeonly uniform highp image2D uNoiseOut;
-        layout(rgba16f, binding = 3) writeonly uniform highp image2D uPilotOut;
-    """
-
     private const val RESULT_IMAGE = """
         layout(rgba16f, binding = 0) writeonly uniform highp image2D uResult;
     """
 
-    private const val DEBUG_STORE = """
-            imageStore(uBandOut, p, vec4(lapAt(p), 0.0));
-            imageStore(uBaseOut, p, vec4(baseAt(p), 0.0));
-            imageStore(uNoiseOut, p, noiseAt(p));
-            if (uLumaEnabled == 1) imageStore(uPilotOut, p, pilotAt(p));
-    """
-
     private const val RESULT_STORE = """
             vec3 result = computeFinal(p);
-            if (uWriteOutput == 1) {
+            if (WRITE_OUTPUT) {
                 vec3 rgb = rgbFromYcc(result) / uScale / uWb * lscGain(levelCentre(p, 0));
                 imageStore(uResult, p, vec4(rgb, 1.0));
             } else {
@@ -381,32 +374,40 @@ internal object PhotonDenoiseShaders {
     """
 
     /**
-     * §5.1 estimate, steps 1–3 at one level: a work group histograms ESTIMATE_BLOCK² samples per
-     * invocation into shared memory and adds its non-zero counts to the global histogram
-     * [level][bin][Y, Cb, Cr][bucket]. Samples: every uStride-th pixel, each 2×2 block of samples
-     * offset so that all four Bayer phases occur. After the first pass the flat gate's noise is
-     * scaled by the median luma strength of this level in the previous pass's table.
+     * Declarations of [ESTIMATE] and [ESTIMATE_RECORDS]: the histograms, the sample records (from
+     * uRecordOffset three planes of uRecordCount uints, row-major over the sample grid: packed bin
+     * and buckets, gradient, σ²_Y; planes keep every store contiguous across lanes), the flat-gate
+     * scale and the counting of one record into the shared histogram.
+     *
+     * The shared histogram is split to spread the atomics: HIST_COPIES copies, invocation i counting
+     * into copy i % HIST_COPIES, so the lanes of a warp hit the same word less often; each copy packs
+     * buckets k and k + HIST_BUCKETS / 2 as the low and high 16 bits of one word (a copy counts at
+     * most 64 / HIST_COPIES × ESTIMATE_BLOCK² samples per entry), keeping all copies within the
+     * 16KB shared-memory baseline. The flush sums the copies, so the counts are unchanged.
      */
-    val ESTIMATE = """
-        #version 310 es
+    private val ESTIMATE_DECLS = """
         $COMMON
         $LENS_SHADING
         $WORKING
-        uniform sampler2D uFine;
-        uniform int uFineIsInput;
-        uniform sampler2D uCoarse;
         uniform ivec2 uSize;
-        uniform ivec2 uCoarseSize;
         uniform int uStride;
-        $UPSAMPLE
         $MODEL_NOISE
         layout(std430, binding = 0) buffer Histogram { uint uHistogram[]; };
         layout(std430, binding = 1) readonly buffer PreviousTable { float uPrevious[]; };
+        layout(std430, binding = 2) buffer Records { uint uRecords[]; };
         uniform int uHasPrevious;
+        uniform int uRecordOffset;
+        uniform int uRecordCount;
 
         const int ENTRIES = $STRENGTH_BINS * 3 * $HIST_BUCKETS;
         const int BLOCK = $ESTIMATE_BLOCK;
-        shared uint sHistogram[ENTRIES];
+        const int BIN_BITS = 4;
+        const int BUCKET_BITS = 6;
+        const uint NO_RECORD = 0xFFFFFFFFu;
+        const int HIST_COPIES = 4;
+        const int HALF_BUCKETS = $HIST_BUCKETS / 2;
+        const int WORDS = ENTRIES / 2;
+        shared uint sHistogram[HIST_COPIES * WORDS];
 
         $MEDIAN8
 
@@ -420,35 +421,96 @@ internal object PhotonDenoiseShaders {
             return median8(v);
         }
 
-        void addSample(ivec2 p, float gate) {
+        int recordIndex(ivec2 q, ivec2 sampleSize) { return uRecordOffset + q.y * sampleSize.x + q.x; }
+
+        // Counts a record whose base gradient passes the flat gate scaled by gate.
+        void countRecord(uvec3 record, float gate) {
+            if (record.x == NO_RECORD) return;
+            float gradient = uintBitsToFloat(record.y);
+            float noiseY = uintBitsToFloat(record.z);
+            if (!(gradient < $FLAT_GATE * sqrt(gate * noiseY))) return;
+            int bin = int(record.x & ((1u << uint(BIN_BITS)) - 1u));
+            int copy = (int(gl_LocalInvocationIndex) % HIST_COPIES) * WORDS;
+            for (int ch = 0; ch < 3; ++ch) {
+                int k = int((record.x >> uint(BIN_BITS + ch * BUCKET_BITS)) & ((1u << uint(BUCKET_BITS)) - 1u));
+                int word = (bin * 3 + ch) * HALF_BUCKETS + k % HALF_BUCKETS;
+                atomicAdd(sHistogram[copy + word], k < HALF_BUCKETS ? 1u : 0x10000u);
+            }
+        }
+
+        void clearHistogram() {
+            for (int i = int(gl_LocalInvocationIndex); i < HIST_COPIES * WORDS; i += $LOCAL * $LOCAL) {
+                sHistogram[i] = 0u;
+            }
+            memoryBarrierShared();
+            barrier();
+        }
+
+        // Sums the copies of each word and adds the non-zero counts of its two entries.
+        void flushHistogram() {
+            memoryBarrierShared();
+            barrier();
+            for (int i = int(gl_LocalInvocationIndex); i < WORDS; i += $LOCAL * $LOCAL) {
+                uint low = 0u;
+                uint high = 0u;
+                for (int c = 0; c < HIST_COPIES; ++c) {
+                    uint packed = sHistogram[c * WORDS + i];
+                    low += packed & 0xFFFFu;
+                    high += packed >> 16u;
+                }
+                int entry = uLevel * ENTRIES + (i / HALF_BUCKETS) * $HIST_BUCKETS + i % HALF_BUCKETS;
+                if (low != 0u) atomicAdd(uHistogram[entry], low);
+                if (high != 0u) atomicAdd(uHistogram[entry + HALF_BUCKETS], high);
+            }
+        }
+    """
+
+    /**
+     * §5.1 estimate, steps 1–3 at one level: a work group histograms ESTIMATE_BLOCK² samples per
+     * invocation into shared memory and adds its non-zero counts to the global histogram
+     * [level][bin][Y, Cb, Cr][bucket]. Samples: every uStride-th pixel, each 2×2 block of samples
+     * offset so that all four Bayer phases occur. This first pass also stores every sample's record
+     * for [ESTIMATE_RECORDS]; after the first pass the flat gate's noise is scaled by the median
+     * luma strength of this level in the previous pass's table.
+     */
+    val ESTIMATE = """
+        #version 310 es
+        $ESTIMATE_DECLS
+        uniform sampler2D uFine;
+        uniform int uFineIsInput;
+        uniform sampler2D uCoarse;
+        uniform ivec2 uCoarseSize;
+        $UPSAMPLE
+
+        // The record of the sample at p (NO_RECORD where the noise or the signal is not positive):
+        // packed bin and Y, Cb, Cr buckets, the base gradient and σ²_Y of the flat gate.
+        uvec3 sampleRecord(ivec2 p) {
             vec3 fine = uFineIsInput == 1 ? working0(p) : texelFetch(uFine, p, 0).rgb;
             vec3 base = upAt(uCoarse, p);
             vec3 lap = fine - base;
             vec3 mu;
             vec4 noise = modelNoise(p, base, mu);
-            if (!(noise.x > 0.0 && noise.y > 0.0 && noise.z > 0.0 && mu.g > 0.0)) return;
+            if (!(noise.x > 0.0 && noise.y > 0.0 && noise.z > 0.0 && mu.g > 0.0)) return uvec3(NO_RECORD, 0u, 0u);
             ivec2 c = p / 2;
             float gx = 0.25 * (texelFetch(uCoarse, ivec2(mirrorIndex(c.x + 1, uCoarseSize.x), c.y), 0).x -
                 texelFetch(uCoarse, ivec2(mirrorIndex(c.x - 1, uCoarseSize.x), c.y), 0).x);
             float gy = 0.25 * (texelFetch(uCoarse, ivec2(c.x, mirrorIndex(c.y + 1, uCoarseSize.y)), 0).x -
                 texelFetch(uCoarse, ivec2(c.x, mirrorIndex(c.y - 1, uCoarseSize.y)), 0).x);
-            if (!(sqrt(gx * gx + gy * gy) < $FLAT_GATE * sqrt(gate * noise.x))) return;
             int bin = clamp(int(floor(log2(max(base.x / uScale, 1e-12)) - $STRENGTH_LOW)), 0, $STRENGTH_BINS - 1);
             const float BUCKET_SCALE = float($HIST_BUCKETS) / ($HIST_HIGH - $HIST_LOW);
+            uint packed = uint(bin);
             for (int ch = 0; ch < 3; ++ch) {
                 float v = lap[ch] * lap[ch] / noise[ch];
                 int k = clamp(int(floor((log2(max(v, 1e-30)) - $HIST_LOW) * BUCKET_SCALE)), 0, $HIST_BUCKETS - 1);
-                atomicAdd(sHistogram[(bin * 3 + ch) * $HIST_BUCKETS + k], 1u);
+                packed |= uint(k) << uint(BIN_BITS + ch * BUCKET_BITS);
             }
+            return uvec3(packed, floatBitsToUint(sqrt(gx * gx + gy * gy)), floatBitsToUint(noise.x));
         }
 
         void main() {
-            int lid = int(gl_LocalInvocationIndex);
-            for (int i = lid; i < ENTRIES; i += $LOCAL * $LOCAL) sHistogram[i] = 0u;
-            memoryBarrierShared();
-            barrier();
+            clearHistogram();
             ivec2 sampleSize = (uSize + uStride - 1) / uStride;
-            ivec2 origin = groupId() * ($LOCAL * BLOCK);
+            ivec2 origin = ivec2(gl_WorkGroupID.xy) * ($LOCAL * BLOCK);
             ivec2 lane = ivec2(gl_LocalInvocationID.xy);
             float gate = gateScale();
             for (int by = 0; by < BLOCK; ++by) {
@@ -456,16 +518,43 @@ internal object PhotonDenoiseShaders {
                     ivec2 q = origin + ivec2(bx, by) * $LOCAL + lane;
                     if (any(greaterThanEqual(q, sampleSize))) continue;
                     ivec2 p = uStride > 1 ? q * uStride + ivec2(q.y & 1, q.x & 1) : q;
-                    if (any(greaterThanEqual(p, uSize))) continue;
-                    addSample(p, gate);
+                    uvec3 record = any(greaterThanEqual(p, uSize)) ? uvec3(NO_RECORD, 0u, 0u) : sampleRecord(p);
+                    int index = recordIndex(q, sampleSize);
+                    uRecords[index] = record.x;
+                    uRecords[index + uRecordCount] = record.y;
+                    uRecords[index + 2 * uRecordCount] = record.z;
+                    countRecord(record, gate);
                 }
             }
-            memoryBarrierShared();
-            barrier();
-            for (int i = lid; i < ENTRIES; i += $LOCAL * $LOCAL) {
-                uint n = sHistogram[i];
-                if (n != 0u) atomicAdd(uHistogram[uLevel * ENTRIES + i], n);
+            flushHistogram();
+        }
+    """.trimIndent()
+
+    /**
+     * §5.1 estimate passes after the first: the histogram of [ESTIMATE] recounted from the sample
+     * records the first pass stored, with the flat gate of this pass. The counts equal a full
+     * recomputation; the textures and the noise model are not read again.
+     */
+    val ESTIMATE_RECORDS = """
+        #version 310 es
+        $ESTIMATE_DECLS
+
+        void main() {
+            clearHistogram();
+            ivec2 sampleSize = (uSize + uStride - 1) / uStride;
+            ivec2 origin = ivec2(gl_WorkGroupID.xy) * ($LOCAL * BLOCK);
+            ivec2 lane = ivec2(gl_LocalInvocationID.xy);
+            float gate = gateScale();
+            for (int by = 0; by < BLOCK; ++by) {
+                for (int bx = 0; bx < BLOCK; ++bx) {
+                    ivec2 q = origin + ivec2(bx, by) * $LOCAL + lane;
+                    if (any(greaterThanEqual(q, sampleSize))) continue;
+                    int index = recordIndex(q, sampleSize);
+                    countRecord(uvec3(uRecords[index], uRecords[index + uRecordCount],
+                        uRecords[index + 2 * uRecordCount]), gate);
+                }
             }
+            flushHistogram();
         }
     """.trimIndent()
 
@@ -603,119 +692,12 @@ internal object PhotonDenoiseShaders {
         }
     """.trimIndent()
 
-    fun synthesize(debugOutputs: Boolean): String = """
-        #version 310 es
-        $COMMON
-        $LENS_SHADING
-        $WORKING
-        uniform sampler2D uFine;
-        uniform int uFineIsInput;
-        uniform sampler2D uNoisyCoarse;
-        uniform sampler2D uDenoisedCoarse;
-        uniform ivec2 uSize;
-        uniform ivec2 uCoarseSize;
-        $UPSAMPLE
-        $MODEL_NOISE
-        $STRENGTH_LOOKUP
-        // §6.0 level-0 isolated-outlier correction of the input luma (PREFILTER); used when uFineIsInput.
-        uniform sampler2D uPrefilter;
-        uniform int uPrefilterEnabled;
-        uniform float uOutlier;
-        uniform float uAlpha;
-        uniform int uLumaEnabled;
-        uniform float uGrain;
-        uniform float uGamma;               // §6.1 exponent of the second-stage gain
-        uniform int uChromaEnabled;
-        uniform float uChromaStrength;      // min(s, 1)
-        uniform vec2 uGateLuma;
-        uniform vec2 uGateChroma;
-        uniform int uBilateral;
-        uniform float uBilateralLuma;
-        uniform float uBilateralChroma;
-        uniform int uWriteOutput;           // level 0: camera RGB with gains restored
-        ${if (debugOutputs) DEBUG_IMAGES else RESULT_IMAGE}
-
-        const int TILE = $LOCAL;
-        const int BAND_BORDER = 4;
-        const int PILOT_BORDER = 2;
-        const int BAND_SIDE = TILE + 2 * BAND_BORDER;
-        const int PILOT_SIDE = TILE + 2 * PILOT_BORDER;
-        const float BASE_RADIUS = 1.25;
-        const float GAMMA_LOW = 0.25;
-        const float GAMMA_HIGH = 0.5;
-        const float CENTRE_LOW = 6.0;
-        const float CENTRE_HIGH = 10.0;
-
-        // L and base (six halves) and the pilot (four halves) are held as packed float16 bits.
-        // Integer storage makes the float16 rounding unconditional: a compiler may legally fold
-        // unpackHalf2x16(packHalf2x16(x)) back to x, which left unrounded values in a float array.
-        shared uvec3 sLapBase[BAND_SIDE * BAND_SIDE];
-        shared vec4 sNoise[BAND_SIDE * BAND_SIDE];
-        shared uvec2 sPilot[PILOT_SIDE * PILOT_SIDE];
-
-        // ↑2 inputs of the band region: G_{l+1} (slot 0) and G̃_{l+1} (slot 1) at coarse coordinates
-        // gCoarseLo + [0, COARSE_SIDE)², each entry the texel of the mirrored coordinate. Pixels of
-        // the band region map into a span of at most 16 fine pixels, i.e. 12 coarse taps.
-        const int COARSE_SIDE = 12;
-        shared vec4 sCoarse[2 * COARSE_SIDE * COARSE_SIDE];
-        ivec2 gCoarseLo;
-
-        // upAt over the cached coarse texels: the same taps in the same order.
-        vec3 upCached(int slot, ivec2 p) {
-            int offset = slot * COARSE_SIDE * COARSE_SIDE;
-            float y = 0.0;
-            vec2 c = vec2(0.0);
-            for (int j = -3; j <= 3; ++j) {
-                if (((p.y - j) & 1) != 0) continue;
-                int cy = (p.y - j) / 2 - gCoarseLo.y;
-                for (int i = -3; i <= 3; ++i) {
-                    if (((p.x - i) & 1) != 0) continue;
-                    int cx = (p.x - i) / 2 - gCoarseLo.x;
-                    vec3 v = sCoarse[offset + cy * COARSE_SIDE + cx].rgb;
-                    y += 4.0 * LUMA_TAPS[i + 3] * LUMA_TAPS[j + 3] * v.x;
-                    if (abs(i) <= 2 && abs(j) <= 2) c += 4.0 * CHROMA_TAPS[i + 2] * CHROMA_TAPS[j + 2] * v.yz;
-                }
-            }
-            return vec3(y, c);
-        }
-
-        ivec2 tileOrigin() { return groupId() * TILE; }
-        int bandIndex(ivec2 c) { ivec2 r = c - (tileOrigin() - BAND_BORDER); return r.y * BAND_SIDE + r.x; }
-        int pilotIndex(ivec2 c) { ivec2 r = c - (tileOrigin() - PILOT_BORDER); return r.y * PILOT_SIDE + r.x; }
-
-        // Band at image pixel p = mirror(c): L = G_l − ↑G_{l+1}, base = ↑G̃_{l+1}, noise = §2.1 × §5.1.
-        // Stored at c, so shared memory holds the mirrored values at their raw coordinates.
-        void computeBand(ivec2 c) {
-            ivec2 p = mirror2(c, uSize);
-            // Level 0 reads the input at uLevel = 0: one gain serves the input and the clip test.
-            vec3 gain = lscGain(levelCentre(p, uLevel));
-            vec3 fine = uFineIsInput == 1 ? working0Gain(p, gain) : texelFetch(uFine, p, 0).rgb;
-            if (uFineIsInput == 1 && uPrefilterEnabled == 1) fine.x += texelFetch(uPrefilter, p, 0).r;
-            vec3 base = upCached(1, p);
-            vec3 lap = fine - upCached(0, p);
-            vec3 mu;
-            vec3 s = strengthAt(base.x);
-            vec4 noise = modelNoiseGain(p, base, gain, mu) * vec4(s, sqrt(s.y * s.z));
-            int index = bandIndex(c);
-            sLapBase[index] = uvec3(packHalf2x16(lap.xy), packHalf2x16(vec2(lap.z, base.x)), packHalf2x16(base.yz));
-            sNoise[index] = noise;
-        }
-
-        // Raw coordinates: the arrays already hold the mirrored values (computeBand, main).
-        vec3 lapAt(ivec2 p) {
-            uvec3 u = sLapBase[bandIndex(p)];
-            return vec3(unpackHalf2x16(u.x), unpackHalf2x16(u.y).x);
-        }
-        vec3 baseAt(ivec2 p) {
-            uvec3 u = sLapBase[bandIndex(p)];
-            return vec3(unpackHalf2x16(u.y).y, unpackHalf2x16(u.z));
-        }
-        vec4 noiseAt(ivec2 p) { return sNoise[bandIndex(p)]; }
-        vec4 pilotAt(ivec2 p) {
-            uvec2 u = sPilot[pilotIndex(p)];
-            return vec4(unpackHalf2x16(u.x), unpackHalf2x16(u.y));
-        }
-
+    /**
+     * Pilot and final of one pixel (§6.1–6.2, §7.2–7.3) over the accessors lapAt, baseAt, noiseAt and
+     * pilotAt at raw coordinates (the values of the mirrored coordinate); shared by the pilot and final
+     * programs.
+     */
+    private const val SYNTH_STAGES = """
         // §6.1 steps 1–2: anisotropic spatial weight × Huber weight of window offset d.
         float windowWeight(ivec2 d, float lapP, float lapQ, float sigma, float anisotropy, float c, float s) {
             float rPar = BASE_RADIUS * (1.0 + anisotropy);
@@ -793,7 +775,7 @@ internal object PhotonDenoiseShaders {
             vec4 noise = noiseAt(p);
 
             float lumaBand = lap.x;
-            if (uLumaEnabled == 1) {
+            if (LUMA_ENABLED) {
                 vec4 pilotP = pilotAt(p);
                 float sigma = sqrt(noise.x);
                 float num = 0.0;
@@ -817,13 +799,13 @@ internal object PhotonDenoiseShaders {
 
             vec2 chromaBand = lap.yz;
             vec2 baseChroma = base.yz;
-            if (uChromaEnabled == 1) {
+            if (CHROMA_ENABLED) {
                 float sumL2 = 0.0;
                 float sumS2 = 0.0;
                 for (int dy = -1; dy <= 1; ++dy) {
                     for (int dx = -1; dx <= 1; ++dx) {
                         // §7.2: denoised luma (the pilot) opens the gate, not a luma noise sample.
-                        float l = uLumaEnabled == 1 ? pilotAt(p + ivec2(dx, dy)).x : lapAt(p + ivec2(dx, dy)).x;
+                        float l = LUMA_ENABLED ? pilotAt(p + ivec2(dx, dy)).x : lapAt(p + ivec2(dx, dy)).x;
                         sumL2 += l * l;
                         sumS2 += noiseAt(p + ivec2(dx, dy)).x;
                     }
@@ -834,7 +816,7 @@ internal object PhotonDenoiseShaders {
                 float gate = max(gateY, gateC);
                 chromaBand = (uChromaStrength * gate + (1.0 - uChromaStrength)) * lap.yz;
 
-                if (uBilateral == 1) {
+                if (BILATERAL_ENABLED) {
                     vec2 sum = vec2(0.0);
                     float weight = 0.0;
                     for (int dy = -2; dy <= 2; ++dy) {
@@ -856,41 +838,148 @@ internal object PhotonDenoiseShaders {
             }
             return vec3(base.x + lumaBand, baseChroma + chromaBand);
         }
+    """
+
+    /**
+     * Uniforms, stage switches and constants of every synthesis program (no #version, no images).
+     * The stage switches of [variant] are compile-time constants: with uniform switches the compiler
+     * allocates registers for every stage, also where a stage is off.
+     */
+    private fun synthesisHeader(variant: PhotonSynthesisVariant) = """
+        $COMMON
+        $LENS_SHADING
+        $WORKING
+        const bool FINE_IS_INPUT = ${variant.fineIsInput};     // level 0: fine is computed from uInput
+        const bool WRITE_OUTPUT = ${variant.writeOutput};      // level 0: camera RGB with gains restored
+        const bool PREFILTER_ENABLED = ${variant.prefilter};
+        const bool LUMA_ENABLED = ${variant.luma};
+        const bool CHROMA_ENABLED = ${variant.chroma};
+        const bool BILATERAL_ENABLED = ${variant.bilateral};
+        uniform sampler2D uFine;
+        uniform sampler2D uNoisyCoarse;
+        uniform sampler2D uDenoisedCoarse;
+        uniform ivec2 uSize;
+        uniform ivec2 uCoarseSize;
+        $UPSAMPLE
+        $MODEL_NOISE
+        $STRENGTH_LOOKUP
+        // §6.0 level-0 isolated-outlier correction of the input luma (PREFILTER); used when FINE_IS_INPUT.
+        uniform sampler2D uPrefilter;
+        uniform float uOutlier;
+        uniform float uAlpha;
+        uniform float uGrain;
+        uniform float uGamma;               // §6.1 exponent of the second-stage gain
+        uniform float uChromaStrength;      // min(s, 1)
+        uniform vec2 uGateLuma;
+        uniform vec2 uGateChroma;
+        uniform float uBilateralLuma;
+        uniform float uBilateralChroma;
+
+        const float BASE_RADIUS = 1.25;
+        const float GAMMA_LOW = 0.25;
+        const float GAMMA_HIGH = 0.5;
+        const float CENTRE_LOW = 6.0;
+        const float CENTRE_HIGH = 10.0;
+
+        // Band at image pixel p: L = G_l − ↑G_{l+1}, base = ↑G̃_{l+1}, noise = §2.1 × §5.1. The program
+        // defines upNoisy and upDenoised, the ↑2 of G_{l+1} and G̃_{l+1} at p.
+        vec3 upNoisy(ivec2 p);
+        vec3 upDenoised(ivec2 p);
+        void bandValues(ivec2 p, out vec3 lap, out vec3 base, out vec4 noise) {
+            // Level 0 reads the input at uLevel = 0: one gain serves the input and the clip test.
+            vec3 gain = lscGain(levelCentre(p, uLevel));
+            vec3 fine = FINE_IS_INPUT ? working0Gain(p, gain) : texelFetch(uFine, p, 0).rgb;
+            if (FINE_IS_INPUT && PREFILTER_ENABLED) fine.x += texelFetch(uPrefilter, p, 0).r;
+            base = upDenoised(p);
+            lap = fine - upNoisy(p);
+            vec3 mu;
+            vec3 s = strengthAt(base.x);
+            noise = modelNoiseGain(p, base, gain, mu) * vec4(s, sqrt(s.y * s.z));
+        }
+    """
+
+    /**
+     * Synthesis (§10.1): Band, Pilot and Final as separate per-pixel dispatches over one row strip,
+     * without shared memory or barriers. The band and pilot images cover the strip plus
+     * BAND_BORDER / PILOT_BORDER (4 / 2) on every side and hold the values of the mirrored
+     * coordinate (the reference's reflection without edge repetition) at raw coordinates, so
+     * neighbourhood reads are plain offsets and border pixels see the reference's values. uBandOrigin / uPilotOrigin are the raw coordinates of their
+     * texel (0, 0); uExtent is the size of the dispatched region.
+     */
+    fun synthesizeBand(variant: PhotonSynthesisVariant): String = """
+        #version 310 es
+        ${synthesisHeader(variant)}
+        layout(rgba16f, binding = 0) writeonly uniform highp image2D uLapOut;
+        layout(rgba16f, binding = 1) writeonly uniform highp image2D uBaseOut;
+        layout(rgba32f, binding = 2) writeonly uniform highp image2D uNoiseOut;
+        uniform ivec2 uBandOrigin;
+        uniform ivec2 uExtent;
+
+        vec3 upNoisy(ivec2 p) { return upAt(uNoisyCoarse, p); }
+        vec3 upDenoised(ivec2 p) { return upAt(uDenoisedCoarse, p); }
 
         void main() {
-            int lid = int(gl_LocalInvocationIndex);
-            ivec2 origin = tileOrigin();
-            // Fine pixels the band region reads (mirrored), and the coarse taps of their ↑2.
-            ivec2 lo = ivec2(1 << 30);
-            for (int i = 0; i < BAND_SIDE; ++i) lo = min(lo, mirror2(origin - BAND_BORDER + ivec2(i), uSize));
-            gCoarseLo = (lo - 3) >> 1;
-            for (int i = lid; i < 2 * COARSE_SIDE * COARSE_SIDE; i += TILE * TILE) {
-                int slot = i / (COARSE_SIDE * COARSE_SIDE);
-                int r = i - slot * COARSE_SIDE * COARSE_SIDE;
-                ivec2 k = mirror2(gCoarseLo + ivec2(r % COARSE_SIDE, r / COARSE_SIDE), uCoarseSize);
-                sCoarse[i] = slot == 0 ? texelFetch(uNoisyCoarse, k, 0) : texelFetch(uDenoisedCoarse, k, 0);
-            }
-            memoryBarrierShared();
-            barrier();
-            for (int i = lid; i < BAND_SIDE * BAND_SIDE; i += TILE * TILE) {
-                ivec2 c = origin - BAND_BORDER + ivec2(i % BAND_SIDE, i / BAND_SIDE);
-                computeBand(c);
-            }
-            memoryBarrierShared();
-            barrier();
-            if (uLumaEnabled == 1) {
-                for (int i = lid; i < PILOT_SIDE * PILOT_SIDE; i += TILE * TILE) {
-                    ivec2 c = origin - PILOT_BORDER + ivec2(i % PILOT_SIDE, i / PILOT_SIDE);
-                    vec4 pilot = computePilot(mirror2(c, uSize));
-                    sPilot[pilotIndex(c)] = uvec2(packHalf2x16(pilot.xy), packHalf2x16(pilot.zw));
-                }
-            }
-            memoryBarrierShared();
-            barrier();
-
-            ivec2 p = globalId();
-            if (any(greaterThanEqual(p, uSize))) return;
-            ${if (debugOutputs) DEBUG_STORE else RESULT_STORE}
+            ivec2 t = globalId();
+            if (any(greaterThanEqual(t, uExtent))) return;
+            vec3 lap;
+            vec3 base;
+            vec4 noise;
+            bandValues(mirror2(uBandOrigin + t, uSize), lap, base, noise);
+            imageStore(uLapOut, t, vec4(lap, 0.0));
+            imageStore(uBaseOut, t, vec4(base, 0.0));
+            imageStore(uNoiseOut, t, noise);
         }
     """.trimIndent()
+
+    /** Pilot of the unfused synthesis (see [synthesizeBand]). */
+    fun synthesizePilot(variant: PhotonSynthesisVariant): String = """
+        #version 310 es
+        ${synthesisHeader(variant)}
+        layout(rgba16f, binding = 0) writeonly uniform highp image2D uPilotOut;
+        uniform ivec2 uExtent;
+        $STRIP_ACCESS
+        vec3 upNoisy(ivec2 p) { return vec3(0.0); }
+        vec3 upDenoised(ivec2 p) { return vec3(0.0); }
+        $SYNTH_STAGES
+
+        void main() {
+            ivec2 t = globalId();
+            if (any(greaterThanEqual(t, uExtent))) return;
+            imageStore(uPilotOut, t, computePilot(mirror2(uPilotOrigin + t, uSize)));
+        }
+    """.trimIndent()
+
+    /** Final of the unfused synthesis (see [synthesizeBand]); uOutputOrigin is the pixel of texel 0. */
+    fun synthesizeFinal(variant: PhotonSynthesisVariant): String = """
+        #version 310 es
+        ${synthesisHeader(variant)}
+        $RESULT_IMAGE
+        uniform ivec2 uExtent;
+        uniform ivec2 uOutputOrigin;
+        $STRIP_ACCESS
+        vec3 upNoisy(ivec2 p) { return vec3(0.0); }
+        vec3 upDenoised(ivec2 p) { return vec3(0.0); }
+        $SYNTH_STAGES
+
+        void main() {
+            ivec2 t = globalId();
+            if (any(greaterThanEqual(t, uExtent))) return;
+            ivec2 p = uOutputOrigin + t;
+            $RESULT_STORE
+        }
+    """.trimIndent()
+
+    /** Band and pilot images of the unfused synthesis at raw coordinates (see [synthesizeBand]). */
+    private const val STRIP_ACCESS = """
+        uniform sampler2D uLap;
+        uniform sampler2D uBase;
+        uniform sampler2D uNoise;
+        uniform sampler2D uPilot;
+        uniform ivec2 uBandOrigin;
+        uniform ivec2 uPilotOrigin;
+        vec3 lapAt(ivec2 c) { return texelFetch(uLap, c - uBandOrigin, 0).rgb; }
+        vec3 baseAt(ivec2 c) { return texelFetch(uBase, c - uBandOrigin, 0).rgb; }
+        vec4 noiseAt(ivec2 c) { return texelFetch(uNoise, c - uBandOrigin, 0); }
+        vec4 pilotAt(ivec2 c) { return texelFetch(uPilot, c - uPilotOrigin, 0); }
+    """
 }
