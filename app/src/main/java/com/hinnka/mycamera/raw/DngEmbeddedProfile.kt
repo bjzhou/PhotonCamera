@@ -215,7 +215,8 @@ internal object DngEmbeddedProfile {
         // Preserve illuminant slots. DngSdkColorSpec promotes a lone second slot
         // together with its ForwardMatrix and CameraCalibration when needed.
 
-        val rejectForwardMatrices = isSrgbPlaceholderForwardMatrixPair(raf, ifd, byteOrder)
+        val rejectForwardMatrices = RawColorCalibrationPolicy.mode == RawColorCalibrationMode.AUTO &&
+            isSrgbPlaceholderForwardMatrixPair(raf, ifd, byteOrder)
         val forwardMatrix1 = if (rejectForwardMatrices) null
             else readMatrix(raf, ifd[TAG_FORWARD_MATRIX1], byteOrder)
         val forwardMatrix2 = if (rejectForwardMatrices) null

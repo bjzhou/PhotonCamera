@@ -29,6 +29,7 @@ import com.hinnka.mycamera.raw.ColorSpace as RawColorSpace
 import com.hinnka.mycamera.raw.DngSdkColorSpec
 import com.hinnka.mycamera.raw.RawEnginePreviewSource
 import com.hinnka.mycamera.raw.RawCameraCalibration
+import com.hinnka.mycamera.raw.RawColorCalibrationMode
 import com.hinnka.mycamera.raw.RawColorCalibrationPolicy
 import com.hinnka.mycamera.utils.PLog
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -452,6 +453,7 @@ class Camera2Controller(private val context: Context) {
     val enginePreviewSource: StateFlow<RawEnginePreviewSource?> = _enginePreviewSource.asStateFlow()
     private var enginePreviewCharacteristics: CameraCharacteristics? = null
     private var enginePreviewCalibration: RawCameraCalibration? = null
+    private var enginePreviewCalibrationMode: RawColorCalibrationMode? = null
 
     fun setEnginePreviewMetadataEnabled(enabled: Boolean) {
         enginePreviewEnabled = enabled
@@ -474,9 +476,11 @@ class Camera2Controller(private val context: Context) {
             _enginePreviewSource.value = null
             return
         }
-        if (enginePreviewCharacteristics !== characteristics) {
+        val calibrationMode = RawColorCalibrationPolicy.mode
+        if (enginePreviewCharacteristics !== characteristics || enginePreviewCalibrationMode != calibrationMode) {
             enginePreviewCalibration = RawColorCalibrationPolicy.fromCharacteristics(characteristics).toRawCalibration()
             enginePreviewCharacteristics = characteristics
+            enginePreviewCalibrationMode = calibrationMode
             PLog.d(TAG, "Engine preview source camera=$cameraId")
         }
         val mode = frame.get(CaptureResult.COLOR_CORRECTION_MODE)
@@ -2083,6 +2087,7 @@ class Camera2Controller(private val context: Context) {
         _enginePreviewSource.value = null
         enginePreviewCharacteristics = null
         enginePreviewCalibration = null
+        enginePreviewCalibrationMode = null
         cachedCharacteristics = null
         cachedCharacteristicsCameraId = ""
         activeOpenCameraId = ""

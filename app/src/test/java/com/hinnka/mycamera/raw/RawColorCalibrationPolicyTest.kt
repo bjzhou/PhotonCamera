@@ -111,9 +111,52 @@ class RawColorCalibrationPolicyTest {
         assertTrue(SrgbColorMatrixPolicy.isPlaceholder(m, 21))
     }
 
+    // DNG_DEFAULT: ForwardMatrix first with structural checks only.
+    @Test
+    fun dngDefaultKeepsPlaceholderForwardMatrixPair() {
+        val placeholderFm = floatArrayOf(
+            56f / 128, 49f / 128, 18f / 128,
+            28f / 128, 92f / 128, 8f / 128,
+            2f / 128, 12f / 128, 91f / 128,
+        )
+        val selection = select(
+            sensorCm1, sensorCm2, placeholderFm, placeholderFm, RawColorCalibrationMode.DNG_DEFAULT,
+        )
+
+        assertTrue(selection!!.useForward)
+        assertTrue(selection.keepSlot2)
+    }
+
+    @Test
+    fun dngDefaultSkipsForwardRowSumAndPlaceholderColorChecks() {
+        val negativeRow = sensorFm1.copyOf().also { it[6] = -1f; it[7] = -0.5f; it[8] = 0.2f }
+        assertTrue(
+            select(sensorCm1, sensorCm2, negativeRow, sensorFm2, RawColorCalibrationMode.DNG_DEFAULT)!!
+                .useForward
+        )
+
+        val selection = select(
+            sensorCm1, placeholderCm2, null, null, RawColorCalibrationMode.DNG_DEFAULT,
+        )
+        assertFalse(selection!!.useForward)
+        assertTrue(selection.keepSlot2)
+        assertFalse(selection.placeholderColor)
+    }
+
+    @Test
+    fun modeNamesRoundTripAndDefaultToAuto() {
+        RawColorCalibrationMode.entries.forEach {
+            assertEquals(it, RawColorCalibrationMode.fromName(it.name))
+        }
+        assertEquals(RawColorCalibrationMode.AUTO, RawColorCalibrationMode.fromName(null))
+        assertEquals(RawColorCalibrationMode.AUTO, RawColorCalibrationMode.fromName("unknown"))
+        assertEquals(listOf(0, 1, 2), RawColorCalibrationMode.entries.map { it.nativeCode })
+    }
+
     private fun select(
         cm1: FloatArray?, cm2: FloatArray?, fm1: FloatArray?, fm2: FloatArray?,
-    ) = RawColorCalibrationPolicy.select(cm1, cm2, 21, 17, fm1, fm2)
+        mode: RawColorCalibrationMode = RawColorCalibrationMode.AUTO,
+    ) = RawColorCalibrationPolicy.select(cm1, cm2, 21, 17, fm1, fm2, mode)
 
     private fun scaleRows(matrix: FloatArray, vararg gains: Float) =
         FloatArray(9) { matrix[it] * gains[it / 3] }

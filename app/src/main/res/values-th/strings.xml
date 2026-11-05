@@ -934,6 +934,11 @@
     <string name="settings_raw_output_upscale_mode_description">เลือกอัลกอริทึมซูเปอร์เรโซลูชันสำหรับโหมดโปรเฟสชันนัล RAISR และการขยายด้วย Lanczos-3 ใช้พร้อมกันไม่ได้</string>
     <string name="settings_raw_output_upscale_mode_lanczos">Lanczos-3</string>
     <string name="settings_raw_output_upscale_mode_raisr">RAISR</string>
+    <string name="settings_raw_color_calibration_mode">การปรับเทียบสี</string>
+    <string name="settings_raw_color_calibration_mode_description">เลือกแหล่งที่มาของเมทริกซ์สี RAW อัตโนมัติ: ตรวจจับและละเว้นเมทริกซ์ตัวยึดตำแหน่งที่กล้องรายงาน ค่าเริ่มต้น DNG: ใช้ ForwardMatrix ก่อนโดยไม่ตรวจจับ การแก้ไขในตัว: ใช้เมทริกซ์ปรับเทียบในตัวเสมอ</string>
+    <string name="settings_raw_color_calibration_mode_auto">อัตโนมัติ</string>
+    <string name="settings_raw_color_calibration_mode_dng_default">ค่าเริ่มต้น DNG</string>
+    <string name="settings_raw_color_calibration_mode_built_in">การแก้ไขในตัว</string>
     <string name="settings_raw_max_output_scale_description_raisr">RAISR ขยายได้ที่ 2× เท่านั้น ระหว่างที่เลือกไว้ อัตราขยายเอาต์พุตจะถูกล็อกไว้ที่ 2×</string>
     <string name="settings_shutter_sound_single">เสียงถ่ายภาพเดี่ยว</string>
     <string name="settings_shutter_sound_burst">เสียงถ่ายภาพต่อเนื่อง</string>

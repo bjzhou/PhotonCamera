@@ -20,6 +20,9 @@ import kotlin.math.roundToInt
  *    A placeholder second slot is dropped only when the first slot is a real one.
  * 3. Otherwise (no structurally usable ColorMatrix1) a D65 sRGB ColorMatrix, i.e.
  *    white-balanced camera RGB rendered as linear sRGB.
+ * That is [RawColorCalibrationMode.AUTO]. DNG_DEFAULT keeps the same order with
+ * structural checks only (no placeholder detection), and BUILT_IN replaces every
+ * source calibration with [FixedRawCalibration].
  */
 internal object RawColorCalibrationPolicy {
     data class CameraCalibration(
@@ -55,21 +58,38 @@ internal object RawColorCalibrationPolicy {
     )
     private const val ILLUMINANT_D65 = 21
 
+    /** Set from user preferences; read by capture, DNG writing and DNG reading. */
+    @Volatile
+    var mode: RawColorCalibrationMode = RawColorCalibrationMode.DEFAULT
+
     /**
-     * ForwardMatrices must already have passed original-payload placeholder rejection.
-     * Pure, so callers log; null means no structurally usable ColorMatrix1.
+     * Source selection for [RawColorCalibrationMode.AUTO] and DNG_DEFAULT; BUILT_IN never
+     * selects. In AUTO, ForwardMatrices must already have passed original-payload
+     * placeholder rejection. Pure, so callers log; null means no structurally usable
+     * ColorMatrix1.
      */
     internal fun select(
         colorMatrix1: FloatArray?, colorMatrix2: FloatArray?,
         illuminant1: Int, illuminant2: Int,
         forwardMatrix1: FloatArray?, forwardMatrix2: FloatArray?,
+        mode: RawColorCalibrationMode = RawColorCalibrationMode.AUTO,
     ): Selection? {
-        val forwardUsable = isUsableForwardMatrix(forwardMatrix1) &&
-            (forwardMatrix2 == null || isUsableForwardMatrix(forwardMatrix2))
+        val detect = mode == RawColorCalibrationMode.AUTO
+        val usableForward: (FloatArray?) -> Boolean =
+            if (detect) ::isUsableForwardMatrix else ::isUsableMatrix
+        val forwardUsable = usableForward(forwardMatrix1) &&
+            (forwardMatrix2 == null || usableForward(forwardMatrix2))
         if (forwardUsable && isUsableMatrix(colorMatrix1)) {
             return Selection(useForward = true, keepSlot2 = isUsableMatrix(colorMatrix2))
         }
         if (!isUsableMatrix(colorMatrix1)) return null
+        if (!detect) {
+            return Selection(
+                useForward = false,
+                keepSlot2 = isUsableMatrix(colorMatrix2),
+                droppedForward = forwardMatrix1 != null || forwardMatrix2 != null,
+            )
+        }
         val placeholder1 = SrgbColorMatrixPolicy.isPlaceholder(requireNotNull(colorMatrix1), illuminant1)
         val keepSlot2 = isUsableMatrix(colorMatrix2) &&
             (placeholder1 || !SrgbColorMatrixPolicy.isPlaceholder(requireNotNull(colorMatrix2), illuminant2))
@@ -95,20 +115,40 @@ internal object RawColorCalibrationPolicy {
     }
 
     // CameraCharacteristics is immutable; one capture resolves the same instance many times.
-    private val characteristicsCache =
-        Collections.synchronizedMap(WeakHashMap<CameraCharacteristics, CameraCalibration>())
+    private val characteristicsCache = Collections.synchronizedMap(
+        WeakHashMap<CameraCharacteristics, Pair<RawColorCalibrationMode, CameraCalibration>>()
+    )
 
-    fun fromCharacteristics(characteristics: CameraCharacteristics): CameraCalibration =
-        characteristicsCache.getOrPut(characteristics) { resolveCharacteristics(characteristics) }
+    fun fromCharacteristics(characteristics: CameraCharacteristics): CameraCalibration {
+        val mode = mode
+        characteristicsCache[characteristics]?.takeIf { it.first == mode }?.let { return it.second }
+        return resolveCharacteristics(characteristics, mode).also {
+            characteristicsCache[characteristics] = mode to it
+        }
+    }
 
-    private fun resolveCharacteristics(characteristics: CameraCharacteristics): CameraCalibration {
+    private fun resolveCharacteristics(
+        characteristics: CameraCharacteristics,
+        mode: RawColorCalibrationMode,
+    ): CameraCalibration {
+        if (mode == RawColorCalibrationMode.BUILT_IN) {
+            PLog.i(TAG, "Using built-in fixed DNG calibration")
+            return CameraCalibration(
+                FixedRawCalibration.colorMatrix1().toTransform(), FixedRawCalibration.colorMatrix2().toTransform(),
+                null, null,
+                FixedRawCalibration.ILLUMINANT1, FixedRawCalibration.ILLUMINANT2,
+                FixedRawCalibration.cameraCalibration1().toTransform(), FixedRawCalibration.cameraCalibration2().toTransform(),
+            )
+        }
         val illuminant1 = characteristics.get(CameraCharacteristics.SENSOR_REFERENCE_ILLUMINANT1) ?: 0
         val illuminant2 = characteristics.get(CameraCharacteristics.SENSOR_REFERENCE_ILLUMINANT2)?.toInt() ?: 0
         val cm1 = characteristics.get(CameraCharacteristics.SENSOR_COLOR_TRANSFORM1)
         val cm2 = characteristics.get(CameraCharacteristics.SENSOR_COLOR_TRANSFORM2)
-        val (fm1, fm2) = ForwardMatrixPolicy.fromCharacteristics(characteristics)
+        val (fm1, fm2) = ForwardMatrixPolicy.fromCharacteristics(
+            characteristics, rejectPlaceholder = mode == RawColorCalibrationMode.AUTO,
+        )
         val selection = select(
-            cm1?.toMatrix(), cm2?.toMatrix(), illuminant1, illuminant2, fm1?.toMatrix(), fm2?.toMatrix(),
+            cm1?.toMatrix(), cm2?.toMatrix(), illuminant1, illuminant2, fm1?.toMatrix(), fm2?.toMatrix(), mode,
         )
         log(selection, "source")
         if (selection == null) {
@@ -131,12 +171,31 @@ internal object RawColorCalibrationPolicy {
         )
     }
 
-    /** Call after original-payload ForwardMatrix rejection, while retaining illuminant slots. */
+    /**
+     * Call after original-payload ForwardMatrix rejection (AUTO only, see [mode]), while
+     * retaining illuminant slots.
+     */
     fun resolveProfile(profile: DcpProfile): DcpProfile {
+        val mode = mode
+        if (mode == RawColorCalibrationMode.BUILT_IN) {
+            PLog.i(TAG, "Using built-in fixed DNG calibration for embedded profile")
+            return profile.copy(
+                colorMatrix1 = FixedRawCalibration.colorMatrix1(), colorMatrix2 = FixedRawCalibration.colorMatrix2(),
+                forwardMatrix1 = null, forwardMatrix2 = null,
+                calibrationIlluminant1 = FixedRawCalibration.ILLUMINANT1,
+                calibrationIlluminant2 = FixedRawCalibration.ILLUMINANT2,
+                analogBalance = null,
+                cameraCalibration1 = FixedRawCalibration.cameraCalibration1(),
+                cameraCalibration2 = FixedRawCalibration.cameraCalibration2(),
+                // Tables tied to the replaced source calibration do not belong to it.
+                hueSatDeltas1 = null, hueSatDeltas2 = null, lookTable = null,
+            )
+        }
         val selection = select(
             profile.colorMatrix1, profile.colorMatrix2,
             profile.calibrationIlluminant1, profile.calibrationIlluminant2,
             profile.forwardMatrix1, profile.forwardMatrix2,
+            mode,
         )
         log(selection, "embedded")
         if (selection != null) {

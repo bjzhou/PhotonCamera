@@ -69,7 +69,11 @@ internal class EquivalentCameraCalibration(private val target: EquivalentCameraT
         }
 
         /** Use the physical source calibration, retaining FM only for FM-only RAWs. */
-        internal fun sourceToProPhoto(metadata: RawMetadata): FloatArray {
+        internal fun sourceToProPhoto(metadata: RawMetadata): FloatArray =
+            sourceToWorking(metadata, ColorSpace.ProPhoto)
+
+        /** Physical ColorMatrix path; ForwardMatrix only for FM-only sources. */
+        internal fun sourceToWorking(metadata: RawMetadata, colorSpace: ColorSpace): FloatArray {
             val calibration = requireNotNull(metadata.cameraCalibration) {
                 "Equivalent camera rendering requires source calibration"
             }
@@ -78,8 +82,8 @@ internal class EquivalentCameraCalibration(private val target: EquivalentCameraT
                 else it.copy(forwardMatrix1 = null, forwardMatrix2 = null)
             }
             return requireNotNull(DngSdkColorSpec.computeCameraToWorkingMatrix(
-                profile, metadata, ColorSpace.ProPhoto,
-            )) { "Unable to map source calibration to linear ProPhoto" }
+                profile, metadata, colorSpace,
+            )) { "Unable to map source calibration to linear $colorSpace" }
         }
 
         internal fun colorMatrixProfile(profile: DcpProfile): DcpProfile {

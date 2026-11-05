@@ -29,6 +29,7 @@
 #include "dng_memory_stream.h"
 #include "libraw/libraw.h"
 #include "math_utils.h"
+#include "fixed_raw_calibration.h"
 #include "srgb_color_matrix_policy.h"
 
 #ifndef LOG_TAG
@@ -1153,30 +1154,50 @@ static bool isSrgbPlaceholderForwardMatrixPair(const libraw_dng_color_t &first,
   return true;
 }
 
+// RawColorCalibrationMode.nativeCode.
+enum ColorCalibrationMode : int {
+  kColorCalibrationAuto = 0,
+  kColorCalibrationDngDefault = 1,
+  kColorCalibrationBuiltIn = 2,
+};
+
 struct SourceCalibrationSelection {
   bool useSource = false;  // false: no usable ColorMatrix1, use the legacy chain
   bool useForward = false;
   bool keepSlot2 = false;
+  bool useFixed = false;  // BUILT_IN: fixed_raw_calibration replaces the source
 };
 
-// Same order as RawColorCalibrationPolicy.kt. A usable ForwardMatrix set keeps the
-// source calibration as is: ColorMatrix then only locates the scene white, so an
+// Same order as RawColorCalibrationPolicy.kt. Auto: a usable ForwardMatrix set keeps
+// the source calibration as is: ColorMatrix then only locates the scene white, so an
 // sRGB placeholder ColorMatrix is kept. Otherwise ForwardMatrix is dropped and the
 // ColorMatrix is used alone, sRGB placeholder included; a placeholder second slot
-// is dropped only next to a real first slot. Without a structurally usable
-// ColorMatrix1 (including non-DNG RAW) the LibRaw fallback chain applies.
+// is dropped only next to a real first slot. DngDefault keeps that order with
+// structural checks only. BuiltIn replaces any DNG calibration with the fixed one.
+// Without a structurally usable ColorMatrix1 (including non-DNG RAW) the LibRaw
+// fallback chain applies.
 static SourceCalibrationSelection selectSourceCalibration(
     const libraw_dng_color_t *dngColor, const Matrix3x3 &colorMatrix1,
     const Matrix3x3 &colorMatrix2, int illuminant1, int illuminant2,
-    const Matrix3x3 &forwardMatrix1, const Matrix3x3 &forwardMatrix2) {
-  const bool rejectForward = isSrgbPlaceholderForwardMatrixPair(dngColor[0], dngColor[1]);
+    const Matrix3x3 &forwardMatrix1, const Matrix3x3 &forwardMatrix2,
+    int mode, bool isDngInput) {
+  if (mode == kColorCalibrationBuiltIn) {
+    if (!isDngInput) return {};
+    LOGI("Using built-in fixed DNG calibration (ColorMatrix only)");
+    SourceCalibrationSelection fixed;
+    fixed.useFixed = true;
+    return fixed;
+  }
+  const bool detect = mode != kColorCalibrationDngDefault;
+  const bool rejectForward =
+      detect && isSrgbPlaceholderForwardMatrixPair(dngColor[0], dngColor[1]);
   if (rejectForward) {
     LOGI("Ignoring identical 1/128-quantized sRGB-to-XYZ(D50) ForwardMatrix pair");
   }
   const bool hasForward1 = !rejectForward && dngColor[0].forwardmatrix_original_type != 0;
   const bool hasForward2 = !rejectForward && dngColor[1].forwardmatrix_original_type != 0;
-  const bool forwardUsable = hasForward1 && isUsableSourceMatrix(forwardMatrix1, true) &&
-      (!hasForward2 || isUsableSourceMatrix(forwardMatrix2, true));
+  const bool forwardUsable = hasForward1 && isUsableSourceMatrix(forwardMatrix1, detect) &&
+      (!hasForward2 || isUsableSourceMatrix(forwardMatrix2, detect));
   if (forwardUsable && isUsableSourceMatrix(colorMatrix1)) {
     return {true, true, isUsableSourceMatrix(colorMatrix2)};
   }
@@ -1184,6 +1205,7 @@ static SourceCalibrationSelection selectSourceCalibration(
     LOGI("Ignoring unusable ForwardMatrix set; using ColorMatrix only");
   }
   if (!isUsableSourceMatrix(colorMatrix1)) return {};
+  if (!detect) return {true, false, isUsableSourceMatrix(colorMatrix2)};
   const bool placeholder1 = srgb_color_matrix_policy::isPlaceholder(colorMatrix1.m, illuminant1);
   if (placeholder1) {
     LOGI("Keeping sRGB placeholder ColorMatrix, illuminant=%d", illuminant1);
@@ -1813,6 +1835,7 @@ static bool computeDngSdkCameraToPcsD50(
 
 static bool computeWbFromDngAsShotWhiteXY(const LibRaw &rawProcessor,
                                           const DngRawTagInfo &rawTags,
+                                          int colorCalibrationMode,
                                           float outWb[4]) {
   if (!rawTags.hasAsShotWhiteXY) {
     return false;
@@ -1849,13 +1872,26 @@ static bool computeWbFromDngAsShotWhiteXY(const LibRaw &rawProcessor,
   int illuminant2 = rawProcessor.imgdata.color.dng_color[1].illuminant;
   const SourceCalibrationSelection selection = selectSourceCalibration(
       rawProcessor.imgdata.color.dng_color, colorMatrix1, colorMatrix2,
-      illuminant1, illuminant2, forwardMatrix1, forwardMatrix2);
-  // Without a usable ColorMatrix1 the render path has no DNG calibration either.
-  if (!selection.useSource) {
+      illuminant1, illuminant2, forwardMatrix1, forwardMatrix2,
+      colorCalibrationMode, rawProcessor.imgdata.idata.dng_version != 0);
+  if (selection.useFixed) {
+    // AsShotWhiteXY-derived WB must use the same replacement as the render CCM.
+    memcpy(colorMatrix1.m, fixed_raw_calibration::colorMatrix1, sizeof(colorMatrix1.m));
+    memcpy(colorMatrix2.m, fixed_raw_calibration::colorMatrix2, sizeof(colorMatrix2.m));
+    illuminant1 = fixed_raw_calibration::illuminant1;
+    illuminant2 = fixed_raw_calibration::illuminant2;
+    Matrix3x3 calibration1, calibration2;
+    memcpy(calibration1.m, fixed_raw_calibration::cameraCalibration1, sizeof(calibration1.m));
+    memcpy(calibration2.m, fixed_raw_calibration::cameraCalibration2, sizeof(calibration2.m));
+    // Apply individual-camera calibration after CM normalization, as in the render path.
+    colorMatrix1 = calibration1.multiply(normalizeDngColorMatrix(colorMatrix1));
+    colorMatrix2 = calibration2.multiply(normalizeDngColorMatrix(colorMatrix2));
+  } else if (!selection.useSource) {
+    // Without a usable ColorMatrix1 the render path has no DNG calibration either.
     return false;
   }
   const bool hasColor1 = true;
-  const bool hasColor2 = selection.keepSlot2;
+  const bool hasColor2 = selection.useFixed || selection.keepSlot2;
   if (!findXyzToCamera(
           whiteXy, colorMatrix1, hasColor1, colorMatrix2, hasColor2,
           illuminant1, illuminant2, xyzToCamera)) {
@@ -3020,7 +3056,7 @@ JNIEXPORT jobject JNICALL
 Java_com_hinnka_mycamera_raw_RawDemosaicProcessor_processDngNative(
     JNIEnv *env, jobject /* this */, jstring filePath, jfloat xr, jfloat yr,
     jfloat xg, jfloat yg, jfloat xb, jfloat yb, jfloat xw, jfloat yw,
-    jboolean embeddedCalibrationOnly) {
+    jboolean embeddedCalibrationOnly, jint colorCalibrationMode) {
 
   const char *path = env->GetStringUTFChars(filePath, nullptr);
   if (path == nullptr) {
@@ -3310,7 +3346,8 @@ Java_com_hinnka_mycamera_raw_RawDemosaicProcessor_processDngNative(
   }
   const char *selectedWbSource = hasCameraWb ? "cam_mul" : "unity";
   if (!hasCameraWb &&
-      computeWbFromDngAsShotWhiteXY(RawProcessor, dngRawTagInfo, selectedWb)) {
+      computeWbFromDngAsShotWhiteXY(RawProcessor, dngRawTagInfo,
+                                    colorCalibrationMode, selectedWb)) {
     selectedWbSource = "AsShotWhiteXY";
   }
   float selectedBase = selectedWb[1] > 0.0f ? selectedWb[1] : 1.0f;
@@ -3512,7 +3549,8 @@ Java_com_hinnka_mycamera_raw_RawDemosaicProcessor_processDngNative(
   int illuminant2 = RawProcessor.imgdata.color.dng_color[1].illuminant;
   const SourceCalibrationSelection selection = selectSourceCalibration(
       RawProcessor.imgdata.color.dng_color, colorMatrix1, colorMatrix2,
-      illuminant1, illuminant2, forwardMatrix1, forwardMatrix2);
+      illuminant1, illuminant2, forwardMatrix1, forwardMatrix2,
+      colorCalibrationMode, isDngInput);
   bool hasColor1 = selection.useSource;
   bool hasColor2 = selection.useSource && selection.keepSlot2;
   bool hasForward1 = selection.useForward;
@@ -3531,6 +3569,19 @@ Java_com_hinnka_mycamera_raw_RawDemosaicProcessor_processDngNative(
     }
   }
 
+  if (selection.useFixed) {
+    memcpy(colorMatrix1.m, fixed_raw_calibration::colorMatrix1, sizeof(colorMatrix1.m));
+    memcpy(colorMatrix2.m, fixed_raw_calibration::colorMatrix2, sizeof(colorMatrix2.m));
+    hasColor1 = hasColor2 = true;
+    hasForward1 = hasForward2 = false;
+    illuminant1 = fixed_raw_calibration::illuminant1;
+    illuminant2 = fixed_raw_calibration::illuminant2;
+    memcpy(cameraCalibration1.m, fixed_raw_calibration::cameraCalibration1, sizeof(cameraCalibration1.m));
+    memcpy(cameraCalibration2.m, fixed_raw_calibration::cameraCalibration2, sizeof(cameraCalibration2.m));
+    hasCameraCalibration1 = hasCameraCalibration2 = true;
+    analogBalance = {1.0f, 1.0f, 1.0f};
+  }
+
   if (hasColor1 || hasColor2 || hasForward1 || hasForward2) {
     hasFixedColor1 = hasColor1;
     hasFixedColor2 = hasColor2;
@@ -3542,7 +3593,7 @@ Java_com_hinnka_mycamera_raw_RawDemosaicProcessor_processDngNative(
     fixedCameraCalibration2 = cameraCalibration2;
     fixedIlluminant1 = illuminant1;
     fixedIlluminant2 = illuminant2;
-    if ((RawProcessor.imgdata.color.dng_levels.parsedfields &
+    if (!selection.useFixed && (RawProcessor.imgdata.color.dng_levels.parsedfields &
          LIBRAW_DNGFM_ANALOGBALANCE) != 0) {
       hasFixedAnalogBalance = true;
       fixedAnalogBalance = analogBalance;

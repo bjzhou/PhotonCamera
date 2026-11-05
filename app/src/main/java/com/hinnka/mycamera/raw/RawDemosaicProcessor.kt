@@ -247,6 +247,7 @@ class RawDemosaicProcessor {
         xb: Float, yb: Float,
         xw: Float, yw: Float,
         embeddedCalibrationOnly: Boolean,
+        colorCalibrationMode: Int,
     ): DngRawData?
 
     private external fun estimateMgcReferenceSignalNative(
@@ -2315,6 +2316,7 @@ class RawDemosaicProcessor {
                 profileWorkingColorSpace.xb, profileWorkingColorSpace.yb,
                 profileWorkingColorSpace.xw, profileWorkingColorSpace.yw,
                 embeddedCalibrationOnly = requestedColorEngine.usesCameraInputDomain,
+                colorCalibrationMode = RawColorCalibrationPolicy.mode.nativeCode,
             )
             if (dngRawData == null) {
                 if (requestedColorEngine.usesCameraInputDomain) {

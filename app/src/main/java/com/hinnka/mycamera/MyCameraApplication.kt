@@ -8,6 +8,7 @@ import com.hinnka.mycamera.data.ContentRepository
 import com.hinnka.mycamera.gallery.GalleryManager
 import com.hinnka.mycamera.phantom.PhantomService
 import com.hinnka.mycamera.phantom.PhantomShortcutActivity
+import com.hinnka.mycamera.raw.RawColorCalibrationPolicy
 import com.hinnka.mycamera.raw.RawSceneExposureEstimator
 import com.hinnka.mycamera.screencapture.PhantomPipPreviewCoordinator
 import com.hinnka.mycamera.update.AppUpdateManager
@@ -46,6 +47,12 @@ class MyCameraApplication : Application() {
 //        AppUpdateManager.startSilentUpdate(this)
 
         val userPreferencesRepository = contentRepository.userPreferencesRepository
+        applicationScope.launch {
+            // Capture, DNG writing and DNG reading all read the policy's mode directly.
+            userPreferencesRepository.userPreferences.map { it.rawColorCalibrationMode }
+                .distinctUntilChanged()
+                .collect { RawColorCalibrationPolicy.mode = it }
+        }
         applicationScope.launch {
             StartupTrace.measure("Application.first userPreferences load") {
                 userPreferencesRepository.userPreferences.first()

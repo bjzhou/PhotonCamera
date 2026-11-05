@@ -160,12 +160,15 @@ class RawEnginePreviewResolver(private val context: Context, val settings: RawEn
         )
         val metadata = requireNotNull(DngSdkColorSpec.resolveSourceMetadata(sourceProfile, seed, ColorSpace.ProPhoto))
         val white = metadata.cameraWhite
+        // Without a reported CCM, estimate the ISP from the physical ColorMatrix path that
+        // the engine input also uses, so restore and input cancel. A selected ForwardMatrix
+        // (e.g. an sRGB placeholder kept by DNG_DEFAULT) does not describe the ISP.
         val sourceToSrgb = source.camera2Transform?.toFloatArray()?.also { matrix ->
             require(matrix.size == 9 && matrix.all(Float::isFinite))
             // Reported CCM consumes WB RGB; the DNG matrix includes WB derived from
             // this frame's gains. Both inverse paths must recover the same sensor domain.
             for (row in 0..2) for (column in 0..2) matrix[row * 3 + column] /= white[column]
-        } ?: requireNotNull(DngSdkColorSpec.computeCameraToWorkingMatrix(sourceProfile, seed, ColorSpace.SRGB))
+        } ?: EquivalentCameraCalibration.sourceToWorking(metadata, ColorSpace.SRGB)
         val inverse = requireNotNull(DngSdkColorSpec.invertMatrix3x3(sourceToSrgb)) {
             "Non-invertible preview CCM: camera=${source.cameraId}"
         }

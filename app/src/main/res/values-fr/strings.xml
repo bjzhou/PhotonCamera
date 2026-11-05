@@ -659,6 +659,11 @@
     <string name="settings_raw_output_upscale_mode_description">Sélectionne l\'algorithme de super-résolution du mode professionnel. L\'agrandissement RAISR et celui de Lanczos-3 sont mutuellement exclusifs.</string>
     <string name="settings_raw_output_upscale_mode_lanczos">Lanczos-3</string>
     <string name="settings_raw_output_upscale_mode_raisr">RAISR</string>
+    <string name="settings_raw_color_calibration_mode">Calibration des couleurs</string>
+    <string name="settings_raw_color_calibration_mode_description">Choisit la source des matrices couleur RAW. Auto détecte et ignore les matrices fictives signalées par l’appareil ; DNG par défaut privilégie la ForwardMatrix sans détection ; Correction intégrée utilise toujours une matrice de calibration intégrée.</string>
+    <string name="settings_raw_color_calibration_mode_auto">Auto</string>
+    <string name="settings_raw_color_calibration_mode_dng_default">DNG par défaut</string>
+    <string name="settings_raw_color_calibration_mode_built_in">Correction intégrée</string>
     <string name="settings_raw_max_output_scale_description_raisr">RAISR n\'agrandit qu\'en 2×, l\'échelle de sortie est donc fixe tant qu\'il est sélectionné.</string>
     <string name="settings_multi_frame_denoise_frame_count">Images de réduction du bruit multi-image</string>
     <string name="settings_multi_frame_denoise_frame_count_description">Nombre d\'images utilisées pour la réduction du bruit multi-image en mode Photo. Plus d\'images réduit davantage le bruit mais allonge le traitement.</string>

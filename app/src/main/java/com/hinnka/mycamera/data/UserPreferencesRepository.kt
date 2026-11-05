@@ -28,6 +28,7 @@ import com.hinnka.mycamera.camera.VendorCaptureSettings
 import com.hinnka.mycamera.camera.VendorCaptureSettingsByLens
 import com.hinnka.mycamera.gallery.PhotoSavePath
 import com.hinnka.mycamera.raw.ColorSpace
+import com.hinnka.mycamera.raw.RawColorCalibrationMode
 import com.hinnka.mycamera.raw.HncsFilmCurveMode
 import com.hinnka.mycamera.raw.HncsRenderIntent
 import com.hinnka.mycamera.raw.HncsProfileManager
@@ -214,6 +215,7 @@ data class UserPreferences(
     val rawMaxOutputScale: Float = MultiFrameConfig.DEFAULT_SUPER_RESOLUTION_SCALE, // RAWmax 输出倍率
     val rawOutputUpscaleMode: RawOutputUpscaleMode = RawOutputUpscaleMode.DEFAULT, // RAWmax 输出放大算法
     val rawDigitalZoomResamplingEnabled: Boolean = false,
+    val rawColorCalibrationMode: RawColorCalibrationMode = RawColorCalibrationMode.DEFAULT, // RAW 色彩标定矩阵来源
     val photoQuality: Int = 95, // 照片质量: 90, 95, 100
     val useHeicExport: Boolean = false, // 是否优先使用 HEIC 导出
     val useJpeg444Export: Boolean = false, // 是否使用 JPEG 4:4:4 色度采样导出
@@ -493,6 +495,7 @@ class UserPreferencesRepository(private val context: Context) {
         private val RAW_OUTPUT_UPSCALE_MODE = stringPreferencesKey("raw_output_upscale_mode")
         private val RAW_DIGITAL_ZOOM_RESAMPLING_ENABLED =
             booleanPreferencesKey("raw_digital_zoom_resampling_enabled")
+        private val RAW_COLOR_CALIBRATION_MODE = stringPreferencesKey("raw_color_calibration_mode")
         private val LEGACY_RAW_SUPER_RESOLUTION_SCALE = floatPreferencesKey("raw_super_resolution_scale")
         private val PHOTO_QUALITY = intPreferencesKey("photo_quality")
         private val USE_HEIC_EXPORT = booleanPreferencesKey("use_heic_export")
@@ -846,6 +849,8 @@ class UserPreferencesRepository(private val context: Context) {
                 rawOutputUpscaleMode = rawOutputUpscaleMode,
                 rawDigitalZoomResamplingEnabled =
                     preferences[RAW_DIGITAL_ZOOM_RESAMPLING_ENABLED] ?: false,
+                rawColorCalibrationMode =
+                    RawColorCalibrationMode.fromName(preferences[RAW_COLOR_CALIBRATION_MODE]),
                 photoQuality = preferences[PHOTO_QUALITY] ?: 95,
                 useHeicExport = useHeicExport,
                 useJpeg444Export = useJpeg444Export,
@@ -2186,6 +2191,12 @@ class UserPreferencesRepository(private val context: Context) {
     suspend fun saveRawDigitalZoomResamplingEnabled(enabled: Boolean) {
         context.dataStore.edit { preferences ->
             preferences[RAW_DIGITAL_ZOOM_RESAMPLING_ENABLED] = enabled
+        }
+    }
+
+    suspend fun saveRawColorCalibrationMode(mode: RawColorCalibrationMode) {
+        context.dataStore.edit { preferences ->
+            preferences[RAW_COLOR_CALIBRATION_MODE] = mode.name
         }
     }
 

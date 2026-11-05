@@ -101,6 +101,7 @@ import com.hinnka.mycamera.ui.theme.AccentColor
 import com.hinnka.mycamera.ui.theme.OnAccentColor
 import com.hinnka.mycamera.processor.DenoiseStrength
 import com.hinnka.mycamera.processor.MgcRawMaxMode
+import com.hinnka.mycamera.raw.RawColorCalibrationMode
 import com.hinnka.mycamera.raw.RawOutputUpscaleMode
 import com.hinnka.mycamera.raw.RawSceneExposureMath
 import androidx.core.net.toUri
@@ -427,6 +428,7 @@ fun SettingsScreen(
     val rawMaxOutputScale by viewModel.rawMaxOutputScale.collectAsState()
     val rawOutputUpscaleMode by viewModel.rawOutputUpscaleMode.collectAsState()
     val rawDigitalZoomResamplingEnabled by viewModel.rawDigitalZoomResamplingEnabled.collectAsState()
+    val rawColorCalibrationMode by viewModel.rawColorCalibrationMode.collectAsState()
     val availableDcps = viewModel.availableDcps
     val availableRawNoiseProfiles = viewModel.availableRawNoiseProfiles.filterNot {
         it.id == RawNoiseProfileManager.ADAPTIVE_PROFILE_ID
@@ -2160,6 +2162,30 @@ fun SettingsScreen(
                     SettingsSection(
                         title = stringResource(R.string.settings_professional_group_image_quality)
                     ) {
+                        QualityLevelSetting(
+                            title = stringResource(R.string.settings_raw_color_calibration_mode),
+                            description = stringResource(
+                                R.string.settings_raw_color_calibration_mode_description
+                            ),
+                            levels = listOf(
+                                RawColorCalibrationMode.AUTO to stringResource(
+                                    R.string.settings_raw_color_calibration_mode_auto
+                                ),
+                                RawColorCalibrationMode.DNG_DEFAULT to stringResource(
+                                    R.string.settings_raw_color_calibration_mode_dng_default
+                                ),
+                                RawColorCalibrationMode.BUILT_IN to stringResource(
+                                    R.string.settings_raw_color_calibration_mode_built_in
+                                ),
+                            ),
+                            currentLevel = rawColorCalibrationMode,
+                            onLevelSelected = viewModel::setRawColorCalibrationMode,
+                        )
+                        HorizontalDivider(
+                            color = Color.White.copy(alpha = 0.1f),
+                            modifier = Modifier.padding(vertical = 12.dp)
+                        )
+
                         SwitchSettingItem(
                             title = stringResource(R.string.settings_raw_digital_zoom_resampling),
                             description = stringResource(R.string.settings_raw_digital_zoom_resampling_description),

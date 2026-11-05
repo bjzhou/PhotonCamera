@@ -15,11 +15,12 @@ internal object ForwardMatrixPolicy {
     )
 
     fun fromCharacteristics(
-        characteristics: CameraCharacteristics
+        characteristics: CameraCharacteristics,
+        rejectPlaceholder: Boolean = true,
     ): Pair<ColorSpaceTransform?, ColorSpaceTransform?> {
         val first = characteristics.get(CameraCharacteristics.SENSOR_FORWARD_MATRIX1)
         val second = characteristics.get(CameraCharacteristics.SENSOR_FORWARD_MATRIX2)
-        if (isSrgbPlaceholderPair(first?.rationalWords(), second?.rationalWords())) {
+        if (rejectPlaceholder && isSrgbPlaceholderPair(first?.rationalWords(), second?.rationalWords())) {
             PLog.d("ForwardMatrixPolicy", "Ignoring identical 1/128-quantized sRGB-to-XYZ(D50) ForwardMatrix pair")
             return null to null
         }

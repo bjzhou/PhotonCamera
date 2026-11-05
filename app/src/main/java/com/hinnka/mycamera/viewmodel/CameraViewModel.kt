@@ -73,6 +73,7 @@ import com.hinnka.mycamera.raw.RawEnginePreviewResolver
 import com.hinnka.mycamera.raw.RawEnginePreviewSettings
 import com.hinnka.mycamera.raw.HncsFilmCurveMode
 import com.hinnka.mycamera.raw.HncsRenderIntent
+import com.hinnka.mycamera.raw.RawColorCalibrationMode
 import com.hinnka.mycamera.raw.RawOutputUpscaleMode
 import com.hinnka.mycamera.raw.HncsProfileManager
 import com.hinnka.mycamera.color.TransferCurve
@@ -1818,6 +1819,9 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     val rawDigitalZoomResamplingEnabled: StateFlow<Boolean> = userPreferencesRepository.userPreferences
         .map { it.rawDigitalZoomResamplingEnabled }
         .stateIn(viewModelScope, SharingStarted.Eagerly, false)
+    val rawColorCalibrationMode: StateFlow<RawColorCalibrationMode> = userPreferencesRepository.userPreferences
+        .map { it.rawColorCalibrationMode }
+        .stateIn(viewModelScope, SharingStarted.Eagerly, RawColorCalibrationMode.DEFAULT)
     val rawMaxOutputScale: StateFlow<Float> = userPreferencesRepository.userPreferences
         .map {
             MultiFrameConfig.normalizeOutputScale(
@@ -5148,6 +5152,12 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
      * 设置 RAWmax 输出放大算法。MGC RAISR 与原版一致只支持 2x per-shift 放大，
      * 因此选中时输出倍率由偏好层锁定为 2x，与 Lanczos 连续倍率放大互斥。
      */
+    fun setRawColorCalibrationMode(mode: RawColorCalibrationMode) {
+        viewModelScope.launch {
+            userPreferencesRepository.saveRawColorCalibrationMode(mode)
+        }
+    }
+
     fun setRawOutputUpscaleMode(mode: RawOutputUpscaleMode) {
         viewModelScope.launch {
             userPreferencesRepository.saveRawOutputUpscaleMode(mode)
