@@ -62,6 +62,7 @@ internal class PhotonDenoiseParams(
     val lumaLevels: Int,
     val alpha: FloatArray,
     val grain: FloatArray,
+    val gamma: FloatArray,
     val outlier: FloatArray,
     val gateLuma: FloatArray,
     val gateChroma: FloatArray,
@@ -147,6 +148,7 @@ internal class PhotonDenoiseParams(
         put("lumaLevels", lumaLevels)
         put("alpha", JSONArray(alpha.map(Float::toDouble)))
         put("grain", JSONArray(grain.map(Float::toDouble)))
+        put("gamma", JSONArray(gamma.map(Float::toDouble)))
         put("outlier", JSONArray(outlier.map(Float::toDouble)))
         put("gateLuma", JSONArray(gateLuma.map(Float::toDouble)))
         put("gateChroma", JSONArray(gateChroma.map(Float::toDouble)))
@@ -344,6 +346,7 @@ internal object PhotonNoiseModel {
             lumaLevels = min(PhotonDenoiseTuning.LUMA_LEVELS, levels),
             alpha = tuning.alpha.copyOf(levels),
             grain = tuning.grain.copyOf(levels),
+            gamma = tuning.gamma.copyOf(levels),
             outlier = tuning.outlier.copyOf(levels),
             gateLuma = tuning.gateLuma.copyOf(),
             gateChroma = tuning.gateChroma.copyOf(),

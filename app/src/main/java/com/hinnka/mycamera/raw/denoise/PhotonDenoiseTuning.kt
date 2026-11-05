@@ -24,6 +24,8 @@ internal object PhotonDenoiseTuning {
         val alpha: FloatArray,
         /** Luma residual noise ratio t_l per level (grain kept to avoid a plastic look). */
         val grain: FloatArray,
+        /** Exponent γ_l of the second-stage luma gain g = Ê₂ / (Ê₂ + α σ²) where g ≥ 0.25 (§6.1; 1 = MMSE). */
+        val gamma: FloatArray,
         /** Huber outlier distance d_l in units of σ. */
         val outlier: FloatArray,
         /** Luma significance gate of the chroma detail (χ²₉ quantiles). */
@@ -36,7 +38,8 @@ internal object PhotonDenoiseTuning {
         val bilateralChroma: Float,
     ) {
         init {
-            require(alpha.size == MAX_LEVELS && grain.size == MAX_LEVELS && outlier.size == MAX_LEVELS)
+            require(alpha.size == MAX_LEVELS && grain.size == MAX_LEVELS && gamma.size == MAX_LEVELS &&
+                outlier.size == MAX_LEVELS)
             require(gateLuma.size == 2 && gateChroma.size == 2)
         }
     }
@@ -54,6 +57,9 @@ internal object PhotonDenoiseTuning {
         n = 1f,
         alpha = floatArrayOf(1f, 1f, 1f, 1.2f, 1.2f, 1.2f, 1.2f),
         grain = floatArrayOf(0f, 0f, 0f, 0f, 0f, 0f, 0f),
+        // MMSE halves detail as large as the noise (L1/L2 of a face at ISO 694 kept 0.52 / 0.54
+        // of it): γ = 0.5 keeps ≈0.7 there; noise-only gains (< 0.25) stay MMSE (§6.1).
+        gamma = floatArrayOf(0.5f, 0.5f, 0.5f, 1f, 1f, 1f, 1f),
         outlier = floatArrayOf(2.5f, 2.5f, 2.5f, 2.5f, 2.5f, 2.5f, 2.5f),
         gateLuma = floatArrayOf(16.919f, 27.877f),
         gateChroma = floatArrayOf(5.991f, 13.816f),
@@ -141,6 +147,7 @@ internal object PhotonDenoiseTuning {
             n = n,
             alpha = mix(a.alpha, b.alpha),
             grain = mix(a.grain, b.grain),
+            gamma = mix(a.gamma, b.gamma),
             outlier = mix(a.outlier, b.outlier),
             gateLuma = mix(a.gateLuma, b.gateLuma),
             gateChroma = mix(a.gateChroma, b.gateChroma),

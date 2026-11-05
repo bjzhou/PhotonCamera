@@ -418,6 +418,7 @@ internal class PhotonMultiScaleDenoiser {
         uniform1f(program, "uAlpha", params.lumaAlpha(level))
         uniform1i(program, "uLumaEnabled", if (lumaEnabled) 1 else 0)
         uniform1f(program, "uGrain", params.lumaGrain(level))
+        uniform1f(program, "uGamma", params.gamma[level])
         uniform1i(program, "uChromaEnabled", if (chromaEnabled) 1 else 0)
         uniform1f(program, "uChromaStrength", minOf(params.chromaStrength, 1f))
         val thresholdScale = params.chromaThresholdScale()

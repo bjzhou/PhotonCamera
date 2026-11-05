@@ -624,6 +624,7 @@ internal object PhotonDenoiseShaders {
         uniform float uAlpha;
         uniform int uLumaEnabled;
         uniform float uGrain;
+        uniform float uGamma;               // §6.1 exponent of the second-stage gain
         uniform int uChromaEnabled;
         uniform float uChromaStrength;      // min(s, 1)
         uniform vec2 uGateLuma;
@@ -640,6 +641,8 @@ internal object PhotonDenoiseShaders {
         const int BAND_SIDE = TILE + 2 * BAND_BORDER;
         const int PILOT_SIDE = TILE + 2 * PILOT_BORDER;
         const float BASE_RADIUS = 1.25;
+        const float GAMMA_LOW = 0.25;
+        const float GAMMA_HIGH = 0.5;
         const float CENTRE_LOW = 6.0;
         const float CENTRE_HIGH = 10.0;
 
@@ -805,7 +808,10 @@ internal object PhotonDenoiseShaders {
                     }
                 }
                 float energy = num / den;
-                float shrunk = noise.x > 0.0 ? lap.x * energy / (energy + uAlpha * noise.x + 1e-30) : lap.x;
+                float gain = energy / (energy + uAlpha * noise.x + 1e-30);
+                // §6.1: gain^γ only where the gain shows detail; noise-only gains stay MMSE.
+                gain += smoothstep(GAMMA_LOW, GAMMA_HIGH, gain) * (pow(gain, uGamma) - gain);
+                float shrunk = noise.x > 0.0 ? lap.x * gain : lap.x;
                 lumaBand = shrunk + uGrain * (lap.x - shrunk);
             }
 
