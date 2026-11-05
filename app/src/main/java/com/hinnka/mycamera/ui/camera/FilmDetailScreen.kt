@@ -255,7 +255,7 @@ private fun ExamplePhotoCard(example: String) {
             Button(
                 onClick = {
                     coroutineScope.launch {
-                        userPreferencesRepository.saveReferencePhotoUrl(example)
+                        userPreferencesRepository.update { referencePhotoUrl = example }
                         Toast.makeText(context, R.string.reference_photo_set_success, Toast.LENGTH_SHORT).show()
                     }
                 },

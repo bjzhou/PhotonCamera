@@ -1,5 +1,8 @@
 package com.hinnka.mycamera.ui.settings
 
+import com.hinnka.mycamera.ui.prefs.rememberUserPreferencesRepository
+import com.hinnka.mycamera.data.UserPreferences
+import com.hinnka.mycamera.ui.prefs.preferenceValue
 import com.hinnka.mycamera.ui.components.AppModalBottomSheet
 
 import android.content.Context
@@ -136,6 +139,7 @@ import com.hinnka.mycamera.camera.VendorCaptureSettingsByLens
 import com.hinnka.mycamera.camera.VendorCaptureValueType
 import com.hinnka.mycamera.data.CaptureButtonStyle
 import com.hinnka.mycamera.data.VolumeKeyAction
+import com.hinnka.mycamera.ui.prefs.rememberPreference
 import com.hinnka.mycamera.frame.FrameInfo
 import com.hinnka.mycamera.gallery.PhotoSavePath
 import com.hinnka.mycamera.gallery.HeicExportEncoder
@@ -322,113 +326,117 @@ fun SettingsScreen(
     onPresetManagementClick: () -> Unit,
     modifier: Modifier = Modifier
 ) {
+    val preferencesRepository = rememberUserPreferencesRepository()
     val state by viewModel.state.collectAsState()
     val userPreferences by viewModel.userPreferences.collectAsState()
-    val showLevelIndicator by viewModel.showLevelIndicator.collectAsState(initial = false)
-    val focusPeakingEnabled by viewModel.focusPeakingEnabled.collectAsState(initial = true)
-    val eyeFocusEnabled by viewModel.eyeFocusEnabled.collectAsState()
-    val showGrid = state.showGrid
-    val shutterSoundEnabled by viewModel.shutterSoundEnabled.collectAsState(initial = true)
-    val vibrationEnabled by viewModel.vibrationEnabled.collectAsState(initial = true)
-    val keepScreenOn by viewModel.keepScreenOn.collectAsState(initial = false)
-    val windowScreenBrightness by viewModel.windowScreenBrightness.collectAsState()
-    val volumeKeyAction by viewModel.volumeKeyAction.collectAsState()
-    val topSheetAspectRatios by viewModel.topSheetAspectRatios.collectAsState()
-    val customAspectRatios by viewModel.customAspectRatios.collectAsState()
+    var showLevelIndicator by rememberPreference(UserPreferences::showLevelIndicator)
+    var focusPeakingEnabled by rememberPreference(UserPreferences::focusPeakingEnabled)
+    val eyeFocusEnabled by preferenceValue { it.eyeFocusEnabled }
+    var showGrid by rememberPreference(UserPreferences::showGrid)
+    var shutterSoundEnabled by rememberPreference(UserPreferences::shutterSoundEnabled)
+    var vibrationEnabled by rememberPreference(UserPreferences::vibrationEnabled)
+    var keepScreenOn by rememberPreference(UserPreferences::keepScreenOn)
+    val windowScreenBrightness by preferenceValue { it.windowScreenBrightness }
+    var volumeKeyAction by rememberPreference(UserPreferences::volumeKeyAction)
+    val topSheetAspectRatios by preferenceValue { it.topSheetAspectRatios }
+    val customAspectRatios by preferenceValue { it.customAspectRatios }
     val availablePhotoAspectRatios by viewModel.availablePhotoAspectRatios.collectAsState()
-    val autoSaveAfterCapture by viewModel.autoSaveAfterCapture.collectAsState(initial = true)
-    val nrLevel by viewModel.nrLevel.collectAsState(initial = NoiseReductionLevel.DEFAULT)
-    val edgeLevel by viewModel.edgeLevel.collectAsState(initial = 1)
-    val vendorCaptureSettingsByLens by viewModel.vendorCaptureSettingsByLens.collectAsState()
-    val customVendorKeySettings by viewModel.customVendorKeySettings.collectAsState()
-    val useRaw by viewModel.useRaw.collectAsState(initial = false)
-    val exportDngWithRawExport by viewModel.exportDngWithRawExport.collectAsState(initial = false)
-    val defaultFocalLength by viewModel.defaultFocalLength.collectAsState(initial = 0f)
-    val customLensIds by viewModel.customLensIds.collectAsState(initial = emptyList())
-    val lensIdBlacklist by viewModel.lensIdBlacklist.collectAsState(initial = emptyList())
-    val iszLensConfigs by viewModel.iszLensConfigs.collectAsState(initial = emptyList())
-    val preferredMainCameraId by viewModel.preferredMainCameraId.collectAsState(initial = null)
-    val preferredMacroCameraId by viewModel.preferredMacroCameraId.collectAsState(initial = null)
-    val enableLogicalMultiCameraDiscovery by viewModel.enableLogicalMultiCameraDiscovery.collectAsState(initial = false)
-    val logicalCameraBindingWhitelist by viewModel.logicalCameraBindingWhitelist.collectAsState(initial = emptyList())
-    val jpgMultiFrameDenoiseFrameCount by viewModel.jpgMultiFrameDenoiseFrameCount.collectAsState()
+    var autoSaveAfterCapture by rememberPreference(UserPreferences::autoSaveAfterCapture)
+    var nrLevel by rememberPreference(UserPreferences::nrLevel)
+    var edgeLevel by rememberPreference(UserPreferences::edgeLevel)
+    val retainCaptureSettings by preferenceValue { it.retainCaptureSettings }
+    var videoNrLevel by rememberPreference(UserPreferences::videoNrLevel)
+    var videoEdgeLevel by rememberPreference(UserPreferences::videoEdgeLevel)
+    val vendorCaptureSettingsByLens by preferenceValue { it.vendorCaptureSettingsByLens }
+    val customVendorKeySettings by preferenceValue { it.customVendorKeySettings }
+    val useRaw by preferenceValue { it.useRaw }
+    var exportDngWithRawExport by rememberPreference(UserPreferences::exportDngWithRawExport)
+    var defaultFocalLength by rememberPreference(UserPreferences::defaultFocalLength)
+    val customLensIds by preferenceValue { it.customLensIds }
+    val lensIdBlacklist by preferenceValue { it.lensIdBlacklist }
+    val iszLensConfigs by preferenceValue { it.iszLensConfigs }
+    val preferredMainCameraId by preferenceValue { it.preferredMainCameraId }
+    val preferredMacroCameraId by preferenceValue { it.preferredMacroCameraId }
+    var enableLogicalMultiCameraDiscovery by rememberPreference(UserPreferences::enableLogicalMultiCameraDiscovery)
+    val logicalCameraBindingWhitelist by preferenceValue { it.logicalCameraBindingWhitelist }
+    val jpgMultiFrameDenoiseFrameCount by preferenceValue { it.jpgMultiFrameDenoiseFrameCount }
     val jpgMultiFrameDenoiseOutputScale by viewModel.jpgMultiFrameDenoiseOutputScale.collectAsState()
-    val hdrPlusFrameCount by viewModel.hdrPlusFrameCount.collectAsState()
-    val hdrPlusMergeMode by viewModel.hdrPlusMergeMode.collectAsState()
-    val hdrPlusBracketExposureEnabled by viewModel.hdrPlusBracketExposureEnabled.collectAsState()
-    val hdrPlusLongFrameExposureEv by viewModel.hdrPlusLongFrameExposureEv.collectAsState()
-    val hdrPlusShortFrameExposureEv by viewModel.hdrPlusShortFrameExposureEv.collectAsState()
-    val mlAeMaxHdrRatio by viewModel.mlAeMaxHdrRatio.collectAsState()
+    val hdrPlusFrameCount by preferenceValue { it.hdrPlusFrameCount }
+    val hdrPlusMergeMode by preferenceValue { it.hdrPlusMergeMode }
+    val hdrPlusBracketExposureEnabled by preferenceValue { it.hdrPlusBracketExposureEnabled }
+    val hdrPlusLongFrameExposureEv by preferenceValue { it.hdrPlusLongFrameExposureEv }
+    val hdrPlusShortFrameExposureEv by preferenceValue { it.hdrPlusShortFrameExposureEv }
+    val mlAeMaxHdrRatio by preferenceValue { it.mlAeMaxHdrRatio }
     val effectiveHdrPlusBracketExposure = hdrPlusMergeMode.supportsBracketExposure &&
         hdrPlusBracketExposureEnabled
-    val multipleExposureCount by viewModel.multipleExposureCount.collectAsState()
-    val enableDevelopAnimation by viewModel.enableDevelopAnimation.collectAsState()
-    val colorPaletteEnabled by viewModel.colorPaletteEnabled.collectAsState()
-    val autoRotateEnabled by viewModel.autoRotateEnabled.collectAsState()
-    val developAnimationStyle by viewModel.developAnimationStyle.collectAsState()
-    val photoQuality by viewModel.photoQuality.collectAsState(initial = 95)
-    val useHeicExport by viewModel.useHeicExport.collectAsState(initial = false)
-    val useJpeg444Export by viewModel.useJpeg444Export.collectAsState(initial = false)
-    val useP010 by viewModel.useP010.collectAsState()
-    val useP3ColorSpace by viewModel.useP3ColorSpace.collectAsState()
-    val ultraHdrGainMapEnabled by viewModel.ultraHdrGainMapEnabled.collectAsState()
-    val useHdrScreenMode by viewModel.useHdrScreenMode.collectAsState()
+    var multipleExposureCount by rememberPreference(UserPreferences::multipleExposureCount)
+    var enableDevelopAnimation by rememberPreference(UserPreferences::enableDevelopAnimation)
+    var colorPaletteEnabled by rememberPreference(UserPreferences::colorPaletteEnabled)
+    var autoRotateEnabled by rememberPreference(UserPreferences::autoRotateEnabled)
+    val developAnimationStyle by preferenceValue { it.developAnimationStyle }
+    var photoQuality by rememberPreference(UserPreferences::photoQuality)
+    val useHeicExport by preferenceValue { it.useHeicExport }
+    val useJpeg444Export by preferenceValue { it.useJpeg444Export }
+    var useP010 by rememberPreference(UserPreferences::useP010)
+    val useP3ColorSpace by preferenceValue { it.useP3ColorSpace }
+    val ultraHdrGainMapEnabled by preferenceValue { it.ultraHdrGainMapEnabled }
+    var useHdrScreenMode by rememberPreference(UserPreferences::useHdrScreenMode)
     val isPurchased by viewModel.isPurchased.collectAsState()
-    val phantomMode by viewModel.phantomMode.collectAsState()
-    val phantomButtonHidden by viewModel.phantomButtonHidden.collectAsState()
-    val launchCameraOnPhantomMode by viewModel.launchCameraOnPhantomMode.collectAsState()
-    val phantomPipPreview by viewModel.phantomPipPreview.collectAsState()
-    val mirrorFrontCamera by viewModel.mirrorFrontCamera.collectAsState(initial = true)
+    val phantomMode by preferenceValue { it.phantomMode }
+    var phantomButtonHidden by rememberPreference(UserPreferences::phantomButtonHidden)
+    var launchCameraOnPhantomMode by rememberPreference(UserPreferences::launchCameraOnPhantomMode)
+    var phantomPipPreview by rememberPreference(UserPreferences::phantomPipPreview)
+    var mirrorFrontCamera by rememberPreference(UserPreferences::mirrorFrontCamera)
     val widgetTheme by viewModel.widgetTheme.collectAsState()
-    val saveLocation by viewModel.saveLocationEnabled.collectAsState(initial = false)
-    val photoSavePath by viewModel.photoSavePath.collectAsState()
-    val photoSaveTreeUri by viewModel.photoSaveTreeUri.collectAsState()
-    val videoRecordingPath by viewModel.videoRecordingPath.collectAsState()
-    val videoRecordingTreeUri by viewModel.videoRecordingTreeUri.collectAsState()
-    val separateVideoLutEnabled by viewModel.separateVideoLutEnabled.collectAsState()
-    val videoLutId by viewModel.videoLutId.collectAsState()
-    val videoLensLockEnabled by viewModel.videoLensLockEnabled.collectAsState()
-    val videoWhiteBalanceLockEnabled by viewModel.videoWhiteBalanceLockEnabled.collectAsState()
-    val openAIApiKey by viewModel.openAIApiKey.collectAsState()
-    val openAIUrl by viewModel.openAIUrl.collectAsState()
-    val openAIModel by viewModel.openAIModel.collectAsState()
+    var saveLocation by rememberPreference(UserPreferences::saveLocation)
+    val photoSavePath by preferenceValue { it.photoSavePath }
+    val photoSaveTreeUri by preferenceValue { it.photoSaveTreeUri }
+    val videoRecordingPath by preferenceValue { it.videoRecordingPath }
+    val videoRecordingTreeUri by preferenceValue { it.videoRecordingTreeUri }
+    val separateVideoLutEnabled by preferenceValue { it.separateVideoLutEnabled }
+    val videoLutId by preferenceValue { it.videoLutId }
+    var videoLensLockEnabled by rememberPreference(UserPreferences::videoLensLockEnabled)
+    var videoWhiteBalanceLockEnabled by rememberPreference(UserPreferences::videoWhiteBalanceLockEnabled)
+    val openAIApiKey by preferenceValue { it.openAIApiKey }
+    val openAIUrl by preferenceValue { it.openAIBaseUrl }
+    val openAIModel by preferenceValue { it.openAIModel }
     val availableOpenAIModels by viewModel.availableOpenAIModels.collectAsState()
     val isFetchingAIModels by viewModel.isFetchingAIModels.collectAsState()
-    val phantomSaveAsNew by viewModel.phantomSaveAsNew.collectAsState()
-    val phantomFrameId by viewModel.phantomFrameId.collectAsState()
-    val defaultVirtualAperture by viewModel.defaultVirtualAperture.collectAsState(initial = 0f)
-    val rawBaselineLutId by viewModel.rawBaselineLutId.collectAsState()
-    val rawDcpId by viewModel.rawDcpId.collectAsState()
-    val rawDcpIdsByLens by viewModel.rawDcpIdsByLens.collectAsState()
-    val rawNoiseProfileId by viewModel.rawNoiseProfileId.collectAsState()
-    val rawNoiseProfileIdsByLens by viewModel.rawNoiseProfileIdsByLens.collectAsState()
-    val rawHncsFilmCurveMode by viewModel.rawHncsFilmCurveMode.collectAsState()
-    val rawExposureCompensation by viewModel.rawExposureCompensation.collectAsState()
-    val rawHighlightsAdjustment by viewModel.rawHighlightsAdjustment.collectAsState()
-    val rawShadowsAdjustment by viewModel.rawShadowsAdjustment.collectAsState()
-    val rawMinShutterSpeedNs by viewModel.rawMinShutterSpeedNs.collectAsState()
-    val droMode by viewModel.droMode.collectAsState()
-    val rawBlackPointCorrection by viewModel.rawBlackPointCorrection.collectAsState()
-    val rawWhitePointCorrection by viewModel.rawWhitePointCorrection.collectAsState()
-    val rawLensShadingCorrectionEnabled by viewModel.rawLensShadingCorrectionEnabled.collectAsState()
-    val rawBlackLevelModes by viewModel.rawBlackLevelModes.collectAsState()
-    val rawCustomBlackLevels by viewModel.rawCustomBlackLevels.collectAsState()
-    val rawWhiteLevelModes by viewModel.rawWhiteLevelModes.collectAsState()
-    val rawCustomWhiteLevels by viewModel.rawCustomWhiteLevels.collectAsState()
-    val rawCfaCorrectionModes by viewModel.rawCfaCorrectionModes.collectAsState()
-    val rawColorEngine by viewModel.rawRenderingEngine.collectAsState()
-    val rawToneMappingParameters by viewModel.rawToneMappingParameters.collectAsState()
-    val rawMaxSharpening by viewModel.rawMaxSharpening.collectAsState()
-    val rawMaxNoiseReduction by viewModel.rawMaxNoiseReduction.collectAsState()
-    val rawMaxChromaNoiseReduction by viewModel.rawMaxChromaNoiseReduction.collectAsState()
-    val rawSpectralFilmStock by viewModel.rawSpectralFilmStock.collectAsState()
+    var phantomSaveAsNew by rememberPreference(UserPreferences::phantomSaveAsNew)
+    val phantomFrameId by preferenceValue { it.phantomFrameId }
+    val defaultVirtualAperture by preferenceValue { it.defaultVirtualAperture }
+    val rawBaselineLutId by preferenceValue { it.rawBaselineLutId }
+    val rawDcpId by preferenceValue { it.rawDcpId }
+    val rawDcpIdsByLens by preferenceValue { it.rawDcpIdsByLens }
+    val rawNoiseProfileId by preferenceValue { it.rawNoiseProfileId }
+    val rawNoiseProfileIdsByLens by preferenceValue { it.rawNoiseProfileIdsByLens }
+    val rawHncsFilmCurveMode by preferenceValue { it.rawHncsFilmCurveMode }
+    val rawExposureCompensation by preferenceValue { it.rawExposureCompensation }
+    val rawHighlightsAdjustment by preferenceValue { it.rawHighlightsAdjustment }
+    val rawShadowsAdjustment by preferenceValue { it.rawShadowsAdjustment }
+    var rawMinShutterSpeedNs by rememberPreference(UserPreferences::rawMinShutterSpeedNs)
+    val droMode by preferenceValue { it.droMode }
+    val rawBlackPointCorrection by preferenceValue { it.rawBlackPointCorrection }
+    val rawWhitePointCorrection by preferenceValue { it.rawWhitePointCorrection }
+    var rawLensShadingCorrectionEnabled by rememberPreference(UserPreferences::rawLensShadingCorrectionEnabled)
+    val rawBlackLevelModes by preferenceValue { it.rawBlackLevelModes }
+    val rawCustomBlackLevels by preferenceValue { it.rawCustomBlackLevels }
+    val rawWhiteLevelModes by preferenceValue { it.rawWhiteLevelModes }
+    val rawCustomWhiteLevels by preferenceValue { it.rawCustomWhiteLevels }
+    val rawCfaCorrectionModes by preferenceValue { it.rawCfaCorrectionModes }
+    val rawColorEngine by preferenceValue { it.rawRenderingEngine }
+    val rawToneMappingParameters by preferenceValue { it.rawToneMappingParameters }
+    val rawMaxSharpening by preferenceValue { it.rawMaxSharpening }
+    val rawMaxNoiseReduction by preferenceValue { it.rawMaxNoiseReduction }
+    val rawMaxChromaNoiseReduction by preferenceValue { it.rawMaxChromaNoiseReduction }
+    val rawSpectralFilmStock by preferenceValue { it.rawSpectralFilmStock }
     val rawSpectralFilmSelection by viewModel.rawSpectralFilmSelection.collectAsState()
-    val rawSpectralFilmPrint by viewModel.rawSpectralFilmPrint.collectAsState()
+    val rawSpectralFilmPrint by preferenceValue { it.rawSpectralFilmPrint }
     val rawFotufilmDocument by viewModel.rawFotufilmDocument.collectAsState()
     val rawMaxOutputScale by viewModel.rawMaxOutputScale.collectAsState()
-    val rawOutputUpscaleMode by viewModel.rawOutputUpscaleMode.collectAsState()
-    val rawDigitalZoomResamplingEnabled by viewModel.rawDigitalZoomResamplingEnabled.collectAsState()
-    val rawColorCalibrationMode by viewModel.rawColorCalibrationMode.collectAsState()
+    val rawOutputUpscaleMode by preferenceValue { it.rawOutputUpscaleMode }
+    val rawDigitalZoomResamplingEnabled by preferenceValue { it.rawDigitalZoomResamplingEnabled }
+    val rawColorCalibrationMode by preferenceValue { it.rawColorCalibrationMode }
     val availableDcps = viewModel.availableDcps
     val availableRawNoiseProfiles = viewModel.availableRawNoiseProfiles.filterNot {
         it.id == RawNoiseProfileManager.ADAPTIVE_PROFILE_ID
@@ -502,14 +510,14 @@ fun SettingsScreen(
         val normalizedProfileId = rawNoiseProfileId.takeIf(availableProfileIds::contains)
             ?: RawNoiseProfileManager.DEFAULT_PROFILE_ID
         if (normalizedProfileId != rawNoiseProfileId) {
-            viewModel.setRawNoiseProfileId(normalizedProfileId)
+            preferencesRepository.updateAsync { this.rawNoiseProfileId = normalizedProfileId }
         }
         val normalizedIdsByLens = rawNoiseProfileIdsByLens.mapValues { (_, profileId) ->
             profileId.takeIf(availableProfileIds::contains)
                 ?: RawNoiseProfileManager.DEFAULT_PROFILE_ID
         }
         if (normalizedIdsByLens != rawNoiseProfileIdsByLens) {
-            viewModel.setRawNoiseProfileIdsByLens(normalizedIdsByLens)
+            preferencesRepository.updateAsync { this.rawNoiseProfileIdsByLens = normalizedIdsByLens }
         }
     }
 
@@ -551,15 +559,17 @@ fun SettingsScreen(
 
     fun commitRawSliderValues() {
         isRawSliderAdjusting = false
-        viewModel.setRawExposureCompensation(rawExposureCompensationUi)
-        viewModel.setRawHighlightsAdjustment(rawHighlightsAdjustmentUi)
-        viewModel.setRawShadowsAdjustment(rawShadowsAdjustmentUi)
-        viewModel.setRawBlackPointCorrection(rawBlackPointCorrectionUi)
-        viewModel.setRawWhitePointCorrection(rawWhitePointCorrectionUi)
-        viewModel.setRawToneMappingParameters(rawToneMappingParametersUi)
-        viewModel.setRawMaxSharpening(rawMaxSharpeningUi)
-        viewModel.setRawMaxNoiseReduction(rawMaxNoiseReductionUi)
-        viewModel.setRawMaxChromaNoiseReduction(rawMaxChromaNoiseReductionUi)
+        preferencesRepository.updateAsync {
+            this.rawExposureCompensation = rawExposureCompensationUi
+            this.rawHighlightsAdjustment = rawHighlightsAdjustmentUi
+            this.rawShadowsAdjustment = rawShadowsAdjustmentUi
+            this.rawBlackPointCorrection = rawBlackPointCorrectionUi
+            this.rawWhitePointCorrection = rawWhitePointCorrectionUi
+            this.rawToneMappingParameters = rawToneMappingParametersUi
+            this.rawMaxSharpening = rawMaxSharpeningUi
+            this.rawMaxNoiseReduction = rawMaxNoiseReductionUi
+            this.rawMaxChromaNoiseReduction = rawMaxChromaNoiseReductionUi
+        }
     }
 
     val context = androidx.compose.ui.platform.LocalContext.current
@@ -778,7 +788,7 @@ fun SettingsScreen(
     ) { permissions ->
         val granted = permissions.values.all { it }
         if (granted) {
-            viewModel.setSaveLocation(true)
+            saveLocation = true
         }
     }
 
@@ -1100,7 +1110,7 @@ fun SettingsScreen(
                             title = stringResource(R.string.settings_grid_lines),
                             description = stringResource(R.string.settings_grid_description),
                             checked = showGrid,
-                            onCheckedChange = { viewModel.setShowGrid(it) }
+                            onCheckedChange = { showGrid = it }
                         )
 
                         val gridStyleLabels = GridStyle.entries.associateWith { style ->
@@ -1134,7 +1144,7 @@ fun SettingsScreen(
                             title = stringResource(R.string.settings_level_indicator),
                             description = stringResource(R.string.settings_level_description),
                             checked = showLevelIndicator,
-                            onCheckedChange = { viewModel.setShowLevelIndicator(it) }
+                            onCheckedChange = { showLevelIndicator = it }
                         )
 
                         HorizontalDivider(
@@ -1146,7 +1156,7 @@ fun SettingsScreen(
                             title = stringResource(R.string.settings_focus_peaking),
                             description = stringResource(R.string.settings_focus_peaking_description),
                             checked = focusPeakingEnabled,
-                            onCheckedChange = { viewModel.setFocusPeakingEnabled(it) }
+                            onCheckedChange = { focusPeakingEnabled = it }
                         )
 
                         HorizontalDivider(
@@ -1190,7 +1200,7 @@ fun SettingsScreen(
                         DefaultFocalLengthSetting(
                             viewModel = viewModel,
                             currentFocalLength = defaultFocalLength,
-                            onFocalLengthSelected = { viewModel.setDefaultFocalLength(it) }
+                            onFocalLengthSelected = { defaultFocalLength = it }
                         )
 
                         if (mainCameraIdOptions.size > 1) {
@@ -1347,7 +1357,7 @@ fun SettingsScreen(
                             title = stringResource(R.string.settings_logical_multi_camera_discovery),
                             description = stringResource(R.string.settings_logical_multi_camera_discovery_description),
                             checked = enableLogicalMultiCameraDiscovery,
-                            onCheckedChange = { viewModel.setEnableLogicalMultiCameraDiscovery(it) }
+                            onCheckedChange = { enableLogicalMultiCameraDiscovery = it }
                         )
 
                         HorizontalDivider(
@@ -1441,7 +1451,7 @@ fun SettingsScreen(
                             title = stringResource(R.string.settings_mirror_front_camera),
                             description = stringResource(R.string.settings_mirror_front_camera_description),
                             checked = mirrorFrontCamera,
-                            onCheckedChange = { viewModel.setMirrorFrontCamera(it) }
+                            onCheckedChange = { mirrorFrontCamera = it }
                         )
 
                         HorizontalDivider(
@@ -1460,7 +1470,7 @@ fun SettingsScreen(
                                 6 to "6"
                             ),
                             currentLevel = multipleExposureCount,
-                            onLevelSelected = { viewModel.setMultipleExposureCount(it) }
+                            onLevelSelected = { multipleExposureCount = it }
                         )
 
                         HorizontalDivider(
@@ -1477,7 +1487,7 @@ fun SettingsScreen(
                                 100 to "100"
                             ),
                             currentLevel = photoQuality,
-                            onLevelSelected = { viewModel.setPhotoQuality(it) }
+                            onLevelSelected = { photoQuality = it }
                         )
 
                         if (isHeicExportSupported) {
@@ -1490,7 +1500,7 @@ fun SettingsScreen(
                                 title = stringResource(R.string.settings_use_heic_export),
                                 description = stringResource(R.string.settings_use_heic_export_description),
                                 checked = useHeicExport,
-                                onCheckedChange = { viewModel.setUseHeicExport(it) }
+                                onCheckedChange = { preferencesRepository.updateAsync { this.useHeicExport = it } }
                             )
                         }
 
@@ -1504,7 +1514,7 @@ fun SettingsScreen(
                                 title = stringResource(R.string.settings_use_jpeg_444_export),
                                 description = stringResource(R.string.settings_use_jpeg_444_export_description),
                                 checked = useJpeg444Export,
-                                onCheckedChange = { viewModel.setUseJpeg444Export(it) }
+                                onCheckedChange = { preferencesRepository.updateAsync { this.useJpeg444Export = it } }
                             )
                         }
 
@@ -1549,7 +1559,7 @@ fun SettingsScreen(
                             title = stringResource(R.string.settings_auto_save),
                             description = stringResource(R.string.settings_auto_save_description),
                             checked = autoSaveAfterCapture,
-                            onCheckedChange = { viewModel.setAutoSaveAfterCapture(it) }
+                            onCheckedChange = { autoSaveAfterCapture = it }
                         )
 
                         HorizontalDivider(
@@ -1573,7 +1583,7 @@ fun SettingsScreen(
                                     ) == android.content.pm.PackageManager.PERMISSION_GRANTED
 
                                     if (fineLocation || coarseLocation) {
-                                        viewModel.setSaveLocation(true)
+                                        saveLocation = true
                                     } else {
                                         locationPermissionLauncher.launch(
                                             arrayOf(
@@ -1583,7 +1593,7 @@ fun SettingsScreen(
                                         )
                                     }
                                 } else {
-                                    viewModel.setSaveLocation(false)
+                                    saveLocation = false
                                 }
                             }
                         )
@@ -1629,8 +1639,8 @@ fun SettingsScreen(
                                 NoiseReductionLevel.ZERO_SHUTTER_LAG to stringResource(R.string.settings_nr_level_zsl),
                                 NoiseReductionLevel.MINIMAL to stringResource(R.string.settings_nr_level_minimal)
                             ),
-                            currentLevel = userPreferences.videoNrLevel,
-                            onLevelSelected = viewModel::setVideoNRLevel
+                            currentLevel = videoNrLevel,
+                            onLevelSelected = { videoNrLevel = it }
                         )
 
                         HorizontalDivider(
@@ -1647,8 +1657,8 @@ fun SettingsScreen(
                                 2 to stringResource(R.string.settings_nr_level_high_quality),
                                 3 to stringResource(R.string.settings_nr_level_zsl)
                             ),
-                            currentLevel = userPreferences.videoEdgeLevel,
-                            onLevelSelected = viewModel::setVideoEdgeLevel
+                            currentLevel = videoEdgeLevel,
+                            onLevelSelected = { videoEdgeLevel = it }
                         )
 
                         HorizontalDivider(
@@ -1853,7 +1863,7 @@ fun SettingsScreen(
                             title = stringResource(R.string.settings_video_lock_lens),
                             description = stringResource(R.string.settings_video_lock_lens_description),
                             checked = videoLensLockEnabled,
-                            onCheckedChange = viewModel::setVideoLensLockEnabled
+                            onCheckedChange = { videoLensLockEnabled = it }
                         )
 
                         HorizontalDivider(
@@ -1865,7 +1875,7 @@ fun SettingsScreen(
                             title = stringResource(R.string.settings_video_lock_white_balance),
                             description = stringResource(R.string.settings_video_lock_white_balance_description),
                             checked = videoWhiteBalanceLockEnabled,
-                            onCheckedChange = viewModel::setVideoWhiteBalanceLockEnabled
+                            onCheckedChange = { videoWhiteBalanceLockEnabled = it }
                         )
 
                         HorizontalDivider(
@@ -1966,7 +1976,7 @@ fun SettingsScreen(
                                 NoiseReductionLevel.MINIMAL to stringResource(R.string.settings_nr_level_minimal)
                             ),
                             currentLevel = nrLevel,
-                            onLevelSelected = { viewModel.setNRLevel(it) }
+                            onLevelSelected = { nrLevel = it }
                         )
 
                         HorizontalDivider(
@@ -1984,7 +1994,7 @@ fun SettingsScreen(
                                 3 to stringResource(R.string.settings_nr_level_zsl)
                             ),
                             currentLevel = edgeLevel,
-                            onLevelSelected = { viewModel.setEdgeLevel(it) }
+                            onLevelSelected = { edgeLevel = it }
                         )
 
                         if (state.isP010Supported) {
@@ -1997,7 +2007,7 @@ fun SettingsScreen(
                                 title = stringResource(R.string.settings_use_p010),
                                 description = stringResource(R.string.settings_use_p010_description),
                                 checked = useP010,
-                                onCheckedChange = { viewModel.setUseP010(it) }
+                                onCheckedChange = { useP010 = it }
                             )
                         }
 
@@ -2130,7 +2140,7 @@ fun SettingsScreen(
                             valueRange = RawSceneExposureMath.MIN_CONFIGURED_MAX_HDR_RATIO..
                                 RawSceneExposureMath.MAX_CONFIGURED_MAX_HDR_RATIO,
                             onValueChange = { mlAeMaxHdrRatioUi = (it * 10f).roundToInt() / 10f },
-                            onValueChangeFinished = { viewModel.setMlAeMaxHdrRatio(mlAeMaxHdrRatioUi) },
+                            onValueChangeFinished = { preferencesRepository.updateAsync { this.mlAeMaxHdrRatio = mlAeMaxHdrRatioUi } },
                             resetValue = RawSceneExposureMath.FAST_MOMENTS_MAX_HDR_RATIO,
                             valueTextFormatter = { String.format(Locale.getDefault(), "%.1f×", it) },
                         )
@@ -2153,7 +2163,7 @@ fun SettingsScreen(
                                 }
                             },
                             currentLevel = rawMinShutterSpeedNs,
-                            onLevelSelected = viewModel::setRawMinShutterSpeedNs,
+                            onLevelSelected = { rawMinShutterSpeedNs = it },
                         )
                     }
 
@@ -2179,7 +2189,7 @@ fun SettingsScreen(
                                 ),
                             ),
                             currentLevel = rawColorCalibrationMode,
-                            onLevelSelected = viewModel::setRawColorCalibrationMode,
+                            onLevelSelected = { preferencesRepository.updateAsync { this.rawColorCalibrationMode = it } },
                         )
                         HorizontalDivider(
                             color = Color.White.copy(alpha = 0.1f),
@@ -2190,7 +2200,7 @@ fun SettingsScreen(
                             title = stringResource(R.string.settings_raw_digital_zoom_resampling),
                             description = stringResource(R.string.settings_raw_digital_zoom_resampling_description),
                             checked = rawDigitalZoomResamplingEnabled,
-                            onCheckedChange = viewModel::setRawDigitalZoomResamplingEnabled,
+                            onCheckedChange = { preferencesRepository.updateAsync { this.rawDigitalZoomResamplingEnabled = it } },
                         )
                         HorizontalDivider(
                             color = Color.White.copy(alpha = 0.1f),
@@ -2278,8 +2288,8 @@ fun SettingsScreen(
                                 selectedProfileId = rawNoiseProfileId,
                                 profileIdsByLens = rawNoiseProfileIdsByLens,
                                 availableProfiles = availableRawNoiseProfiles,
-                                onSelectProfile = viewModel::setRawNoiseProfileId,
-                                onProfileIdsByLensChange = viewModel::setRawNoiseProfileIdsByLens,
+                                onSelectProfile = { preferencesRepository.updateAsync { this.rawNoiseProfileId = it } },
+                                onProfileIdsByLensChange = { preferencesRepository.updateAsync { this.rawNoiseProfileIdsByLens = it } },
                                 onImportProfile = {
                                     importRawNoiseProfileLauncher.launch(arrayOf("*/*"))
                                 },
@@ -2410,7 +2420,7 @@ fun SettingsScreen(
                                     R.string.settings_ultra_hdr_gain_map_description
                                 ),
                                 checked = ultraHdrGainMapEnabled,
-                                onCheckedChange = viewModel::setUltraHdrGainMapEnabled,
+                                onCheckedChange = { preferencesRepository.updateAsync { this.ultraHdrGainMapEnabled = it } },
                             )
 
                             HorizontalDivider(
@@ -2427,7 +2437,7 @@ fun SettingsScreen(
                                 true to stringResource(R.string.settings_professional_export_raw_jpg),
                             ),
                             currentLevel = exportDngWithRawExport,
-                            onLevelSelected = viewModel::setExportDngWithRawExport,
+                            onLevelSelected = { exportDngWithRawExport = it },
                         )
                     }
 
@@ -2440,7 +2450,7 @@ fun SettingsScreen(
                             title = stringResource(R.string.settings_raw_lens_shading_correction),
                             description = stringResource(R.string.settings_raw_lens_shading_correction_description),
                             checked = rawLensShadingCorrectionEnabled,
-                            onCheckedChange = { viewModel.setRawLensShadingCorrectionEnabled(it) }
+                            onCheckedChange = { rawLensShadingCorrectionEnabled = it }
                         )
 
                         HorizontalDivider(
@@ -2489,7 +2499,7 @@ fun SettingsScreen(
                                 title = stringResource(R.string.settings_phantom_button_hidden),
                                 description = stringResource(R.string.settings_phantom_button_hidden_description),
                                 checked = phantomButtonHidden,
-                                onCheckedChange = { viewModel.setPhantomButtonHidden(it) }
+                                onCheckedChange = { phantomButtonHidden = it }
                             )
 
                             HorizontalDivider(
@@ -2501,7 +2511,7 @@ fun SettingsScreen(
                                 title = stringResource(R.string.settings_launch_camera_on_phantom_mode),
                                 description = stringResource(R.string.settings_launch_camera_on_phantom_mode_description),
                                 checked = launchCameraOnPhantomMode,
-                                onCheckedChange = { viewModel.setLaunchCameraOnPhantomMode(it) }
+                                onCheckedChange = { launchCameraOnPhantomMode = it }
                             )
 
                             HorizontalDivider(
@@ -2513,7 +2523,7 @@ fun SettingsScreen(
                                 title = stringResource(R.string.settings_phantom_pip_preview),
                                 description = stringResource(R.string.settings_phantom_pip_preview_description),
                                 checked = phantomPipPreview,
-                                onCheckedChange = { viewModel.setPhantomPipPreview(it) }
+                                onCheckedChange = { phantomPipPreview = it }
                             )
 
                             HorizontalDivider(
@@ -2536,7 +2546,7 @@ fun SettingsScreen(
                                 title = stringResource(R.string.settings_phantom_save_as_new),
                                 description = stringResource(R.string.settings_phantom_save_as_new_description),
                                 checked = phantomSaveAsNew,
-                                onCheckedChange = { viewModel.setPhantomSaveAsNew(it) }
+                                onCheckedChange = { phantomSaveAsNew = it }
                             )
 
                             HorizontalDivider(
@@ -2549,7 +2559,7 @@ fun SettingsScreen(
                                 description = stringResource(R.string.settings_phantom_frame_description),
                                 availableFrames = availableFrames,
                                 currentFrameId = phantomFrameId,
-                                onFrameSelected = viewModel::setPhantomFrame
+                                onFrameSelected = { preferencesRepository.updateAsync { this.phantomFrameId = it } }
                             )
 
                         }
@@ -2581,7 +2591,7 @@ fun SettingsScreen(
 
                         AccentColorSetting(
                             color = userPreferences.accentColor,
-                            onColorSelected = viewModel::setAccentColor
+                            onColorSelected = { preferencesRepository.updateAsync { this.accentColor = it } }
                         )
 
                         HorizontalDivider(
@@ -2617,7 +2627,7 @@ fun SettingsScreen(
                             title = stringResource(R.string.settings_auto_rotate),
                             description = stringResource(R.string.settings_auto_rotate_description),
                             checked = autoRotateEnabled,
-                            onCheckedChange = viewModel::setAutoRotateEnabled
+                            onCheckedChange = { autoRotateEnabled = it }
                         )
 
                         HorizontalDivider(
@@ -2629,7 +2639,7 @@ fun SettingsScreen(
                             title = stringResource(R.string.settings_color_palette),
                             description = stringResource(R.string.settings_color_palette_description),
                             checked = colorPaletteEnabled,
-                            onCheckedChange = viewModel::setColorPaletteEnabled
+                            onCheckedChange = { colorPaletteEnabled = it }
                         )
 
                         HorizontalDivider(
@@ -2641,7 +2651,7 @@ fun SettingsScreen(
                             title = stringResource(R.string.settings_develop_animation),
                             description = stringResource(R.string.settings_develop_animation_description),
                             checked = enableDevelopAnimation,
-                            onCheckedChange = { viewModel.setEnableDevelopAnimation(it) }
+                            onCheckedChange = { enableDevelopAnimation = it }
                         )
                         if (enableDevelopAnimation) {
                             QualityLevelSetting(
@@ -2654,7 +2664,7 @@ fun SettingsScreen(
                                         stringResource(R.string.settings_develop_animation_style_instant_print)
                                 ),
                                 currentLevel = developAnimationStyle,
-                                onLevelSelected = { viewModel.setDevelopAnimationStyle(it) },
+                                onLevelSelected = { preferencesRepository.updateAsync { this.developAnimationStyle = it } },
                                 modifier = Modifier.padding(top = 8.dp, bottom = 4.dp)
                             )
                         }
@@ -2707,7 +2717,7 @@ fun SettingsScreen(
                             title = stringResource(R.string.settings_openai_api_key),
                             description = stringResource(R.string.settings_openai_api_key_desc),
                             value = openAIApiKey ?: "",
-                            onValueChange = { viewModel.setOpenAIApiKey(it) },
+                            onValueChange = { preferencesRepository.updateAsync { this.openAIApiKey = it } },
                             isSecret = true,
                         )
 
@@ -2720,7 +2730,7 @@ fun SettingsScreen(
                             title = stringResource(R.string.settings_openai_base_url),
                             description = stringResource(R.string.settings_openai_base_url_desc),
                             value = openAIUrl ?: OpenAIApiClient.DEFAULT_API_URL,
-                            onValueChange = { viewModel.setOpenAIUrl(it) }
+                            onValueChange = { preferencesRepository.updateAsync { this.openAIBaseUrl = it } }
                         )
 
                         HorizontalDivider(
@@ -2742,7 +2752,7 @@ fun SettingsScreen(
                                     customAIModelValue = openAIModel ?: ""
                                     showCustomAIModelDialog = true
                                 } else {
-                                    viewModel.setOpenAIModel(it)
+                                    preferencesRepository.updateAsync { this.openAIModel = it }
                                 }
                             }
                         )
@@ -2758,7 +2768,7 @@ fun SettingsScreen(
                         SwitchSettingItem(
                             title = stringResource(R.string.settings_retain_capture_settings),
                             description = stringResource(R.string.settings_retain_capture_settings_description),
-                            checked = userPreferences.retainCaptureSettings,
+                            checked = retainCaptureSettings,
                             onCheckedChange = viewModel::setRetainCaptureSettings
                         )
 
@@ -2771,7 +2781,7 @@ fun SettingsScreen(
                             title = stringResource(R.string.settings_shutter_sound),
                             description = stringResource(R.string.settings_shutter_sound_description),
                             checked = shutterSoundEnabled,
-                            onCheckedChange = { viewModel.setShutterSoundEnabled(it) }
+                            onCheckedChange = { shutterSoundEnabled = it }
                         )
 
                         CaptureSoundSetting(viewModel)
@@ -2785,7 +2795,7 @@ fun SettingsScreen(
                             title = stringResource(R.string.settings_vibration),
                             description = stringResource(R.string.settings_vibration_description),
                             checked = vibrationEnabled,
-                            onCheckedChange = { viewModel.setVibrationEnabled(it) }
+                            onCheckedChange = { vibrationEnabled = it }
                         )
 
                         HorizontalDivider(
@@ -2797,7 +2807,7 @@ fun SettingsScreen(
                             title = stringResource(R.string.settings_keep_screen_on),
                             description = stringResource(R.string.settings_keep_screen_on_description),
                             checked = keepScreenOn,
-                            onCheckedChange = { viewModel.setKeepScreenOn(it) }
+                            onCheckedChange = { keepScreenOn = it }
                         )
 
                         HorizontalDivider(
@@ -2815,7 +2825,7 @@ fun SettingsScreen(
                             },
                             onValueChangeFinished = {
                                 if (windowScreenBrightnessEnabled) {
-                                    viewModel.setWindowScreenBrightness(windowScreenBrightnessUi)
+                                    preferencesRepository.updateAsync { this.windowScreenBrightness = windowScreenBrightnessUi }
                                 }
                             },
                             valueTextFormatter = { String.format("%.2f", it) },
@@ -2823,9 +2833,7 @@ fun SettingsScreen(
                             toggleValue = windowScreenBrightnessEnabled,
                             onToggleChange = { enabled ->
                                 windowScreenBrightnessEnabled = enabled
-                                viewModel.setWindowScreenBrightness(
-                                    if (enabled) windowScreenBrightnessUi else null
-                                )
+                                preferencesRepository.updateAsync { this.windowScreenBrightness = if (enabled) windowScreenBrightnessUi else null }
                             }
                         )
 
@@ -2839,7 +2847,7 @@ fun SettingsScreen(
                                 title = stringResource(R.string.settings_screen_hdr),
                                 description = stringResource(R.string.settings_screen_hdr_description),
                                 checked = useHdrScreenMode,
-                                onCheckedChange = { viewModel.setUseHdrScreenMode(it) }
+                                onCheckedChange = { useHdrScreenMode = it }
                             )
                         }
 
@@ -2850,7 +2858,7 @@ fun SettingsScreen(
 
                         VolumeKeyActionSetting(
                             action = volumeKeyAction,
-                            onActionSelected = { viewModel.setVolumeKeyAction(it) }
+                            onActionSelected = { volumeKeyAction = it }
                         )
                     }
                 }
@@ -3117,7 +3125,7 @@ fun SettingsScreen(
                 TextButton(
                     onClick = {
                         if (customAIModelValue.isNotBlank()) {
-                            viewModel.setOpenAIModel(customAIModelValue.trim())
+                            preferencesRepository.updateAsync { this.openAIModel = customAIModelValue.trim() }
                         }
                         showCustomAIModelDialog = false
                     }
@@ -6168,8 +6176,8 @@ fun DefaultFocalLengthSetting(
 ) {
     var showAddDialog by remember { mutableStateOf(false) }
     var inputValue by remember { mutableStateOf("") }
-    val customFocalLengths by viewModel.customFocalLengths.collectAsState(initial = emptyList())
-    val hiddenFocalLengths by viewModel.hiddenFocalLengths.collectAsState(initial = emptyList())
+    val customFocalLengths by preferenceValue { it.customFocalLengths }
+    val hiddenFocalLengths by preferenceValue { it.hiddenFocalLengths }
     val cameraState by viewModel.state.collectAsState()
 
     Column(modifier = modifier.fillMaxWidth()) {
@@ -6311,7 +6319,8 @@ fun BackgroundSetting(
     viewModel: CameraViewModel,
     modifier: Modifier = Modifier
 ) {
-    val currentBg by viewModel.backgroundImage.collectAsState()
+    val preferencesRepository = rememberUserPreferencesRepository()
+    val currentBg by preferenceValue { it.backgroundImage }
     val context = androidx.compose.ui.platform.LocalContext.current
 
     val launcher = androidx.activity.compose.rememberLauncherForActivityResult(
@@ -6339,7 +6348,7 @@ fun BackgroundSetting(
                 BackgroundItem(
                     name = bgName,
                     isSelected = currentBg == bgName,
-                    onClick = { viewModel.setBackgroundImage(bgName) }
+                    onClick = { preferencesRepository.updateAsync { this.backgroundImage = bgName } }
                 )
             }
 
@@ -6366,9 +6375,10 @@ private fun CaptureButtonAppearanceSetting(
     viewModel: CameraViewModel,
     modifier: Modifier = Modifier
 ) {
-    val style by viewModel.captureButtonStyle.collectAsState()
-    val color by viewModel.captureButtonColor.collectAsState()
-    val imagePath by viewModel.captureButtonImagePath.collectAsState()
+    val preferencesRepository = rememberUserPreferencesRepository()
+    val style by preferenceValue { it.captureButtonStyle }
+    val color by preferenceValue { it.captureButtonColor }
+    val imagePath by preferenceValue { it.captureButtonImagePath }
     var showColorPicker by remember { mutableStateOf(false) }
 
     val imageLauncher = rememberLauncherForActivityResult(
@@ -6394,7 +6404,7 @@ private fun CaptureButtonAppearanceSetting(
             CaptureButtonAppearanceItem(
                 label = stringResource(R.string.settings_capture_button_default),
                 selected = style == CaptureButtonStyle.DEFAULT,
-                onClick = { viewModel.setCaptureButtonStyle(CaptureButtonStyle.DEFAULT) },
+                onClick = { preferencesRepository.updateAsync { this.captureButtonStyle = CaptureButtonStyle.DEFAULT } },
                 modifier = Modifier.weight(1f)
             ) {
                 Box(

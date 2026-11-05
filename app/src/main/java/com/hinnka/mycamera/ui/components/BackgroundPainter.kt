@@ -1,5 +1,6 @@
 package com.hinnka.mycamera.ui.components
 
+import com.hinnka.mycamera.ui.prefs.preferenceValue
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -14,7 +15,7 @@ import com.hinnka.mycamera.viewmodel.CameraViewModel
 
 @Composable
 fun rememberBackgroundPainter(viewModel: CameraViewModel): Painter {
-    val bgImage by viewModel.backgroundImage.collectAsState()
+    val bgImage by preferenceValue { it.backgroundImage }
     val context = LocalContext.current
     
     return remember(bgImage) {

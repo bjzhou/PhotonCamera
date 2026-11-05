@@ -1,6 +1,6 @@
 package com.hinnka.mycamera.viewmodel
 
-
+import com.hinnka.mycamera.mgc.PhotonLookContract
 import android.app.Application
 import android.app.ActivityManager
 import android.content.Context
@@ -23,13 +23,11 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.hinnka.mycamera.camera.*
 import com.hinnka.mycamera.data.ContentRepository
-import com.hinnka.mycamera.data.CameraFeaturePreferencesUpdate
 import com.hinnka.mycamera.data.CaptureButtonStyle
 import com.hinnka.mycamera.data.CaptureSoundRepository
 import com.hinnka.mycamera.R
 import com.hinnka.mycamera.data.DevelopAnimationStyle
 import com.hinnka.mycamera.frame.FrameRenderer
-import com.hinnka.mycamera.data.PreferenceUpdateValue
 import com.hinnka.mycamera.data.PresetPackageManager
 import com.hinnka.mycamera.data.UserPreferences
 import com.hinnka.mycamera.data.VolumeKeyAction
@@ -605,7 +603,6 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
 
     private val cameraController = Camera2Controller(application)
 
-
     // 内容仓库（单例，与 GalleryViewModel 共享）
     private val contentRepository = ContentRepository.getInstance(application)
     private val presetPackageManager = PresetPackageManager(application, contentRepository)
@@ -677,10 +674,6 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     val currentEffectParams: StateFlow<EffectParams> = currentRecipeParams
         .map { it.toEffectParams() }
         .stateIn(viewModelScope, SharingStarted.Eagerly, EffectParams.DEFAULT)
-
-    val customPresets: StateFlow<List<com.hinnka.mycamera.model.CameraPreset>> = userPreferencesRepository.userPreferences
-        .map { it.customPresets }
-        .stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
 
     // 合并内置预设与用户自定义预设
     val allPresets: StateFlow<List<com.hinnka.mycamera.model.CameraPreset>> = userPreferencesRepository.userPreferences
@@ -757,10 +750,6 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             }
         }
         .stateIn(viewModelScope, SharingStarted.Eagerly, com.hinnka.mycamera.model.CameraPreset.BUILT_IN_PRESETS)
-
-    val activePresetId: StateFlow<String?> = userPreferencesRepository.userPreferences
-        .map { it.activePresetId }
-        .stateIn(viewModelScope, SharingStarted.Eagerly, null)
 
     private val activePresetMatchState: StateFlow<ActivePresetMatchState?> = combine(
         combine(
@@ -843,14 +832,14 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             colorRecipe = currentRecipeParams.value.withoutIndependentEffects(),
             effects = currentRecipeParams.value.toEffectParams(),
             aspectRatio = state.value.aspectRatio.name,
-            ultraHdrGainMapEnabled = ultraHdrGainMapEnabled.value,
+            ultraHdrGainMapEnabled = userPreferencesRepository.current.ultraHdrGainMapEnabled,
             frameId = currentFrameId,
-            rawDcpId = rawDcpId.value,
+            rawDcpId = userPreferencesRepository.current.rawDcpId,
             rawDcpIdsByLens = userPreferences.value.rawDcpIdsByLens,
-            rawHncsProfileId = rawHncsProfileId.value,
-            rawHncsRenderIntent = rawHncsRenderIntent.value.assetValue,
-            rawHncsFilmCurveMode = rawHncsFilmCurveMode.value.persistedValue,
-            rawRenderingEngine = rawRenderingEngine.value.name,
+            rawHncsProfileId = userPreferencesRepository.current.rawHncsProfileId,
+            rawHncsRenderIntent = userPreferencesRepository.current.rawHncsRenderIntent.assetValue,
+            rawHncsFilmCurveMode = userPreferencesRepository.current.rawHncsFilmCurveMode.persistedValue,
+            rawRenderingEngine = userPreferencesRepository.current.rawRenderingEngine.name,
             rawMaxSharpening = userPreferences.value.rawMaxSharpening,
             rawMaxNoiseReduction = userPreferences.value.rawMaxNoiseReduction,
             rawMaxChromaNoiseReduction = userPreferences.value.rawMaxChromaNoiseReduction,
@@ -859,25 +848,25 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             rawShadowsAdjustment = userPreferences.value.rawShadowsAdjustment,
             rawBlackPointCorrection = userPreferences.value.rawBlackPointCorrection,
             rawWhitePointCorrection = userPreferences.value.rawWhitePointCorrection,
-            rawOppoMasterToneMap = rawToneMappingParameters.value.useOppoMasterToneMap,
-            rawLumixPhotoStyle = rawToneMappingParameters.value.lumixPhotoStyle.assetName,
-            rawCanonPictureStyle = rawToneMappingParameters.value.canonPictureStyle.persistedValue,
-            rawCanonExposureCompensationEv = rawToneMappingParameters.value.canonExposureCompensationEv,
-            rawLumixColorMatchingEnabled = rawToneMappingParameters.value.lumixColorMatchingEnabled,
-            rawHncsColorMatchingEnabled = rawToneMappingParameters.value.hncsColorMatchingEnabled,
-            rawCanonUseR5ColorMatrix = rawToneMappingParameters.value.canonUseR5ColorMatrix,
-            rawLeicaUseM9ColorMatrix = rawToneMappingParameters.value.leicaUseM9ColorMatrix,
-            rawAgxBlackRelativeExposure = rawToneMappingParameters.value.agxBlackRelativeExposure,
-            rawAgxWhiteRelativeExposure = rawToneMappingParameters.value.agxWhiteRelativeExposure,
-            rawAgxToe = rawToneMappingParameters.value.agxToe,
-            rawAgxShoulder = rawToneMappingParameters.value.agxShoulder,
-            rawFilmicBlackRelativeExposure = rawToneMappingParameters.value.filmicBlackRelativeExposure,
-            rawFilmicWhiteRelativeExposure = rawToneMappingParameters.value.filmicWhiteRelativeExposure,
-            rawSpectralFilmStock = rawSpectralFilmStock.value,
-            rawSpectralFilmPrint = rawSpectralFilmPrint.value,
+            rawOppoMasterToneMap = userPreferencesRepository.current.rawToneMappingParameters.useOppoMasterToneMap,
+            rawLumixPhotoStyle = userPreferencesRepository.current.rawToneMappingParameters.lumixPhotoStyle.assetName,
+            rawCanonPictureStyle = userPreferencesRepository.current.rawToneMappingParameters.canonPictureStyle.persistedValue,
+            rawCanonExposureCompensationEv = userPreferencesRepository.current.rawToneMappingParameters.canonExposureCompensationEv,
+            rawLumixColorMatchingEnabled = userPreferencesRepository.current.rawToneMappingParameters.lumixColorMatchingEnabled,
+            rawHncsColorMatchingEnabled = userPreferencesRepository.current.rawToneMappingParameters.hncsColorMatchingEnabled,
+            rawCanonUseR5ColorMatrix = userPreferencesRepository.current.rawToneMappingParameters.canonUseR5ColorMatrix,
+            rawLeicaUseM9ColorMatrix = userPreferencesRepository.current.rawToneMappingParameters.leicaUseM9ColorMatrix,
+            rawAgxBlackRelativeExposure = userPreferencesRepository.current.rawToneMappingParameters.agxBlackRelativeExposure,
+            rawAgxWhiteRelativeExposure = userPreferencesRepository.current.rawToneMappingParameters.agxWhiteRelativeExposure,
+            rawAgxToe = userPreferencesRepository.current.rawToneMappingParameters.agxToe,
+            rawAgxShoulder = userPreferencesRepository.current.rawToneMappingParameters.agxShoulder,
+            rawFilmicBlackRelativeExposure = userPreferencesRepository.current.rawToneMappingParameters.filmicBlackRelativeExposure,
+            rawFilmicWhiteRelativeExposure = userPreferencesRepository.current.rawToneMappingParameters.filmicWhiteRelativeExposure,
+            rawSpectralFilmStock = userPreferencesRepository.current.rawSpectralFilmStock,
+            rawSpectralFilmPrint = userPreferencesRepository.current.rawSpectralFilmPrint,
             rawFotufilmDocument = FotufilmDocumentStorage.encode(rawFotufilmDocument.value),
-            rawDROMode = droMode.value,
-            rawBaselineLutId = rawBaselineLutId.value,
+            rawDROMode = userPreferencesRepository.current.droMode,
+            rawBaselineLutId = userPreferencesRepository.current.rawBaselineLutId,
             isBuiltIn = isBuiltIn
         )
     }
@@ -899,7 +888,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                     val currentState = state.value
                     val includePhotoSettings = currentState.captureMode == CaptureMode.PHOTO
                     val includeProfessionalSettings = includePhotoSettings &&
-                        useRaw.value && currentState.isRawSupported
+                        userPreferencesRepository.current.useRaw && currentState.isRawSupported
                     PLog.d(
                         TAG,
                         "Applying preset id=${preset?.id}, captureMode=${currentState.captureMode}, " +
@@ -1044,7 +1033,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         val activeUseJpgMax = desiredUseJpgMax && !desiredUseRaw
         if (activeUseJpgMax && prefs.useLivePhoto) {
             cameraController.setUseLivePhoto(false)
-            userPreferencesRepository.saveUseLivePhoto(false)
+            userPreferencesRepository.update { useLivePhoto = false }
         }
         val desiredMultiFrameOutputScale = resolveMultiFrameOutputScale(
             useJpgMax = activeUseJpgMax,
@@ -1124,11 +1113,13 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         }
 
         if (update.rawDcpId != null || update.rawDcpIdsByLens != null) {
-            val targetPrefs = prefs.copy(
-                rawDcpId = update.rawDcpId?.value ?: prefs.rawDcpId,
-                rawDcpIdsByLens = update.rawDcpIdsByLens?.value ?: prefs.rawDcpIdsByLens
+            prewarmRawDcp(
+                UserPreferences.resolveRawDcpIdForLens(
+                    rawDcpId = update.rawDcpId?.value ?: prefs.rawDcpId,
+                    rawDcpIdsByLens = update.rawDcpIdsByLens?.value ?: prefs.rawDcpIdsByLens,
+                    lensId = currentState.currentCameraId,
+                )
             )
-            prewarmRawDcp(targetPrefs.rawDcpIdForLens(currentState.currentCameraId))
         }
 
         val rawToneMappingUpdate = if (
@@ -1170,104 +1161,51 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             update.rawEngineToneCurve?.let {
                 toneMappingParameters = toneMappingParameters.withEngineToneCurveFrom(it.value)
             }
-            PreferenceUpdateValue(toneMappingParameters)
+            toneMappingParameters
         } else {
             null
         }
 
-        userPreferencesRepository.saveCameraFeaturePreferences(
-            CameraFeaturePreferencesUpdate(
-                captureMode = update.captureMode?.let { PreferenceUpdateValue(it.value) },
-                lutId = if (persistLutInVideoSlot) {
-                    null
-                } else {
-                    update.lutId?.let { PreferenceUpdateValue(it.value) }
-                },
-                effects = update.effects?.let { PreferenceUpdateValue(it.value) },
-                aspectRatio = update.aspectRatio?.let { PreferenceUpdateValue(it.value.name) },
-                useRaw = if (update.useRaw != null || desiredUseRaw != prefs.useRaw) {
-                    PreferenceUpdateValue(desiredUseRaw)
-                } else {
-                    null
-                },
-                useJpgMax = if (update.useJpgMax != null || desiredUseJpgMax != prefs.useJpgMax) {
-                    PreferenceUpdateValue(desiredUseJpgMax)
-                } else {
-                    null
-                },
-                useRawMax = if (update.useRawMax != null || desiredUseRawMax != prefs.useRawMax) {
-                    PreferenceUpdateValue(desiredUseRawMax)
-                } else {
-                    null
-                },
-                ultraHdrGainMapEnabled = update.ultraHdrGainMapEnabled?.let {
-                    PreferenceUpdateValue(it.value)
-                },
-                useMultipleExposure = if (update.useMultipleExposure != null ||
-                    desiredUseMultipleExposure != prefs.useMultipleExposure
-                ) {
-                    PreferenceUpdateValue(desiredUseMultipleExposure)
-                } else {
-                    null
-                },
-                frameId = update.frameId?.let { PreferenceUpdateValue(it.value) },
-                rawDcpId = update.rawDcpId?.let { PreferenceUpdateValue(it.value) },
-                rawDcpIdsByLens = update.rawDcpIdsByLens?.let { PreferenceUpdateValue(it.value) },
-                rawHncsProfileId = update.rawHncsProfileId?.let {
-                    PreferenceUpdateValue(it.value)
-                },
-                rawHncsRenderIntent = update.rawHncsRenderIntent?.let {
-                    PreferenceUpdateValue(it.value)
-                },
-                rawHncsFilmCurveMode = update.rawHncsFilmCurveMode?.let {
-                    PreferenceUpdateValue(it.value)
-                },
-                rawRenderingEngine = if (update.rawRenderingEngine != null ||
-                    desiredRawRenderingEngine != prefs.rawRenderingEngine
-                ) {
-                    PreferenceUpdateValue(desiredRawRenderingEngine)
-                } else {
-                    null
-                },
-                rawToneMappingParameters = rawToneMappingUpdate,
-                rawMaxSharpening = update.rawMaxSharpening?.let {
-                    PreferenceUpdateValue(it.value)
-                },
-                rawMaxNoiseReduction = update.rawMaxNoiseReduction?.let {
-                    PreferenceUpdateValue(it.value)
-                },
-                rawMaxChromaNoiseReduction = update.rawMaxChromaNoiseReduction?.let {
-                    PreferenceUpdateValue(it.value)
-                },
-                rawExposureCompensation = update.rawExposureCompensation?.let {
-                    PreferenceUpdateValue(it.value)
-                },
-                rawHighlightsAdjustment = update.rawHighlightsAdjustment?.let {
-                    PreferenceUpdateValue(it.value)
-                },
-                rawShadowsAdjustment = update.rawShadowsAdjustment?.let {
-                    PreferenceUpdateValue(it.value)
-                },
-                rawBlackPointCorrection = update.rawBlackPointCorrection?.let {
-                    PreferenceUpdateValue(it.value)
-                },
-                rawWhitePointCorrection = update.rawWhitePointCorrection?.let {
-                    PreferenceUpdateValue(it.value)
-                },
-                rawSpectralFilmStock = update.rawSpectralFilmStock?.let { PreferenceUpdateValue(it.value) },
-                rawSpectralFilmPrint = update.rawSpectralFilmPrint?.let { PreferenceUpdateValue(it.value) },
-                rawFotufilmDocument = update.rawFotufilmDocument?.let {
-                    PreferenceUpdateValue(FotufilmDocumentStorage.encode(it.value))
-                },
-                droMode = update.droMode?.let {
-                    PreferenceUpdateValue(RawProcessingPreferences.DROMode.fromPersistedName(it.value).name)
-                },
-                rawBaselineLutId = update.rawBaselineLutId?.let { PreferenceUpdateValue(it.value) },
-                activePresetId = update.activePresetId?.let { PreferenceUpdateValue(it.value) }
-            )
-        )
+        userPreferencesRepository.update {
+            update.captureMode?.let { captureMode = it.value }
+            if (!persistLutInVideoSlot) update.lutId?.let { lutId = it.value }
+            update.effects?.let { activeEffectParams = it.value }
+            update.aspectRatio?.let { aspectRatio = it.value.name }
+            if (update.useRaw != null || desiredUseRaw != prefs.useRaw) useRaw = desiredUseRaw
+            if (update.useJpgMax != null || desiredUseJpgMax != prefs.useJpgMax) useJpgMax = desiredUseJpgMax
+            if (update.useRawMax != null || desiredUseRawMax != prefs.useRawMax) useRawMax = desiredUseRawMax
+            update.ultraHdrGainMapEnabled?.let { ultraHdrGainMapEnabled = it.value }
+            if (update.useMultipleExposure != null || desiredUseMultipleExposure != prefs.useMultipleExposure) {
+                useMultipleExposure = desiredUseMultipleExposure
+            }
+            update.frameId?.let { frameId = it.value }
+            update.rawDcpId?.let { rawDcpId = it.value }
+            update.rawDcpIdsByLens?.let { rawDcpIdsByLens = it.value }
+            update.rawHncsFilmCurveMode?.let { rawHncsFilmCurveMode = it.value }
+            if (update.rawRenderingEngine != null || desiredRawRenderingEngine != prefs.rawRenderingEngine) {
+                rawRenderingEngine = desiredRawRenderingEngine
+            }
+            rawToneMappingUpdate?.let { rawToneMappingParameters = it }
+            update.rawMaxSharpening?.let { rawMaxSharpening = it.value }
+            update.rawMaxNoiseReduction?.let { rawMaxNoiseReduction = it.value }
+            update.rawMaxChromaNoiseReduction?.let { rawMaxChromaNoiseReduction = it.value }
+            update.rawExposureCompensation?.let { rawExposureCompensation = it.value }
+            update.rawHighlightsAdjustment?.let { rawHighlightsAdjustment = it.value }
+            update.rawShadowsAdjustment?.let { rawShadowsAdjustment = it.value }
+            update.rawBlackPointCorrection?.let { rawBlackPointCorrection = it.value }
+            update.rawWhitePointCorrection?.let { rawWhitePointCorrection = it.value }
+            update.rawSpectralFilmStock?.let { rawSpectralFilmStock = it.value }
+            update.rawSpectralFilmPrint?.let { rawSpectralFilmPrint = it.value }
+            update.rawFotufilmDocument?.let { rawFotufilmDocument = FotufilmDocumentStorage.encode(it.value) }
+            update.droMode?.let { droMode = it.value }
+            update.rawBaselineLutId?.let {
+                rawBaselineLutId = it.value
+                rawBaselineLutConfigured = true
+            }
+            update.activePresetId?.let { activePresetId = it.value }
+        }
         if (persistLutInVideoSlot) {
-            userPreferencesRepository.saveVideoLutConfig(update.lutId.value ?: "none")
+            userPreferencesRepository.update { videoLutId = update.lutId.value ?: "none" }
         }
 
         if (reconfigureCameraIfNeeded && needsCameraReopen && !captureModeWillChange) {
@@ -1300,7 +1238,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 } else {
                     currentList.add(normalizedPreset)
                 }
-                userPreferencesRepository.saveCustomPresets(currentList)
+                userPreferencesRepository.update { customPresets = currentList }
                 normalizedPreset
             }
             applyPreset(resolvedPreset)
@@ -1308,13 +1246,13 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     fun resetActivePreset() {
-        val presetId = activePresetId.value ?: return
+        val presetId = userPreferencesRepository.current.activePresetId ?: return
         val preset = allPresets.value.firstOrNull { it.id == presetId } ?: return
         applyPreset(preset)
     }
 
     fun saveCurrentSettingsToActivePreset() {
-        val presetId = activePresetId.value ?: return
+        val presetId = userPreferencesRepository.current.activePresetId ?: return
         val preset = allPresets.value.firstOrNull { it.id == presetId } ?: return
         savePreset(
             createPresetFromCurrentSettings(
@@ -1340,7 +1278,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
 
             try {
                 val currentPresets = userPreferencesRepository.userPreferences.first().customPresets
-                userPreferencesRepository.saveCustomPresets(currentPresets + imported.preset)
+                userPreferencesRepository.update { customPresets = currentPresets + imported.preset }
             } catch (e: Exception) {
                 withContext(Dispatchers.IO) {
                     presetPackageManager.rollbackImport(imported)
@@ -1366,7 +1304,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                     .customPresets
                     .toMutableList()
                 currentList.removeAll { it.id == presetId }
-                userPreferencesRepository.saveCustomPresets(currentList)
+                userPreferencesRepository.update { customPresets = currentList }
 
                 // 如果删除的是内置预设，将其加入 deletedBuiltInIds
                 val isBuiltIn = com.hinnka.mycamera.model.CameraPreset.BUILT_IN_PRESETS.any { it.id == presetId }
@@ -1375,12 +1313,12 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                     val deletedList = currentDeleted.split(",").filter { it.isNotEmpty() }.toMutableList()
                     if (presetId !in deletedList) {
                         deletedList.add(presetId)
-                        userPreferencesRepository.saveDeletedBuiltInIds(deletedList.joinToString(","))
+                        userPreferencesRepository.update { deletedBuiltInIds = deletedList.joinToString(",") }
                     }
                 }
 
-                if (activePresetId.value == presetId) {
-                    userPreferencesRepository.saveActivePresetId(null)
+                if (userPreferencesRepository.current.activePresetId == presetId) {
+                    userPreferencesRepository.update { activePresetId = null }
                 }
             }
         }
@@ -1389,13 +1327,13 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     fun resetToDefaultPresets() {
         viewModelScope.launch {
             presetMutationMutex.withLock {
-                userPreferencesRepository.saveDeletedBuiltInIds("")
+                userPreferencesRepository.update { deletedBuiltInIds = "" }
                 val currentList = userPreferencesRepository.userPreferences
                     .first()
                     .customPresets
                     .toMutableList()
                 currentList.removeAll { it.isBuiltIn || it.id.startsWith("builtin_") }
-                userPreferencesRepository.saveCustomPresets(currentList)
+                userPreferencesRepository.update { customPresets = currentList }
             }
         }
     }
@@ -1408,7 +1346,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 val orderedIds = presets.map { it.id }.toSet()
                 val orderedPresets = presets.map { preset -> latestById[preset.id] ?: preset }
                 val concurrentlyAddedPresets = latestPresets.filter { it.id !in orderedIds }
-                userPreferencesRepository.saveCustomPresets(orderedPresets + concurrentlyAddedPresets)
+                userPreferencesRepository.update { customPresets = orderedPresets + concurrentlyAddedPresets }
             }
         }
     }
@@ -1494,9 +1432,6 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     var currentFrameId: String? by mutableStateOf(null)
         private set
 
-    var showHistogram by mutableStateOf(true)
-        private set
-
     var availableFrameList: List<FrameInfo> by mutableStateOf(emptyList())
         private set
 
@@ -1515,93 +1450,9 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     private var startupPrewarmJob: Job? = null
     private var startupPrewarmAttempted = false
 
-    // 新增设置项 StateFlow
-    val showLevelIndicator: Flow<Boolean> = userPreferencesRepository.userPreferences.map { it.showLevelIndicator }
-    val focusPeakingEnabled: Flow<Boolean> = userPreferencesRepository.userPreferences.map { it.focusPeakingEnabled }
-    val eyeFocusEnabled: StateFlow<Boolean> = userPreferencesRepository.userPreferences
-        .map { it.eyeFocusEnabled }
-        .stateIn(viewModelScope, SharingStarted.Eagerly, false)
-    val shutterSoundEnabled: Flow<Boolean> = userPreferencesRepository.userPreferences.map { it.shutterSoundEnabled }
-    val colorPaletteEnabled: StateFlow<Boolean> = userPreferencesRepository.userPreferences
-        .map { it.colorPaletteEnabled }
-        .stateIn(viewModelScope, SharingStarted.Eagerly, false)
-    val autoRotateEnabled: StateFlow<Boolean> = userPreferencesRepository.userPreferences
-        .map { it.autoRotateEnabled }
-        .stateIn(viewModelScope, SharingStarted.Eagerly, true)
-    val vibrationEnabled: Flow<Boolean> = userPreferencesRepository.userPreferences.map { it.vibrationEnabled }
-    val keepScreenOn: Flow<Boolean> = userPreferencesRepository.userPreferences.map { it.keepScreenOn }
-    val windowScreenBrightness: StateFlow<Float?> = userPreferencesRepository.userPreferences
-        .map { it.windowScreenBrightness }
-        .stateIn(viewModelScope, SharingStarted.Eagerly, null)
-    val volumeKeyAction: StateFlow<VolumeKeyAction> =
-        userPreferencesRepository.userPreferences.map { it.volumeKeyAction }
-            .stateIn(viewModelScope, SharingStarted.Eagerly, initialValue = VolumeKeyAction.NONE)
-    val autoSaveAfterCapture: Flow<Boolean> = userPreferencesRepository.userPreferences.map { it.autoSaveAfterCapture }
-    val photoSavePath: StateFlow<PhotoSavePath> = userPreferencesRepository.userPreferences
-        .map { it.photoSavePath }
-        .stateIn(viewModelScope, SharingStarted.Eagerly, PhotoSavePath.DCIM_PHOTON)
-    val photoSaveTreeUri: StateFlow<String?> = userPreferencesRepository.userPreferences
-        .map { it.photoSaveTreeUri }
-        .stateIn(viewModelScope, SharingStarted.Eagerly, null)
-    val topSheetAspectRatios: StateFlow<List<AspectRatio>> = userPreferencesRepository.userPreferences
-        .map { it.topSheetAspectRatios }
-        .stateIn(viewModelScope, SharingStarted.Eagerly, AspectRatio.defaultTopSheetRatios)
-    val customAspectRatios: StateFlow<List<AspectRatio>> = userPreferencesRepository.userPreferences
-        .map { it.customAspectRatios }
-        .stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
     val availablePhotoAspectRatios: StateFlow<List<AspectRatio>> = userPreferencesRepository.userPreferences
         .map { AspectRatio.entries + it.customAspectRatios }
         .stateIn(viewModelScope, SharingStarted.Eagerly, AspectRatio.entries)
-    val nrLevel: StateFlow<Int> = userPreferencesRepository.userPreferences
-        .map { it.nrLevel }
-        .stateIn(viewModelScope, SharingStarted.Eagerly, NoiseReductionLevel.DEFAULT)
-    val useRaw: StateFlow<Boolean> = userPreferencesRepository.userPreferences
-        .map { it.useRaw }
-        .stateIn(viewModelScope, SharingStarted.Eagerly, false)
-    val edgeLevel: StateFlow<Int> = userPreferencesRepository.userPreferences
-        .map { it.edgeLevel }
-        .stateIn(viewModelScope, SharingStarted.Eagerly, 1)
-    val vendorCaptureSettingsByLens: StateFlow<VendorCaptureSettingsByLens> =
-        userPreferencesRepository.userPreferences
-            .map { it.vendorCaptureSettingsByLens }
-            .stateIn(viewModelScope, SharingStarted.Eagerly, VendorCaptureSettingsByLens.Empty)
-    val customVendorKeySettings: StateFlow<CustomVendorKeySettings> =
-        userPreferencesRepository.userPreferences
-            .map { it.customVendorKeySettings }
-            .stateIn(viewModelScope, SharingStarted.Eagerly, CustomVendorKeySettings.Empty)
-    val rawRenderingEngine: StateFlow<RawRenderingEngine> = userPreferencesRepository.userPreferences
-        .map { it.rawRenderingEngine }
-        .stateIn(viewModelScope, SharingStarted.Eagerly, RawRenderingEngine.AdobeCurve)
-    val rawToneMappingParameters: StateFlow<RawToneMappingParameters> = userPreferencesRepository.userPreferences
-        .map { it.rawToneMappingParameters }
-        .stateIn(viewModelScope, SharingStarted.Eagerly, RawToneMappingParameters.DEFAULT)
-    val rawMaxSharpening: StateFlow<Float> = userPreferencesRepository.userPreferences
-        .map { it.rawMaxSharpening }
-        .stateIn(
-            viewModelScope,
-            SharingStarted.Eagerly,
-            RawSharpeningDefaults.DEFAULT_STRENGTH,
-        )
-    val rawMaxNoiseReduction: StateFlow<Float> = userPreferencesRepository.userPreferences
-        .map { it.rawMaxNoiseReduction }
-        .stateIn(
-            viewModelScope,
-            SharingStarted.Eagerly,
-            RawDenoiseDefaults.RAW_MAX_LUMA_STRENGTH,
-        )
-    val rawMaxChromaNoiseReduction: StateFlow<Float> = userPreferencesRepository.userPreferences
-        .map { it.rawMaxChromaNoiseReduction }
-        .stateIn(
-            viewModelScope,
-            SharingStarted.Eagerly,
-            RawDenoiseDefaults.RAW_MAX_CHROMA_STRENGTH,
-        )
-    val rawSpectralFilmStock: StateFlow<String?> = userPreferencesRepository.userPreferences
-        .map { it.rawSpectralFilmStock }
-        .stateIn(viewModelScope, SharingStarted.Eagerly, null)
-    val rawSpectralFilmPrint: StateFlow<String?> = userPreferencesRepository.userPreferences
-        .map { it.rawSpectralFilmPrint }
-        .stateIn(viewModelScope, SharingStarted.Eagerly, null)
     val rawFotufilmDocument: StateFlow<FotufilmDocument?> = userPreferencesRepository.userPreferences
         .map { it.rawFotufilmDocument }
         .distinctUntilChanged()
@@ -1617,114 +1468,12 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             }
         }
         .stateIn(viewModelScope, SharingStarted.Eagerly, null)
-    val photoQuality: Flow<Int> = userPreferencesRepository.userPreferences.map { it.photoQuality }
-    val useHeicExport: Flow<Boolean> = userPreferencesRepository.userPreferences.map { it.useHeicExport }
-    val useJpeg444Export: Flow<Boolean> = userPreferencesRepository.userPreferences.map { it.useJpeg444Export }
 
-    val defaultFocalLength: Flow<Float> = userPreferencesRepository.userPreferences.map { it.defaultFocalLength }
     val zoomDisplayMode: StateFlow<ZoomDisplayMode> = userPreferencesRepository.userPreferences
         .map { ZoomDisplayMode.fromPersistedName(it.zoomDisplayMode) }
         .stateIn(viewModelScope, SharingStarted.Eagerly, ZoomDisplayMode.FOCAL_LENGTH)
-    val customFocalLengths: Flow<List<Float>> = userPreferencesRepository.userPreferences.map { it.customFocalLengths }
-    val hiddenFocalLengths: Flow<List<Float>> = userPreferencesRepository.userPreferences.map { it.hiddenFocalLengths }
-    val customLensIds: Flow<List<String>> = userPreferencesRepository.userPreferences.map { it.customLensIds }
-    val lensIdBlacklist: Flow<List<String>> = userPreferencesRepository.userPreferences.map { it.lensIdBlacklist }
-    val iszLensConfigs: Flow<List<IszLensConfig>> = userPreferencesRepository.userPreferences.map { it.iszLensConfigs }
-    val preferredMainCameraId: Flow<String?> = userPreferencesRepository.userPreferences.map { it.preferredMainCameraId }
-    val preferredMacroCameraId: Flow<String?> = userPreferencesRepository.userPreferences.map { it.preferredMacroCameraId }
-    val enableLogicalMultiCameraDiscovery: Flow<Boolean> =
-        userPreferencesRepository.userPreferences.map { it.enableLogicalMultiCameraDiscovery }
-    val logicalCameraBindingWhitelist: Flow<List<String>> =
-        userPreferencesRepository.userPreferences.map { it.logicalCameraBindingWhitelist }
     val userPreferences: StateFlow<UserPreferences> = userPreferencesRepository.userPreferences
         .stateIn(viewModelScope, SharingStarted.Eagerly, UserPreferences())
-    val photoLutId: StateFlow<String?> = userPreferencesRepository.userPreferences
-        .map { it.lutId }
-        .stateIn(viewModelScope, SharingStarted.Eagerly, null)
-    val separateVideoLutEnabled: StateFlow<Boolean> = userPreferencesRepository.userPreferences
-        .map { it.separateVideoLutEnabled }
-        .stateIn(viewModelScope, SharingStarted.Eagerly, false)
-    val videoLutId: StateFlow<String?> = userPreferencesRepository.userPreferences
-        .map { it.videoLutId }
-        .stateIn(viewModelScope, SharingStarted.Eagerly, null)
-    val rawBaselineLutId: StateFlow<String?> = userPreferencesRepository.userPreferences
-        .map { it.rawBaselineLutId }
-        .stateIn(viewModelScope, SharingStarted.Eagerly, null)
-    val phantomFrameId: StateFlow<String?> = userPreferencesRepository.userPreferences
-        .map { it.phantomFrameId }
-        .stateIn(viewModelScope, SharingStarted.Eagerly, null)
-    val rawDcpId: StateFlow<String?> = userPreferencesRepository.userPreferences
-        .map { it.rawDcpId }
-        .stateIn(viewModelScope, SharingStarted.Eagerly, null)
-    val rawDcpIdsByLens: StateFlow<Map<String, String?>> = userPreferencesRepository.userPreferences
-        .map { it.rawDcpIdsByLens }
-        .stateIn(viewModelScope, SharingStarted.Eagerly, emptyMap())
-    val rawNoiseProfileId: StateFlow<String> = userPreferencesRepository.userPreferences
-        .map { it.rawNoiseProfileId }
-        .stateIn(
-            viewModelScope,
-            SharingStarted.Eagerly,
-            RawNoiseProfileManager.DEFAULT_PROFILE_ID,
-        )
-    val rawNoiseProfileIdsByLens: StateFlow<Map<String, String>> =
-        userPreferencesRepository.userPreferences
-            .map { it.rawNoiseProfileIdsByLens }
-            .stateIn(viewModelScope, SharingStarted.Eagerly, emptyMap())
-    val rawHncsProfileId: StateFlow<String?> = userPreferencesRepository.userPreferences
-        .map { it.rawHncsProfileId }
-        .stateIn(viewModelScope, SharingStarted.Eagerly, HncsProfileManager.DEFAULT_PROFILE_ID)
-    val rawHncsRenderIntent: StateFlow<HncsRenderIntent> =
-        userPreferencesRepository.userPreferences
-            .map { it.rawHncsRenderIntent }
-            .stateIn(viewModelScope, SharingStarted.Eagerly, HncsRenderIntent.Standard)
-    val rawHncsFilmCurveMode: StateFlow<HncsFilmCurveMode> =
-        userPreferencesRepository.userPreferences
-            .map { it.rawHncsFilmCurveMode }
-            .stateIn(viewModelScope, SharingStarted.Eagerly, HncsFilmCurveMode.Standard)
-    val rawExposureCompensation: StateFlow<Float> = userPreferencesRepository.userPreferences
-        .map { it.rawExposureCompensation }
-        .stateIn(viewModelScope, SharingStarted.Eagerly, 0f)
-    val rawHighlightsAdjustment: StateFlow<Float> = userPreferencesRepository.userPreferences
-        .map { it.rawHighlightsAdjustment }
-        .stateIn(viewModelScope, SharingStarted.Eagerly, 0f)
-    val rawShadowsAdjustment: StateFlow<Float> = userPreferencesRepository.userPreferences
-        .map { it.rawShadowsAdjustment }
-        .stateIn(viewModelScope, SharingStarted.Eagerly, 0f)
-    val rawMinShutterSpeedNs: StateFlow<Long> = userPreferencesRepository.userPreferences
-        .map { it.rawMinShutterSpeedNs }
-        .stateIn(viewModelScope, SharingStarted.Eagerly, 0L)
-    val rawDROEnabled: StateFlow<Boolean> = userPreferencesRepository.userPreferences
-        .map { it.rawDROEnabled }
-        .stateIn(viewModelScope, SharingStarted.Eagerly, false)
-    val rawBlackPointCorrection: StateFlow<Float> = userPreferencesRepository.userPreferences
-        .map { it.rawBlackPointCorrection }
-        .stateIn(viewModelScope, SharingStarted.Eagerly, 0f)
-    val rawWhitePointCorrection: StateFlow<Float> = userPreferencesRepository.userPreferences
-        .map { it.rawWhitePointCorrection }
-        .stateIn(viewModelScope, SharingStarted.Eagerly, 0f)
-    val rawLensShadingCorrectionEnabled: StateFlow<Boolean> = userPreferencesRepository.userPreferences
-        .map { it.rawLensShadingCorrectionEnabled }
-        .stateIn(viewModelScope, SharingStarted.Eagerly, true)
-    val rawBlackLevelModes: StateFlow<Map<String, String>> = userPreferencesRepository.userPreferences
-        .map { it.rawBlackLevelModes }
-        .distinctUntilChanged()
-        .stateIn(viewModelScope, SharingStarted.Eagerly, emptyMap())
-    val rawCustomBlackLevels: StateFlow<Map<String, Float>> = userPreferencesRepository.userPreferences
-        .map { it.rawCustomBlackLevels }
-        .distinctUntilChanged()
-        .stateIn(viewModelScope, SharingStarted.Eagerly, emptyMap())
-    val rawWhiteLevelModes: StateFlow<Map<String, String>> = userPreferencesRepository.userPreferences
-        .map { it.rawWhiteLevelModes }
-        .distinctUntilChanged()
-        .stateIn(viewModelScope, SharingStarted.Eagerly, emptyMap())
-    val rawCustomWhiteLevels: StateFlow<Map<String, Float>> = userPreferencesRepository.userPreferences
-        .map { it.rawCustomWhiteLevels }
-        .distinctUntilChanged()
-        .stateIn(viewModelScope, SharingStarted.Eagerly, emptyMap())
-    val rawCfaCorrectionModes: StateFlow<Map<String, String>> = userPreferencesRepository.userPreferences
-        .map { it.rawCfaCorrectionModes }
-        .distinctUntilChanged()
-        .stateIn(viewModelScope, SharingStarted.Eagerly, emptyMap())
     val rawBlackLevelMode: StateFlow<String> = combine(
         state.map { it.currentCameraId }.distinctUntilChanged(),
         userPreferencesRepository.userPreferences
@@ -1755,30 +1504,10 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     ) { cameraId, prefs ->
         prefs.rawCfaCorrectionModes[cameraId] ?: RawCfaCorrection.MODE_DEFAULT
     }.stateIn(viewModelScope, SharingStarted.Eagerly, RawCfaCorrection.MODE_DEFAULT)
-    val exportDngWithRawExport: StateFlow<Boolean> = userPreferencesRepository.userPreferences
-        .map { it.exportDngWithRawExport }
-        .stateIn(viewModelScope, SharingStarted.Eagerly, false)
     var availableDcps: List<DcpInfo> by mutableStateOf(emptyList())
         private set
     var availableRawNoiseProfiles: List<RawNoiseProfileInfo> by mutableStateOf(emptyList())
         private set
-    val useJpgMax: StateFlow<Boolean> = userPreferencesRepository.userPreferences
-        .map { it.useJpgMax }
-        .stateIn(viewModelScope, SharingStarted.Eagerly, false)
-    val useMultipleExposure: StateFlow<Boolean> = userPreferencesRepository.userPreferences
-        .map { it.useMultipleExposure }
-        .stateIn(viewModelScope, SharingStarted.Eagerly, false)
-    val multipleExposureCount: StateFlow<Int> = userPreferencesRepository.userPreferences
-        .map { it.multipleExposureCount }
-        .stateIn(viewModelScope, SharingStarted.Eagerly, 2)
-    val jpgMultiFrameDenoiseFrameCount: StateFlow<Int> =
-        userPreferencesRepository.userPreferences
-            .map { it.jpgMultiFrameDenoiseFrameCount }
-            .stateIn(
-                viewModelScope,
-                SharingStarted.Eagerly,
-                MultiFrameConfig.DEFAULT_DENOISE_FRAME_COUNT,
-            )
     val jpgMultiFrameDenoiseOutputScale: StateFlow<Float> = userPreferencesRepository.userPreferences
         .map { MultiFrameConfig.normalizeOutputScale(it.jpgMultiFrameDenoiseOutputScale) }
         .stateIn(
@@ -1786,42 +1515,6 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             SharingStarted.Eagerly,
             MultiFrameConfig.DEFAULT_SUPER_RESOLUTION_SCALE,
         )
-    val hdrPlusFrameCount: StateFlow<Int> = userPreferencesRepository.userPreferences
-        .map { it.hdrPlusFrameCount }
-        .stateIn(
-            viewModelScope,
-            SharingStarted.Eagerly,
-            MultiFrameConfig.DEFAULT_HDR_PLUS_FRAME_COUNT,
-        )
-    val hdrPlusMergeMode: StateFlow<MgcRawMaxMode> = userPreferencesRepository.userPreferences
-        .map { it.hdrPlusMergeMode }
-        .stateIn(viewModelScope, SharingStarted.Eagerly, MgcRawMaxMode.DEFAULT)
-    val hdrPlusBracketExposureEnabled: StateFlow<Boolean> =
-        userPreferencesRepository.userPreferences
-            .map { it.hdrPlusBracketExposureEnabled }
-            .stateIn(
-                viewModelScope,
-                SharingStarted.Eagerly,
-                MultiFrameConfig.DEFAULT_HDR_PLUS_BRACKET_EXPOSURE,
-            )
-    val hdrPlusLongFrameExposureEv: StateFlow<Float> = userPreferencesRepository.userPreferences
-        .map { it.hdrPlusLongFrameExposureEv }
-        .stateIn(viewModelScope, SharingStarted.Eagerly, MultiFrameConfig.LONG_FRAME_EXPOSURE_EV.toFloat())
-    val hdrPlusShortFrameExposureEv: StateFlow<Float> = userPreferencesRepository.userPreferences
-        .map { it.hdrPlusShortFrameExposureEv }
-        .stateIn(viewModelScope, SharingStarted.Eagerly, MultiFrameConfig.DEFAULT_SHORT_FRAME_EXPOSURE_EV)
-    val mlAeMaxHdrRatio: StateFlow<Float> = userPreferencesRepository.userPreferences
-        .map { it.mlAeMaxHdrRatio }
-        .stateIn(viewModelScope, SharingStarted.Eagerly, RawSceneExposureMath.FAST_MOMENTS_MAX_HDR_RATIO)
-    val useRawMax: StateFlow<Boolean> = userPreferencesRepository.userPreferences
-        .map { it.useRawMax }
-        .stateIn(viewModelScope, SharingStarted.Eagerly, false)
-    val rawDigitalZoomResamplingEnabled: StateFlow<Boolean> = userPreferencesRepository.userPreferences
-        .map { it.rawDigitalZoomResamplingEnabled }
-        .stateIn(viewModelScope, SharingStarted.Eagerly, false)
-    val rawColorCalibrationMode: StateFlow<RawColorCalibrationMode> = userPreferencesRepository.userPreferences
-        .map { it.rawColorCalibrationMode }
-        .stateIn(viewModelScope, SharingStarted.Eagerly, RawColorCalibrationMode.DEFAULT)
     val rawMaxOutputScale: StateFlow<Float> = userPreferencesRepository.userPreferences
         .map {
             MultiFrameConfig.normalizeOutputScale(
@@ -1834,43 +1527,6 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             SharingStarted.Eagerly,
             MultiFrameConfig.DEFAULT_SUPER_RESOLUTION_SCALE,
         )
-    val rawOutputUpscaleMode: StateFlow<RawOutputUpscaleMode> =
-        userPreferencesRepository.userPreferences
-            .map { it.rawOutputUpscaleMode }
-            .stateIn(viewModelScope, SharingStarted.Eagerly, RawOutputUpscaleMode.DEFAULT)
-    val useLivePhoto: StateFlow<Boolean> = userPreferencesRepository.userPreferences
-        .map { it.useLivePhoto }
-        .stateIn(viewModelScope, SharingStarted.Eagerly, false)
-    val enableDevelopAnimation: StateFlow<Boolean> = userPreferencesRepository.userPreferences
-        .map { it.enableDevelopAnimation }
-        .stateIn(viewModelScope, SharingStarted.Eagerly, false)
-    val developAnimationStyle: StateFlow<DevelopAnimationStyle> = userPreferencesRepository.userPreferences
-        .map { it.developAnimationStyle }
-        .stateIn(viewModelScope, SharingStarted.Eagerly, DevelopAnimationStyle.FILM)
-    val backgroundImage: StateFlow<String> = userPreferencesRepository.userPreferences
-        .map { it.backgroundImage }
-        .stateIn(viewModelScope, SharingStarted.Eagerly, "camera_bg")
-    val captureButtonStyle: StateFlow<CaptureButtonStyle> = userPreferencesRepository.userPreferences
-        .map { it.captureButtonStyle }
-        .stateIn(viewModelScope, SharingStarted.Eagerly, CaptureButtonStyle.DEFAULT)
-    val captureButtonColor: StateFlow<Int> = userPreferencesRepository.userPreferences
-        .map { it.captureButtonColor }
-        .stateIn(viewModelScope, SharingStarted.Eagerly, 0xFFFFFFFF.toInt())
-    val captureButtonImagePath: StateFlow<String?> = userPreferencesRepository.userPreferences
-        .map { it.captureButtonImagePath }
-        .stateIn(viewModelScope, SharingStarted.Eagerly, null)
-    val droMode: StateFlow<String> = userPreferencesRepository.userPreferences
-        .map { it.droMode }
-        .stateIn(viewModelScope, SharingStarted.Eagerly, "OFF")
-    val applyUltraHDR: StateFlow<Boolean> = userPreferencesRepository.userPreferences
-        .map { it.applyUltraHDR }
-        .stateIn(viewModelScope, SharingStarted.Eagerly, false)
-    val colorSpace: StateFlow<ColorSpace> = userPreferencesRepository.userPreferences
-        .map { it.colorSpace }
-        .stateIn(viewModelScope, SharingStarted.Eagerly, ColorSpace.SRGB)
-    val logCurve: StateFlow<TransferCurve> = userPreferencesRepository.userPreferences
-        .map { it.logCurve }
-        .stateIn(viewModelScope, SharingStarted.Eagerly, TransferCurve.SRGB)
 
     val rawLut: StateFlow<String> = userPreferencesRepository.userPreferences
         .map { prefs ->
@@ -1887,77 +1543,10 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         }
         .stateIn(viewModelScope, SharingStarted.Eagerly, RawProfile.default)
 
-    val useP010: StateFlow<Boolean> = userPreferencesRepository.userPreferences
-        .map { it.useP010 }
-        .stateIn(viewModelScope, SharingStarted.Eagerly, false)
-    val useP3ColorSpace: StateFlow<Boolean> = userPreferencesRepository.userPreferences
-        .map { it.useP3ColorSpace }
-        .stateIn(viewModelScope, SharingStarted.Eagerly, false)
-    val ultraHdrGainMapEnabled: StateFlow<Boolean> = userPreferencesRepository.userPreferences
-        .map { it.ultraHdrGainMapEnabled }
-        .stateIn(viewModelScope, SharingStarted.Eagerly, true)
-
-    val useHdrScreenMode: StateFlow<Boolean> = userPreferencesRepository.userPreferences
-        .map { it.useHdrScreenMode }
-        .stateIn(viewModelScope, SharingStarted.Eagerly, true)
-
-    val phantomMode: StateFlow<Boolean> = userPreferencesRepository.userPreferences
-        .map { it.phantomMode }
-        .stateIn(viewModelScope, SharingStarted.Eagerly, false)
-
-    val videoCodec: StateFlow<com.hinnka.mycamera.video.VideoCodec> = userPreferencesRepository.userPreferences
-        .map { it.videoCodec }
-        .stateIn(viewModelScope, SharingStarted.Eagerly, com.hinnka.mycamera.video.VideoCodec.H264)
-    val videoRecordingPath: StateFlow<VideoRecordingPath> = userPreferencesRepository.userPreferences
-        .map { it.videoRecordingPath }
-        .stateIn(viewModelScope, SharingStarted.Eagerly, VideoRecordingPath.DCIM_PHOTON)
-    val videoRecordingTreeUri: StateFlow<String?> = userPreferencesRepository.userPreferences
-        .map { it.videoRecordingTreeUri }
-        .stateIn(viewModelScope, SharingStarted.Eagerly, null)
-    val videoLensLockEnabled: StateFlow<Boolean> = userPreferencesRepository.userPreferences
-        .map { it.videoLensLockEnabled }
-        .stateIn(viewModelScope, SharingStarted.Eagerly, false)
-    val videoWhiteBalanceLockEnabled: StateFlow<Boolean> = userPreferencesRepository.userPreferences
-        .map { it.videoWhiteBalanceLockEnabled }
-        .stateIn(viewModelScope, SharingStarted.Eagerly, false)
-    val photoPreviewStabilizationEnabled: StateFlow<Boolean> =
-        userPreferencesRepository.userPreferences
-            .map { it.photoPreviewStabilizationEnabled }
-            .stateIn(viewModelScope, SharingStarted.Eagerly, false)
     val videoAudioInputOptions: StateFlow<List<VideoAudioInputOption>> = videoAudioInputManager.availableInputs
 
-    val phantomButtonHidden: StateFlow<Boolean> = userPreferencesRepository.userPreferences
-        .map { it.phantomButtonHidden }
-        .stateIn(viewModelScope, SharingStarted.Eagerly, false)
-
-    val launchCameraOnPhantomMode: StateFlow<Boolean> = userPreferencesRepository.userPreferences
-        .map { it.launchCameraOnPhantomMode }
-        .stateIn(viewModelScope, SharingStarted.Eagerly, false)
-    val phantomPipPreview: StateFlow<Boolean> = userPreferencesRepository.userPreferences
-        .map { it.phantomPipPreview }
-        .stateIn(viewModelScope, SharingStarted.Eagerly, false)
-    val phantomPipCrop: StateFlow<PhantomPipCrop> = userPreferencesRepository.userPreferences
-        .map { it.phantomPipCrop }
-        .stateIn(viewModelScope, SharingStarted.Eagerly, PhantomPipCrop())
-    val phantomSaveAsNew: StateFlow<Boolean> = userPreferencesRepository.userPreferences
-        .map { it.phantomSaveAsNew }
-        .stateIn(viewModelScope, SharingStarted.Eagerly, false)
-    val defaultVirtualAperture: Flow<Float> =
-        userPreferencesRepository.userPreferences.map { it.defaultVirtualAperture }
-
-    val mirrorFrontCamera: Flow<Boolean> = userPreferencesRepository.userPreferences.map { it.mirrorFrontCamera }
     val widgetTheme = userPreferencesRepository.userPreferences.map { it.widgetTheme }
         .stateIn(viewModelScope, SharingStarted.Eagerly, com.hinnka.mycamera.data.WidgetTheme.FOLLOW_SYSTEM)
-    val saveLocationEnabled = userPreferencesRepository.userPreferences.map { it.saveLocation }
-        .stateIn(viewModelScope, SharingStarted.Eagerly, false)
-    val openAIApiKey = userPreferencesRepository.userPreferences.map { it.openAIApiKey }
-        .stateIn(viewModelScope, SharingStarted.Eagerly, "")
-    val openAIUrl = userPreferencesRepository.userPreferences.map { it.openAIBaseUrl }
-        .stateIn(viewModelScope, SharingStarted.Eagerly, "")
-    val openAIModel = userPreferencesRepository.userPreferences.map { it.openAIModel }
-        .stateIn(viewModelScope, SharingStarted.Eagerly, "")
-    val useBuiltInAiService = userPreferencesRepository.userPreferences.map { it.useBuiltInAiService }
-        .stateIn(viewModelScope, SharingStarted.Eagerly, false)
 
     // 动态获取可用的 AI 模型列表 (UI 层按需触发刷新)
     private val _availableOpenAIModels = MutableStateFlow<List<String>>(emptyList())
@@ -1966,8 +1555,15 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     private val _isFetchingAIModels = MutableStateFlow(false)
     val isFetchingAIModels = _isFetchingAIModels.asStateFlow()
 
-    private var isShutterSoundEnabled = true
-    private var isVibrationEnabled = true
+    /** 在 ViewModel 生命周期内订阅设置中的一个字段（含当前值），用于把设置同步到副作用组件。 */
+    private fun <T> syncPreference(select: (UserPreferences) -> T, apply: (T) -> Unit) {
+        viewModelScope.launch { userPreferencesRepository.flow(select).collect { apply(it) } }
+    }
+
+    private val isShutterSoundEnabled: Boolean
+        get() = userPreferencesRepository.current.shutterSoundEnabled
+    private val isVibrationEnabled: Boolean
+        get() = userPreferencesRepository.current.vibrationEnabled
 
     var glSurfaceView by mutableStateOf<CameraGLSurfaceView?>(null)
     var isEyeFocusBusy by mutableStateOf(false)
@@ -2012,7 +1608,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
 
     init {
         viewModelScope.launch {
-            saveLocationEnabled.collect { applyLocationTracking(it) }
+            userPreferencesRepository.flow { it.saveLocation }.collect { applyLocationTracking(it) }
         }
         cameraController.onEnhancedStabilizationUnavailable = { fallback ->
             viewModelScope.launch(Dispatchers.Main.immediate) {
@@ -2020,15 +1616,15 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 when (fallback) {
                     is EnhancedStabilizationFallback.Video -> {
                         val resolvedConfig = cameraController.state.value.videoConfig
-                        userPreferencesRepository.saveVideoStabilizationConfig(
-                            mode = fallback.mode,
-                            resolution = resolvedConfig.resolution,
-                            fps = resolvedConfig.fps,
-                        )
+                        userPreferencesRepository.update {
+                            videoStabilizationMode = fallback.mode
+                            videoResolution = resolvedConfig.resolution
+                            videoFps = resolvedConfig.fps
+                        }
                     }
 
                     EnhancedStabilizationFallback.PhotoPreview -> {
-                        userPreferencesRepository.savePhotoPreviewStabilizationEnabled(false)
+                        userPreferencesRepository.update { photoPreviewStabilizationEnabled = false }
                     }
                 }
             }
@@ -2071,7 +1667,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             viewModelScope.launch(Dispatchers.Main.immediate) {
                 isEyeFocusRuntimeAvailable = false
                 resetEyeFocusTracking(cancelCameraFocus = true, reason = "initialization_failed")
-                userPreferencesRepository.saveEyeFocusEnabled(false)
+                userPreferencesRepository.update { eyeFocusEnabled = false }
                 PLog.e(TAG, "Human eye autofocus is unavailable", error)
             }
         }
@@ -2079,7 +1675,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             PLog.e(TAG, "Human eye autofocus inference failed", error)
         }
         viewModelScope.launch {
-            eyeFocusEnabled.collect { enabled ->
+            userPreferencesRepository.flow { it.eyeFocusEnabled }.collect { enabled ->
                 if (enabled && isEyeFocusRuntimeAvailable) {
                     previewEyeFocusProcessor.prewarm()
                 } else if (!enabled) {
@@ -2225,12 +1821,37 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             burstImageCount = 0
         }
 
-
-        // 监听快门声音、震动和软件处理设置
+        // 关闭快门声音时立即停止正在播放的连拍声
+        syncPreference({ it.shutterSoundEnabled }) { enabled -> if (!enabled) shutterSoundPlayer.stopBurst() }
+        syncPreference({ it.multipleExposureCount }) { count ->
+            multipleExposureState = multipleExposureState.copy(targetCount = count)
+        }
+        // 设置项 -> 相机控制器
+        syncPreference({ it.mirrorFrontCamera }, cameraController::setMirrorFrontCameraEnabled)
+        syncPreference({ it.showGrid }, cameraController::setShowGrid)
+        syncPreference({ it.nrLevel }) { level ->
+            if (cameraController.state.value.nrLevel != level) cameraController.setNRLevel(level)
+        }
+        syncPreference({ it.edgeLevel }, cameraController::setEdgeLevel)
         viewModelScope.launch {
-            if (userPreferencesRepository.restoreCameraStartupDefaultsOnce()) {
-                PLog.d(TAG, "Restored camera startup defaults once")
+            userPreferencesRepository.flow { it.videoNrLevel to it.videoEdgeLevel }
+                .collect { (nr, edge) -> cameraController.setVideoImageQualitySettings(nr, edge) }
+        }
+        syncPreference({ it.rawMinShutterSpeedNs }) { value ->
+            if (cameraController.state.value.rawMinShutterSpeedNs != value) {
+                cameraController.setRawMinShutterSpeedNs(value)
             }
+        }
+        syncPreference({ it.applyUltraHDR }, cameraController::setApplyUltraHDR)
+        syncPreference({ it.useP010 }, cameraController::setUseP010)
+        syncPreference({ it.useP3ColorSpace }, cameraController::setUseP3ColorSpace)
+        syncPreference({ it.videoAudioInputId }, cameraController::setVideoAudioInputId)
+        syncPreference({ it.videoTorchEnabled }, cameraController::setVideoTorchEnabled)
+        syncPreference({ it.videoLensLockEnabled }, cameraController::setVideoLensLockEnabled)
+        syncPreference({ it.videoWhiteBalanceLockEnabled }, cameraController::setVideoWhiteBalanceLockEnabled)
+
+        // 监听快门声音文件和软件处理设置
+        viewModelScope.launch {
             var firstPreferencesLogged = false
             val preferenceCollectStart = SystemClock.elapsedRealtime()
             userPreferencesRepository.userPreferences.collect {
@@ -2242,21 +1863,11 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                         "costMs=${SystemClock.elapsedRealtime() - preferenceCollectStart}"
                     )
                 }
-                isShutterSoundEnabled = it.shutterSoundEnabled
-                if (!isShutterSoundEnabled) shutterSoundPlayer.stopBurst()
                 shutterSoundPlayer.configure(
                     it.shutterSoundFileName,
                     it.burstSoundFileName,
                 )
-                isVibrationEnabled = it.vibrationEnabled
-                // 同步降噪等级到相机控制器
                 val currentCameraState = cameraController.state.value
-                if (currentCameraState.nrLevel != it.nrLevel) {
-                    cameraController.setNRLevel(it.nrLevel)
-                }
-                // 同步锐化等级到相机控制器
-                cameraController.setEdgeLevel(it.edgeLevel)
-                cameraController.setVideoImageQualitySettings(it.videoNrLevel, it.videoEdgeLevel)
                 if (currentCameraState.vendorCaptureSettingsByLens != it.vendorCaptureSettingsByLens) {
                     cameraController.setVendorCaptureSettingsByLens(it.vendorCaptureSettingsByLens)
                 }
@@ -2282,7 +1893,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 val effectiveRawRenderingEngine = resolveCaptureRawRenderingEngine(it)
                 if (effectiveRawRenderingEngine != it.rawRenderingEngine) {
                     viewModelScope.launch {
-                        userPreferencesRepository.saveRawColorEngine(effectiveRawRenderingEngine)
+                        userPreferencesRepository.update { rawRenderingEngine = effectiveRawRenderingEngine }
                     }
                 }
                 if (currentCameraState.useMultipleExposure != multipleExposureEnabled) {
@@ -2327,22 +1938,17 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 }
                 if (multipleExposureEnabled && (it.useRaw || it.useJpgMax || it.useRawMax)) {
                     viewModelScope.launch {
-                        userPreferencesRepository.saveCameraFeaturePreferences(
-                            CameraFeaturePreferencesUpdate(
-                                useRaw = PreferenceUpdateValue(false),
-                                useJpgMax = PreferenceUpdateValue(false),
-                                useRawMax = PreferenceUpdateValue(false)
-                            )
-                        )
+                        userPreferencesRepository.update {
+                            useRaw = false
+                            useJpgMax = false
+                            useRawMax = false
+                        }
                     }
                 }
                 if (it.useLivePhoto && effectiveUseJpgMax) {
                     viewModelScope.launch {
-                        userPreferencesRepository.saveUseLivePhoto(false)
+                        userPreferencesRepository.update { useLivePhoto = false }
                     }
-                }
-                if (currentCameraState.rawMinShutterSpeedNs != it.rawMinShutterSpeedNs) {
-                    cameraController.setRawMinShutterSpeedNs(it.rawMinShutterSpeedNs)
                 }
                 if (cameraController.state.value.meteringMode != it.meteringMode) {
                     cameraController.setMeteringMode(it.meteringMode)
@@ -2354,7 +1960,6 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 cameraController.setVideoLogProfile(it.videoLogProfile)
                 cameraController.setVideoLogLutMode(it.videoLogLutMode)
                 cameraController.setVideoBitrate(it.videoBitrate)
-                cameraController.setVideoAudioInputId(it.videoAudioInputId)
                 cameraController.setVideoRecordingPath(it.videoRecordingPath, it.videoRecordingTreeUri)
                 cameraController.setVideoStabilizationMode(it.videoStabilizationMode)
                 cameraController.setOppoSuperStabilizationEnabled(
@@ -2372,23 +1977,10 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 cameraController.setPhotoPreviewStabilizationEnabled(
                     it.photoPreviewStabilizationEnabled
                 )
-                cameraController.setVideoTorchEnabled(it.videoTorchEnabled)
-                cameraController.setVideoLensLockEnabled(it.videoLensLockEnabled)
-                cameraController.setVideoWhiteBalanceLockEnabled(it.videoWhiteBalanceLockEnabled)
                 cameraController.setVideoCodec(it.videoCodec)
-                cameraController.setMirrorFrontCameraEnabled(it.mirrorFrontCamera)
-                multipleExposureState = multipleExposureState.copy(
-                    enabled = it.useMultipleExposure,
-                    targetCount = it.multipleExposureCount
-                )
+                multipleExposureState = multipleExposureState.copy(enabled = it.useMultipleExposure)
                 // 同步 Live Photo 设置到相机控制器
                 cameraController.setUseLivePhoto(shouldEnableLivePhoto(it))
-                // 同步 Ultra HDR 设置到相机控制器
-                cameraController.setApplyUltraHDR(it.applyUltraHDR)
-                // 同步 P010 设置到相机控制器
-                cameraController.setUseP010(it.useP010)
-                // 同步 P3 色域设置到相机控制器
-                cameraController.setUseP3ColorSpace(it.useP3ColorSpace)
             }
         }
 
@@ -2543,7 +2135,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 cameraController.setVideoLogProfile(prefs.videoLogProfile)
                 cameraController.setVideoLogLutMode(prefs.videoLogLutMode)
                 cameraController.setVideoBitrate(prefs.videoBitrate)
-                cameraController.setVideoAudioInputId(prefs.videoAudioInputId)
+                cameraController.setVideoAudioInputId(userPreferencesRepository.latest().videoAudioInputId)
                 cameraController.setVideoRecordingPath(prefs.videoRecordingPath, prefs.videoRecordingTreeUri)
                 cameraController.setVideoStabilizationMode(prefs.videoStabilizationMode)
                 cameraController.setVideoEnhancedStabilizationStrength(
@@ -2555,9 +2147,11 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 cameraController.setExternalLensStabilizationConfig(
                     prefs.externalLensStabilizationConfig
                 )
-                cameraController.setVideoTorchEnabled(prefs.videoTorchEnabled)
-                cameraController.setVideoLensLockEnabled(prefs.videoLensLockEnabled)
-                cameraController.setVideoWhiteBalanceLockEnabled(prefs.videoWhiteBalanceLockEnabled)
+                cameraController.setVideoTorchEnabled(userPreferencesRepository.latest().videoTorchEnabled)
+                cameraController.setVideoLensLockEnabled(userPreferencesRepository.latest().videoLensLockEnabled)
+                cameraController.setVideoWhiteBalanceLockEnabled(
+                    userPreferencesRepository.latest().videoWhiteBalanceLockEnabled
+                )
                 cameraController.setVideoCodec(prefs.videoCodec)
                 cameraController.setMeteringMode(prefs.meteringMode)
 
@@ -2571,10 +2165,8 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                     currentFrameId = prefs.frameId
                 }
 
-                showHistogram = prefs.showHistogram
-
                 // 应用保存的网格线设置
-                cameraController.setShowGrid(prefs.showGrid)
+                cameraController.setShowGrid(userPreferencesRepository.latest().showGrid)
                 cameraController.setGridStyle(prefs.gridStyle)
 
                 cameraController.setUseMultipleExposure(prefs.useMultipleExposure)
@@ -2602,7 +2194,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 cameraController.setHdrPlusShortFrameExposureEv(prefs.hdrPlusShortFrameExposureEv)
                 cameraController.setUseLivePhoto(shouldEnableLivePhoto(prefs))
                 // 应用保存的虚拟光圈
-                applyDefaultVirtualAperture(prefs.defaultVirtualAperture)
+                applyDefaultVirtualAperture(userPreferencesRepository.latest().defaultVirtualAperture)
             } else {
                 // 如果没有任何偏好设置，使用配置文件中的默认 LUT（第一个）
                 val defaultLut = availableLutList.firstOrNull { it.isDefault }
@@ -2647,12 +2239,6 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         return emptyList()
     }
 
-    fun setUseHdrScreenMode(enabled: Boolean) {
-        viewModelScope.launch {
-            userPreferencesRepository.saveUseHdrScreenMode(enabled)
-        }
-    }
-
     fun setRawDcpId(dcpId: String?) {
         viewModelScope.launch {
             applyCameraFeatureUpdate(
@@ -2678,18 +2264,6 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                     },
                 )
             )
-        }
-    }
-
-    fun setRawNoiseProfileId(profileId: String) {
-        viewModelScope.launch {
-            userPreferencesRepository.saveRawNoiseProfileId(profileId)
-        }
-    }
-
-    fun setRawNoiseProfileIdsByLens(profileIdsByLens: Map<String, String>) {
-        viewModelScope.launch {
-            userPreferencesRepository.saveRawNoiseProfileIdsByLens(profileIdsByLens)
         }
     }
 
@@ -2765,81 +2339,49 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 CameraFeatureUpdate(rawSpectralFilmStock = SettingValue(selection?.id))
             )
             if (selection != null && selection.id == previousStock) {
-                userPreferencesRepository.saveRawSpectralFilmTuning(selection.id, selection.tuning)
+                userPreferencesRepository.update {
+                    rawSpectralFilmTuningsByStock = rawSpectralFilmTuningsByStock + (selection.id to selection.tuning)
+                }
             }
         }
     }
-    fun setRawToneMappingParameters(value: RawToneMappingParameters) {
-        viewModelScope.launch { userPreferencesRepository.saveRawToneMappingParameters(value) }
-    }
-    fun setRawExposureCompensation(value: Float) {
-        viewModelScope.launch { userPreferencesRepository.saveRawExposureCompensation(value) }
-    }
-    fun setRawHighlightsAdjustment(value: Float) {
-        viewModelScope.launch { userPreferencesRepository.saveRawHighlightsAdjustment(value) }
-    }
-    fun setRawShadowsAdjustment(value: Float) {
-        viewModelScope.launch { userPreferencesRepository.saveRawShadowsAdjustment(value) }
-    }
 
-    fun setRawMaxSharpening(value: Float) {
-        viewModelScope.launch { userPreferencesRepository.saveRawMaxSharpening(value) }
-    }
-
-    fun setRawMaxNoiseReduction(value: Float) {
-        viewModelScope.launch { userPreferencesRepository.saveRawMaxNoiseReduction(value) }
-    }
-
-    fun setRawMaxChromaNoiseReduction(value: Float) {
-        viewModelScope.launch { userPreferencesRepository.saveRawMaxChromaNoiseReduction(value) }
-    }
-
-    fun setRawMinShutterSpeedNs(value: Long) {
-        viewModelScope.launch { userPreferencesRepository.saveRawMinShutterSpeedNs(value) }
-    }
-    fun setRawDROEnabled(enabled: Boolean) {
-        viewModelScope.launch { userPreferencesRepository.updateRawDROEnabled(enabled) }
-    }
-    fun setRawBlackPointCorrection(value: Float) {
-        viewModelScope.launch { userPreferencesRepository.saveRawBlackPointCorrection(value) }
-    }
-    fun setRawWhitePointCorrection(value: Float) {
-        viewModelScope.launch { userPreferencesRepository.saveRawWhitePointCorrection(value) }
-    }
-    fun setRawLensShadingCorrectionEnabled(enabled: Boolean) {
-        viewModelScope.launch { userPreferencesRepository.saveRawLensShadingCorrectionEnabled(enabled) }
-    }
     fun setRawDngMetadataCorrections(
         cameraId: String,
         corrections: IszRawDngMetadataCorrections
     ) {
         viewModelScope.launch {
-            userPreferencesRepository.saveRawDngMetadataCorrections(cameraId, corrections)
+            userPreferencesRepository.update { putRawDngMetadataCorrections(cameraId, corrections) }
         }
     }
     fun setRawBlackLevelMode(mode: String) {
+        val cameraId = state.value.currentCameraId
         viewModelScope.launch {
-            userPreferencesRepository.saveRawBlackLevelMode(state.value.currentCameraId, mode)
+            userPreferencesRepository.update { rawBlackLevelModes = rawBlackLevelModes + (cameraId to mode) }
         }
     }
     fun setRawCustomBlackLevel(value: Float) {
+        val cameraId = state.value.currentCameraId
         viewModelScope.launch {
-            userPreferencesRepository.saveRawCustomBlackLevel(state.value.currentCameraId, value)
+            userPreferencesRepository.update { rawCustomBlackLevels = rawCustomBlackLevels + (cameraId to value) }
         }
     }
     fun setRawWhiteLevelMode(mode: String) {
+        val cameraId = state.value.currentCameraId
         viewModelScope.launch {
-            userPreferencesRepository.saveRawWhiteLevelMode(state.value.currentCameraId, mode)
+            userPreferencesRepository.update { rawWhiteLevelModes = rawWhiteLevelModes + (cameraId to mode) }
         }
     }
     fun setRawCustomWhiteLevel(value: Float) {
+        val cameraId = state.value.currentCameraId
         viewModelScope.launch {
-            userPreferencesRepository.saveRawCustomWhiteLevel(state.value.currentCameraId, value)
+            userPreferencesRepository.update { rawCustomWhiteLevels = rawCustomWhiteLevels + (cameraId to value) }
         }
     }
     fun setRawCfaCorrectionMode(mode: String) {
+        val cameraId = state.value.currentCameraId
         viewModelScope.launch {
-            userPreferencesRepository.saveRawCfaCorrectionMode(state.value.currentCameraId, mode)
+            userPreferencesRepository.update { rawCfaCorrectionModes = rawCfaCorrectionModes + (cameraId to mode) }
         }
     }
     fun importRawDcp(uri: Uri, onComplete: (Boolean) -> Unit) {
@@ -2876,7 +2418,10 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 contentRepository.getCustomImportManager().deleteCustomDcp(dcpId)
             }
             if (success) {
-                userPreferencesRepository.removeRawDcpReferences(dcpId)
+                userPreferencesRepository.update {
+                    if (rawDcpId == dcpId) rawDcpId = null
+                    rawDcpIdsByLens = rawDcpIdsByLens.filterValues { it != dcpId }
+                }
                 contentRepository.refreshCustomContent()
             }
             onComplete(success)
@@ -2910,7 +2455,10 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 contentRepository.getCustomImportManager().deleteCustomRawNoiseProfile(profileId)
             }
             if (success) {
-                userPreferencesRepository.removeRawNoiseProfileReferences(profileId)
+                userPreferencesRepository.update {
+                    if (rawNoiseProfileId == profileId) rawNoiseProfileId = RawNoiseProfileManager.DEFAULT_PROFILE_ID
+                    rawNoiseProfileIdsByLens = rawNoiseProfileIdsByLens.filterValues { it != profileId }
+                }
                 contentRepository.refreshCustomContent()
             }
             onComplete(success)
@@ -2953,10 +2501,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     suspend fun prepareCamera(): Boolean {
         if (!cameraController.prepareCameras()) return false
         if (!hasAppliedDefaultFocalLength) {
-            val defaultFocalLength = userPreferencesRepository.userPreferences
-                .firstOrNull()
-                ?.defaultFocalLength
-                ?: 0f
+            val defaultFocalLength = userPreferencesRepository.latest().defaultFocalLength
             if (defaultFocalLength != 0f) {
                 applyStartupDefaultFocalLength(defaultFocalLength)
             }
@@ -3235,7 +2780,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             rawShadowsAdjustment = userPrefs?.rawShadowsAdjustment ?: 0f,
             rawBlackPointCorrection = userPrefs?.rawBlackPointCorrection ?: 0f,
             rawWhitePointCorrection = userPrefs?.rawWhitePointCorrection ?: 0f,
-            rawLensShadingCorrectionEnabled = userPrefs?.rawLensShadingCorrectionEnabled,
+            rawLensShadingCorrectionEnabled = userPreferencesRepository.latest().rawLensShadingCorrectionEnabled,
             rawBlackLevelMode = userPrefs?.rawBlackLevelModes?.get(currentCameraId) ?: "Default",
             rawCustomBlackLevel = userPrefs?.rawCustomBlackLevels?.get(currentCameraId) ?: 0f,
             rawWhiteLevelMode = userPrefs?.rawWhiteLevelModes?.get(currentCameraId)
@@ -3351,7 +2896,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 CameraFeatureUpdate(useMultipleExposure = SettingValue(enabled))
             )
             if (enabled) {
-                userPreferencesRepository.saveUseLivePhoto(false)
+                userPreferencesRepository.update { useLivePhoto = false }
                 cameraController.setUseLivePhoto(false)
             }
         }
@@ -3403,8 +2948,8 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                     multipleExposureState = multipleExposureState.copy(isProcessing = false)
                     return@withContext
                 }
-                val shouldAutoSave = autoSaveAfterCapture.firstOrNull() ?: false
-                val photoQualityValue = photoQuality.firstOrNull() ?: 95
+                val shouldAutoSave = userPreferencesRepository.latest().autoSaveAfterCapture
+                val photoQualityValue = userPreferencesRepository.latest().photoQuality
                 val sharpeningValue = 0f
                 val noiseReductionValue = 0f
                 val chromaNoiseReductionValue = 0f
@@ -3446,12 +2991,6 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 PLog.e(TAG, "Failed to finish multiple exposure session", e)
                 multipleExposureState = multipleExposureState.copy(isProcessing = false)
             }
-        }
-    }
-
-    fun setVideoCodec(codec: com.hinnka.mycamera.video.VideoCodec) {
-        viewModelScope.launch {
-            userPreferencesRepository.saveVideoCodec(codec)
         }
     }
 
@@ -3561,7 +3100,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             job.cancel()
         }
 
-        if (userPreferences.value.saveLocation) {
+        if (userPreferencesRepository.current.saveLocation) {
             val location = locationManager.getCurrentLocation()
             cameraController.setLocation(location?.latitude, location?.longitude)
         } else {
@@ -3595,7 +3134,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
 
     private fun snapshotCaptureSettings() = CaptureSettingsSnapshot(
         state = state.value,
-        preferences = userPreferences.value,
+        preferences = userPreferencesRepository.current,
         lutId = currentLutId.value,
         frameId = currentFrameId,
         recipe = getMergedRecipeParams(),
@@ -3760,7 +3299,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             return
         }
 
-        if (userPreferences.value.saveLocation) {
+        if (userPreferencesRepository.current.saveLocation) {
             val location = locationManager.getCurrentLocation()
             cameraController.setLocation(location?.latitude, location?.longitude)
         } else {
@@ -3924,15 +3463,21 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     private fun updateUserCaptureSettings(update: Camera2Controller.() -> Unit) {
         cameraController.updateUserCaptureSettings(update) { settings ->
             viewModelScope.launch {
-                userPreferencesRepository.saveCustomCaptureSettings(settings)
+                userPreferencesRepository.update {
+                    if (retainCaptureSettings) customCaptureSettings = settings
+                }
             }
         }
     }
 
     fun setRetainCaptureSettings(enabled: Boolean) {
         cameraController.setCaptureSettingsRetention(enabled) { settings ->
+            // 开关与快照同一次写入；关闭时一并清除已保存的参数
             viewModelScope.launch {
-                userPreferencesRepository.saveCaptureSettingsRetention(enabled, settings)
+                userPreferencesRepository.update {
+                    retainCaptureSettings = enabled
+                    customCaptureSettings = settings.takeIf { enabled }
+                }
             }
         }
     }
@@ -3964,11 +3509,11 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     private fun syncVendorCaptureSettingsToController() {
-        val settings = vendorCaptureSettingsByLens.value
+        val settings = userPreferencesRepository.current.vendorCaptureSettingsByLens
         if (cameraController.state.value.vendorCaptureSettingsByLens != settings) {
             cameraController.setVendorCaptureSettingsByLens(settings)
         }
-        val customSettings = customVendorKeySettings.value
+        val customSettings = userPreferencesRepository.current.customVendorKeySettings
         if (cameraController.state.value.customVendorKeySettings != customSettings) {
             cameraController.setCustomVendorKeySettings(customSettings)
         }
@@ -3991,29 +3536,29 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             setAspectRatio(sanitizedRatios.first())
         }
         viewModelScope.launch {
-            userPreferencesRepository.saveTopSheetAspectRatios(sanitizedRatios)
+            userPreferencesRepository.update { topSheetAspectRatios = sanitizedRatios }
         }
     }
 
     fun addCustomAspectRatio(widthRatio: Int, heightRatio: Int) {
         val ratio = AspectRatio.custom(widthRatio, heightRatio)
-        val customRatios = AspectRatio.sanitizeCustomRatios(customAspectRatios.value + ratio)
+        val customRatios = AspectRatio.sanitizeCustomRatios(userPreferencesRepository.current.customAspectRatios + ratio)
         viewModelScope.launch {
-            userPreferencesRepository.saveCustomAspectRatios(customRatios)
-            val selectedRatios = AspectRatio.sanitizeTopSheetRatios(topSheetAspectRatios.value + ratio)
-            userPreferencesRepository.saveTopSheetAspectRatios(selectedRatios)
+            userPreferencesRepository.update { customAspectRatios = customRatios }
+            val selectedRatios = AspectRatio.sanitizeTopSheetRatios(userPreferencesRepository.current.topSheetAspectRatios + ratio)
+            userPreferencesRepository.update { topSheetAspectRatios = selectedRatios }
         }
     }
 
     fun deleteCustomAspectRatio(ratio: AspectRatio) {
-        val customRatios = customAspectRatios.value.filterNot { it.name == ratio.name }
-        val selectedRatios = topSheetAspectRatios.value.filterNot { it.name == ratio.name }
+        val customRatios = userPreferencesRepository.current.customAspectRatios.filterNot { it.name == ratio.name }
+        val selectedRatios = userPreferencesRepository.current.topSheetAspectRatios.filterNot { it.name == ratio.name }
         if (state.value.aspectRatio.name == ratio.name) {
             setAspectRatio(AspectRatio.RATIO_4_3)
         }
         viewModelScope.launch {
-            userPreferencesRepository.saveCustomAspectRatios(customRatios)
-            userPreferencesRepository.saveTopSheetAspectRatios(selectedRatios)
+            userPreferencesRepository.update { customAspectRatios = customRatios }
+            userPreferencesRepository.update { topSheetAspectRatios = selectedRatios }
         }
     }
 
@@ -4037,7 +3582,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
 
         shootingModeSwitchJob?.cancel()
         val rawNeedsUpdate = useRaw != null &&
-            (state.value.useRaw != useRaw || this.useRaw.value != useRaw)
+            (state.value.useRaw != useRaw || userPreferencesRepository.current.useRaw != useRaw)
         if (state.value.captureMode == mode && !rawNeedsUpdate) return
 
         shootingModeSwitchJob = viewModelScope.launch {
@@ -4055,11 +3600,11 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         val resolvedConfig = state.value.videoConfig
         reopenCamera()
         viewModelScope.launch {
-            userPreferencesRepository.saveVideoStabilizationConfig(
-                mode = resolvedConfig.stabilizationMode,
-                resolution = resolvedConfig.resolution,
-                fps = resolvedConfig.fps,
-            )
+            userPreferencesRepository.update {
+                videoStabilizationMode = resolvedConfig.stabilizationMode
+                videoResolution = resolvedConfig.resolution
+                videoFps = resolvedConfig.fps
+            }
         }
     }
 
@@ -4068,11 +3613,11 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         val resolvedConfig = state.value.videoConfig
         reopenCamera()
         viewModelScope.launch {
-            userPreferencesRepository.saveVideoStabilizationConfig(
-                mode = resolvedConfig.stabilizationMode,
-                resolution = resolvedConfig.resolution,
-                fps = resolvedConfig.fps,
-            )
+            userPreferencesRepository.update {
+                videoStabilizationMode = resolvedConfig.stabilizationMode
+                videoResolution = resolvedConfig.resolution
+                videoFps = resolvedConfig.fps
+            }
         }
     }
 
@@ -4080,7 +3625,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         cameraController.setVideoAspectRatio(aspectRatio)
         reopenCamera()
         viewModelScope.launch {
-            userPreferencesRepository.saveVideoAspectRatio(aspectRatio)
+            userPreferencesRepository.update { videoAspectRatio = aspectRatio }
         }
     }
 
@@ -4095,11 +3640,11 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             reopenCamera()
         }
         viewModelScope.launch {
-            userPreferencesRepository.saveVideoStabilizationConfig(
-                mode = resolvedConfig.stabilizationMode,
-                resolution = resolvedConfig.resolution,
-                fps = resolvedConfig.fps,
-            )
+            userPreferencesRepository.update {
+                videoStabilizationMode = resolvedConfig.stabilizationMode
+                videoResolution = resolvedConfig.resolution
+                videoFps = resolvedConfig.fps
+            }
         }
     }
 
@@ -4107,28 +3652,28 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         cameraController.setPhotoPreviewStabilizationEnabled(enabled)
         val resolvedEnabled = state.value.photoPreviewStabilizationEnabled
         viewModelScope.launch {
-            userPreferencesRepository.savePhotoPreviewStabilizationEnabled(resolvedEnabled)
+            userPreferencesRepository.update { photoPreviewStabilizationEnabled = resolvedEnabled }
         }
     }
 
     fun setOppoSuperStabilizationEnabled(enabled: Boolean) {
         cameraController.setOppoSuperStabilizationEnabled(enabled)
         viewModelScope.launch {
-            userPreferencesRepository.saveOppoSuperStabilizationEnabled(enabled)
+            userPreferencesRepository.update { oppoSuperStabilizationEnabled = enabled }
         }
     }
 
     fun setVideoEnhancedStabilizationStrength(strength: Float) {
         cameraController.setVideoEnhancedStabilizationStrength(strength)
         viewModelScope.launch {
-            userPreferencesRepository.saveVideoEnhancedStabilizationStrength(strength)
+            userPreferencesRepository.update { videoEnhancedStabilizationStrength = strength }
         }
     }
 
     fun setVideoEnhancedStabilizationLookahead(lookahead: Int) {
         cameraController.setVideoEnhancedStabilizationLookahead(lookahead)
         viewModelScope.launch {
-            userPreferencesRepository.saveVideoEnhancedStabilizationLookahead(lookahead)
+            userPreferencesRepository.update { videoEnhancedStabilizationLookahead = lookahead }
         }
     }
 
@@ -4136,7 +3681,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         val normalized = config.normalized()
         cameraController.setExternalLensStabilizationConfig(normalized)
         viewModelScope.launch {
-            userPreferencesRepository.saveExternalLensStabilizationConfig(normalized)
+            userPreferencesRepository.update { externalLensStabilizationConfig = normalized }
         }
     }
 
@@ -4144,7 +3689,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         cameraController.setVideoLogProfile(logProfile)
         reopenCamera()
         viewModelScope.launch {
-            userPreferencesRepository.saveVideoLogProfile(logProfile)
+            userPreferencesRepository.update { videoLogProfile = logProfile }
         }
         validateAndCancelNonMatchingVideoLut(logProfile, currentLutConfig)
     }
@@ -4152,7 +3697,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     fun setVideoLogLutMode(mode: VideoLogLutMode) {
         if (state.value.videoRecordingState.isRecording || state.value.videoRecordingState.isProcessing) return
         cameraController.setVideoLogLutMode(mode)
-        viewModelScope.launch { userPreferencesRepository.saveVideoLogLutMode(mode) }
+        viewModelScope.launch { userPreferencesRepository.update { videoLogLutMode = mode } }
     }
 
     /**
@@ -4172,48 +3717,26 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         cameraController.setVideoBitrate(bitrate)
         reopenCamera()
         viewModelScope.launch {
-            userPreferencesRepository.saveVideoBitrate(bitrate)
-        }
-    }
-
-    fun setVideoAudioInputId(audioInputId: String) {
-        cameraController.setVideoAudioInputId(audioInputId)
-        viewModelScope.launch {
-            userPreferencesRepository.saveVideoAudioInputId(audioInputId)
+            userPreferencesRepository.update { videoBitrate = bitrate }
         }
     }
 
     fun setVideoRecordingPath(recordingPath: VideoRecordingPath, treeUri: String? = null) {
         cameraController.setVideoRecordingPath(recordingPath, treeUri)
         viewModelScope.launch {
-            userPreferencesRepository.saveVideoRecordingPath(recordingPath, treeUri)
+            userPreferencesRepository.update {
+                videoRecordingPath = recordingPath
+                videoRecordingTreeUri = treeUri.takeIf { recordingPath == VideoRecordingPath.EXTERNAL_TREE }
+            }
         }
     }
 
     fun setPhotoSavePath(savePath: PhotoSavePath, treeUri: String? = null) {
         viewModelScope.launch {
-            userPreferencesRepository.savePhotoSavePath(savePath, treeUri)
-        }
-    }
-
-    fun setVideoTorchEnabled(enabled: Boolean) {
-        cameraController.setVideoTorchEnabled(enabled)
-        viewModelScope.launch {
-            userPreferencesRepository.saveVideoTorchEnabled(enabled)
-        }
-    }
-
-    fun setVideoLensLockEnabled(enabled: Boolean) {
-        cameraController.setVideoLensLockEnabled(enabled)
-        viewModelScope.launch {
-            userPreferencesRepository.saveVideoLensLockEnabled(enabled)
-        }
-    }
-
-    fun setVideoWhiteBalanceLockEnabled(enabled: Boolean) {
-        cameraController.setVideoWhiteBalanceLockEnabled(enabled)
-        viewModelScope.launch {
-            userPreferencesRepository.saveVideoWhiteBalanceLockEnabled(enabled)
+            userPreferencesRepository.update {
+                photoSavePath = savePath
+                photoSaveTreeUri = treeUri.takeIf { savePath == PhotoSavePath.EXTERNAL_TREE }
+            }
         }
     }
 
@@ -4293,7 +3816,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     fun setMeteringMode(mode: MeteringMode) {
         cameraController.setMeteringMode(mode)
         viewModelScope.launch {
-            userPreferencesRepository.saveMeteringMode(mode)
+            userPreferencesRepository.update { meteringMode = mode }
         }
     }
 
@@ -4353,7 +3876,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                         } else {
                             allIds.add(newLutId)
                         }
-                        userPreferencesRepository.saveFilterOrder(allIds)
+                        userPreferencesRepository.update { filterOrder = allIds }
                     } else {
                         val index = currentOrder.indexOf(lut.id)
                         if (index != -1) {
@@ -4361,7 +3884,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                         } else {
                             currentOrder.add(newLutId)
                         }
-                        userPreferencesRepository.saveFilterOrder(currentOrder)
+                        userPreferencesRepository.update { filterOrder = currentOrder }
                     }
 
                     // 刷新列表
@@ -4374,17 +3897,14 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     /**
      * 获取滤镜排序顺序
      */
-    val filterOrder: Flow<List<String>> = userPreferencesRepository.userPreferences.map { it.filterOrder }
 
     /**
      * 获取边框排序顺序
      */
-    val frameOrder: Flow<List<String>> = userPreferencesRepository.userPreferences.map { it.frameOrder }
 
     /**
      * 获取分类排序顺序
      */
-    val categoryOrder: Flow<List<String>> = userPreferencesRepository.userPreferences.map { it.categoryOrder }
 
     private val _lutSelectorMode = MutableStateFlow(LutSelectorMode.Style)
     val lutSelectorMode: StateFlow<LutSelectorMode> = _lutSelectorMode.asStateFlow()
@@ -4401,33 +3921,17 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     /**
-     * 保存滤镜排序顺序
-     */
-    fun saveFilterOrder(order: List<String>) {
-        viewModelScope.launch {
-            userPreferencesRepository.saveFilterOrder(order)
-        }
-    }
-
-    /**
-     * 保存边框排序顺序
-     */
-    fun saveFrameOrder(order: List<String>) {
-        viewModelScope.launch {
-            userPreferencesRepository.saveFrameOrder(order)
-        }
-    }
-
-    /**
      * 保存分类排序顺序
      */
     fun saveCategoryOrder(order: List<String>) =
         viewModelScope.launch {
-            userPreferencesRepository.saveCategoryOrder(order)
+            userPreferencesRepository.update { categoryOrder = order }
         }
 
     suspend fun retainLutCategories(categories: List<String>) {
-        userPreferencesRepository.retainLutCategories(categories)
+        userPreferencesRepository.update {
+            categoryOrder = (categoryOrder + categories).filter { it.isNotBlank() }.distinct()
+        }
     }
 
     fun setLutSelectorMode(mode: LutSelectorMode) {
@@ -4435,7 +3939,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         lutSelectorModeSelectionGeneration++
         _lutSelectorMode.value = mode
         viewModelScope.launch {
-            userPreferencesRepository.saveLutSelectorMode(mode)
+            userPreferencesRepository.update { lutSelectorMode = mode }
         }
     }
 
@@ -4461,9 +3965,10 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 userPreferences.value.separateVideoLutEnabled
             viewModelScope.launch {
                 if (useVideoSlot) {
-                    userPreferencesRepository.saveVideoLutConfig(normalizedLutId)
+                    userPreferencesRepository.update { videoLutId = normalizedLutId }
                 } else {
-                    userPreferencesRepository.saveLutConfig(normalizedLutId)
+                    userPreferencesRepository.update { this.lutId = normalizedLutId }
+                    PhotonLookContract.notifyLookChanged(getApplication<Application>())
                 }
             }
         }
@@ -4491,7 +3996,8 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             applyLut(normalizedLutId)
         }
         viewModelScope.launch {
-            userPreferencesRepository.saveLutConfig(normalizedLutId)
+            userPreferencesRepository.update { this.lutId = normalizedLutId }
+            PhotonLookContract.notifyLookChanged(getApplication<Application>())
         }
     }
 
@@ -4503,7 +4009,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             applyLut(normalizedLutId)
         }
         viewModelScope.launch {
-            userPreferencesRepository.saveVideoLutConfig(normalizedLutId)
+            userPreferencesRepository.update { videoLutId = normalizedLutId }
         }
     }
 
@@ -4514,12 +4020,15 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             val initialVideoLutId = currentPreferences.videoLutId
                 ?: currentPreferences.lutId
                 ?: currentLutId.value
-            userPreferencesRepository.saveSeparateVideoLutEnabled(enabled, initialVideoLutId)
+            userPreferencesRepository.update {
+                separateVideoLutEnabled = enabled
+                if (enabled && videoLutId == null && initialVideoLutId != null) videoLutId = initialVideoLutId
+            }
             if (state.value.captureMode == CaptureMode.VIDEO) {
-                val updatedPreferences = currentPreferences.copy(
-                    separateVideoLutEnabled = enabled,
+                val updatedPreferences = currentPreferences.edited {
+                    separateVideoLutEnabled = enabled
                     videoLutId = currentPreferences.videoLutId ?: initialVideoLutId
-                )
+                }
                 resolveLutIdForMode(updatedPreferences, CaptureMode.VIDEO)?.let {
                     applyLut(it)
                 }
@@ -4640,24 +4149,9 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         }
     }
 
-    /**
-     * 设置是否应用 Ultra HDR 策略
-     */
-    fun setApplyUltraHDR(enabled: Boolean) {
-        viewModelScope.launch {
-            userPreferencesRepository.saveApplyUltraHDR(enabled)
-        }
-    }
-
-    fun setSaveLocation(enabled: Boolean) {
-        viewModelScope.launch {
-            userPreferencesRepository.saveSaveLocation(enabled)
-        }
-    }
-
     fun setLocationTrackingForeground(foreground: Boolean) {
         locationTrackingForeground = foreground
-        applyLocationTracking(saveLocationEnabled.value)
+        applyLocationTracking(userPreferencesRepository.current.saveLocation)
     }
 
     private fun applyLocationTracking(saveLocation: Boolean) {
@@ -4668,32 +4162,12 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         }
     }
 
-    fun setOpenAIApiKey(key: String) {
-        viewModelScope.launch {
-            userPreferencesRepository.saveOpenAIApiKey(key)
-        }
-    }
-
-    fun setOpenAIUrl(url: String) {
-        viewModelScope.launch {
-            userPreferencesRepository.saveOpenAIBaseUrl(url)
-        }
-    }
-
-    fun setOpenAIModel(model: String) {
-        viewModelScope.launch {
-            userPreferencesRepository.saveOpenAIModel(model)
-        }
-    }
-
     fun setUseBuiltInAiService(use: Boolean) {
         if (use && !isPurchased.value) {
             showPaymentDialog = true
             return
         }
-        viewModelScope.launch {
-            userPreferencesRepository.saveUseBuiltInAiService(use)
-        }
+        userPreferencesRepository.updateAsync { useBuiltInAiService = use }
     }
 
     /**
@@ -4713,8 +4187,8 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 result.onSuccess { models ->
                     _availableOpenAIModels.value = models
                     // 如果当前选择的模型为空且有可用模型，自动选择第一个
-                    if (openAIModel.value.isNullOrBlank() && models.isNotEmpty()) {
-                        setOpenAIModel(models.first())
+                    if (userPreferencesRepository.current.openAIModel.isNullOrBlank() && models.isNotEmpty()) {
+                        userPreferencesRepository.updateAsync { openAIModel = models.first() }
                     }
                 }.onFailure { e ->
                     PLog.e(TAG, "Failed to fetch AI models", e)
@@ -4727,27 +4201,10 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         }
     }
 
-    /**
-     * 设置是否启用 P010
-     */
-    fun setUseP010(enabled: Boolean) {
-        viewModelScope.launch {
-            userPreferencesRepository.saveUseP010(enabled)
-        }
-    }
-
     fun setUseP3ColorSpace(enabled: Boolean) {
         cameraController.setUseP3ColorSpace(enabled)
-        viewModelScope.launch {
-            userPreferencesRepository.saveUseP3ColorSpace(enabled)
-        }
+        userPreferencesRepository.updateAsync { useP3ColorSpace = enabled }
         reopenCamera()
-    }
-
-    fun setUltraHdrGainMapEnabled(enabled: Boolean) {
-        viewModelScope.launch {
-            userPreferencesRepository.saveUltraHdrGainMapEnabled(enabled)
-        }
     }
 
     /**
@@ -4884,7 +4341,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             cameraState.isRawSupported &&
             cameraState.isPreviewActive &&
             !cameraState.isCapturing
-        val acceptsEyeFocus = eyeFocusEnabled.value &&
+        val acceptsEyeFocus = userPreferencesRepository.current.eyeFocusEnabled &&
             isEyeFocusRuntimeAvailable &&
             cameraState.isPreviewActive &&
             cameraState.isAutoFocus &&
@@ -4912,7 +4369,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     private fun handleEyeFocusTarget(target: PreviewEyeFocusProcessor.EyeTarget) {
         val cameraState = state.value
         if (
-            !eyeFocusEnabled.value ||
+            !userPreferencesRepository.current.eyeFocusEnabled ||
             !isEyeFocusRuntimeAvailable ||
             !cameraState.isPreviewActive ||
             !cameraState.isAutoFocus ||
@@ -5037,17 +4494,6 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             }
         }
 
-    /**
-     * 设置是否显示直方图
-     */
-    fun saveShowHistogram(show: Boolean) {
-        showHistogram = show
-        // 保存到用户偏好设置
-        viewModelScope.launch {
-            userPreferencesRepository.saveShowHistogram(show)
-        }
-    }
-
     // ==================== 延时拍摄和网格线相关方法 ====================
 
     /** 拍照模式：YUV 多帧降噪。 */
@@ -5063,22 +4509,20 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         val normalizedCount = MultiFrameConfig.normalizeDenoiseFrameCount(count)
         cameraController.setJpgMultiFrameDenoiseFrameCount(normalizedCount)
         viewModelScope.launch {
-            userPreferencesRepository.saveJpgMultiFrameDenoiseFrameCount(normalizedCount)
+            userPreferencesRepository.update { jpgMultiFrameDenoiseFrameCount = normalizedCount }
         }
     }
 
     fun setJpgMultiFrameDenoiseOutputScale(scale: Float) {
         viewModelScope.launch {
-            userPreferencesRepository.saveJpgMultiFrameDenoiseOutputScale(
-                MultiFrameConfig.normalizeOutputScale(scale)
-            )
+            userPreferencesRepository.update { jpgMultiFrameDenoiseOutputScale = MultiFrameConfig.normalizeOutputScale(scale) }
         }
     }
 
     fun setHdrPlusMergeMode(mode: MgcRawMaxMode) {
         cameraController.setHdrPlusMergeMode(mode)
         viewModelScope.launch {
-            userPreferencesRepository.saveHdrPlusMergeMode(mode)
+            userPreferencesRepository.update { hdrPlusMergeMode = mode }
         }
     }
 
@@ -5089,52 +4533,34 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         )
         cameraController.setHdrPlusFrameCount(normalizedCount)
         viewModelScope.launch {
-            userPreferencesRepository.saveHdrPlusFrameCount(normalizedCount)
+            userPreferencesRepository.update { hdrPlusFrameCount = normalizedCount }
         }
     }
 
     fun setHdrPlusBracketExposureEnabled(enabled: Boolean) {
         cameraController.setHdrPlusBracketExposureEnabled(enabled)
         viewModelScope.launch {
-            userPreferencesRepository.saveHdrPlusBracketExposureEnabled(enabled)
+            userPreferencesRepository.update { hdrPlusBracketExposureEnabled = enabled }
         }
     }
 
     fun setHdrPlusLongFrameExposureEv(value: Float) {
         val normalized = MultiFrameConfig.normalizeLongFrameExposureEv(value)
         cameraController.setHdrPlusLongFrameExposureEv(normalized)
-        viewModelScope.launch { userPreferencesRepository.saveHdrPlusLongFrameExposureEv(normalized) }
+        viewModelScope.launch { userPreferencesRepository.update { hdrPlusLongFrameExposureEv = normalized } }
     }
 
     fun setHdrPlusShortFrameExposureEv(value: Float) {
         val normalized = MultiFrameConfig.normalizeShortFrameExposureEv(value)
         cameraController.setHdrPlusShortFrameExposureEv(normalized)
-        viewModelScope.launch { userPreferencesRepository.saveHdrPlusShortFrameExposureEv(normalized) }
-    }
-
-    fun setMlAeMaxHdrRatio(value: Float) {
-        viewModelScope.launch { userPreferencesRepository.saveMlAeMaxHdrRatio(value) }
-    }
-
-    fun setMultipleExposureCount(count: Int) {
-        val normalizedCount = count.coerceIn(2, 9)
-        multipleExposureState = multipleExposureState.copy(targetCount = normalizedCount)
-        viewModelScope.launch {
-            userPreferencesRepository.saveMultipleExposureCount(normalizedCount)
-        }
-    }
-
-    fun setRawDigitalZoomResamplingEnabled(enabled: Boolean) {
-        viewModelScope.launch {
-            userPreferencesRepository.saveRawDigitalZoomResamplingEnabled(enabled)
-        }
+        viewModelScope.launch { userPreferencesRepository.update { hdrPlusShortFrameExposureEv = normalized } }
     }
 
     fun setRawMaxOutputScale(scale: Float) {
         viewModelScope.launch {
             val prefs = userPreferencesRepository.userPreferences.first()
             val normalizedScale = prefs.rawOutputUpscaleMode.resolveOutputScale(scale)
-            userPreferencesRepository.saveRawMaxOutputScale(normalizedScale)
+            userPreferencesRepository.update { rawMaxOutputScale = normalizedScale }
             cameraController.setMultiFrameOutputScale(
                 resolveMultiFrameOutputScale(
                     useJpgMax = prefs.useJpgMax && !prefs.useRaw &&
@@ -5148,19 +4574,9 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         }
     }
 
-    /**
-     * 设置 RAWmax 输出放大算法。MGC RAISR 与原版一致只支持 2x per-shift 放大，
-     * 因此选中时输出倍率由偏好层锁定为 2x，与 Lanczos 连续倍率放大互斥。
-     */
-    fun setRawColorCalibrationMode(mode: RawColorCalibrationMode) {
-        viewModelScope.launch {
-            userPreferencesRepository.saveRawColorCalibrationMode(mode)
-        }
-    }
-
     fun setRawOutputUpscaleMode(mode: RawOutputUpscaleMode) {
         viewModelScope.launch {
-            userPreferencesRepository.saveRawOutputUpscaleMode(mode)
+            userPreferencesRepository.update { rawOutputUpscaleMode = mode }
             val prefs = userPreferencesRepository.userPreferences.first()
             cameraController.setMultiFrameOutputScale(
                 resolveMultiFrameOutputScale(
@@ -5196,19 +4612,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 )
             }
             cameraController.setUseLivePhoto(enabled)
-            userPreferencesRepository.saveUseLivePhoto(enabled)
-        }
-    }
-
-    fun setEnableDevelopAnimation(enabled: Boolean) {
-        viewModelScope.launch {
-            userPreferencesRepository.saveEnableDevelopAnimation(enabled)
-        }
-    }
-
-    fun setDevelopAnimationStyle(style: DevelopAnimationStyle) {
-        viewModelScope.launch {
-            userPreferencesRepository.saveDevelopAnimationStyle(style)
+            userPreferencesRepository.update { useLivePhoto = enabled }
         }
     }
 
@@ -5231,23 +4635,13 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
      * 切换网格线显示
      */
     fun toggleGrid() {
-        setShowGrid(!state.value.showGrid)
-    }
-
-    /**
-     * 设置是否显示网格线
-     */
-    fun setShowGrid(show: Boolean) {
-        cameraController.setShowGrid(show)
-        viewModelScope.launch {
-            userPreferencesRepository.saveShowGrid(show)
-        }
+        userPreferencesRepository.updateAsync { showGrid = !state.value.showGrid }
     }
 
     fun setGridStyle(style: GridStyle) {
         cameraController.setGridStyle(style)
         viewModelScope.launch {
-            userPreferencesRepository.saveGridStyle(style)
+            userPreferencesRepository.update { gridStyle = style }
         }
     }
 
@@ -5255,7 +4649,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
      * 切换 RAW 格式拍摄
      */
     fun toggleRaw() {
-        val nextValue = !useRaw.value
+        val nextValue = !userPreferencesRepository.current.useRaw
         setUseRaw(nextValue)
     }
 
@@ -5267,31 +4661,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         }
     }
 
-    fun setExportDngWithRawExport(enabled: Boolean) {
-        viewModelScope.launch {
-            userPreferencesRepository.saveExportDngWithRawExport(enabled)
-        }
-    }
-
     // ==================== 新增设置项方法 ====================
-
-    /**
-     * 设置是否显示水平仪
-     */
-    fun setShowLevelIndicator(show: Boolean) {
-        viewModelScope.launch {
-            userPreferencesRepository.saveShowLevelIndicator(show)
-        }
-    }
-
-    /**
-     * 设置手动对焦时是否显示峰值对焦
-     */
-    fun setFocusPeakingEnabled(enabled: Boolean) {
-        viewModelScope.launch {
-            userPreferencesRepository.saveFocusPeakingEnabled(enabled)
-        }
-    }
 
     fun setEyeFocusEnabled(enabled: Boolean) {
         if (enabled && isEyeFocusRuntimeAvailable) {
@@ -5300,9 +4670,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             previewEyeFocusProcessor.resetTracking()
             resetEyeFocusTracking(cancelCameraFocus = true, reason = "disabled")
         }
-        viewModelScope.launch {
-            userPreferencesRepository.saveEyeFocusEnabled(enabled)
-        }
+        userPreferencesRepository.updateAsync { eyeFocusEnabled = enabled }
     }
 
     /**
@@ -5324,7 +4692,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                         } else {
                             allIds.add(newFrameId)
                         }
-                        userPreferencesRepository.saveFrameOrder(allIds)
+                        userPreferencesRepository.update { frameOrder = allIds }
                     } else {
                         val index = currentOrder.indexOf(frame.id)
                         if (index != -1) {
@@ -5332,20 +4700,11 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                         } else {
                             currentOrder.add(newFrameId)
                         }
-                        userPreferencesRepository.saveFrameOrder(currentOrder)
+                        userPreferencesRepository.update { frameOrder = currentOrder }
                     }
                     contentRepository.refreshCustomContent()
                 }
             }
-        }
-    }
-
-    /**
-     * 设置是否启用快门声音
-     */
-    fun setShutterSoundEnabled(enabled: Boolean) {
-        viewModelScope.launch {
-            userPreferencesRepository.saveShutterSoundEnabled(enabled)
         }
     }
 
@@ -5379,52 +4738,11 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     /**
-     * 设置是否启用拍摄震动
-     */
-    fun setColorPaletteEnabled(enabled: Boolean) {
-        viewModelScope.launch { userPreferencesRepository.saveColorPaletteEnabled(enabled) }
-    }
-
-    fun setAutoRotateEnabled(enabled: Boolean) {
-        viewModelScope.launch { userPreferencesRepository.saveAutoRotateEnabled(enabled) }
-    }
-
-    fun setVibrationEnabled(enabled: Boolean) {
-        viewModelScope.launch {
-            userPreferencesRepository.saveVibrationEnabled(enabled)
-        }
-    }
-
-    /**
-     * 设置是否保持屏幕常亮
-     */
-    fun setKeepScreenOn(enabled: Boolean) {
-        viewModelScope.launch {
-            userPreferencesRepository.saveKeepScreenOn(enabled)
-        }
-    }
-
-    fun setWindowScreenBrightness(value: Float?) {
-        viewModelScope.launch {
-            userPreferencesRepository.saveWindowScreenBrightness(value)
-        }
-    }
-
-    /**
-     * 设置音量键操作
-     */
-    fun setVolumeKeyAction(action: VolumeKeyAction) {
-        viewModelScope.launch {
-            userPreferencesRepository.saveVolumeKeyAction(action)
-        }
-    }
-
-    /**
      * 处理音量键按下
      * @return 是否消费了该事件
      */
     fun handleVolumeKey(isUp: Boolean): Boolean {
-        val action = volumeKeyAction.value
+        val action = userPreferencesRepository.current.volumeKeyAction
         if (action == VolumeKeyAction.NONE) return false
 
         val currentTime = System.currentTimeMillis()
@@ -5675,24 +4993,13 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         )
     }
 
-    /**
-     * 设置是否拍摄后自动保存
-     */
-    fun setAutoSaveAfterCapture(enabled: Boolean) {
-        viewModelScope.launch {
-            userPreferencesRepository.saveAutoSaveAfterCapture(enabled)
-        }
-    }
-
     fun addCustomFocalLength(focalLength: Float) {
         viewModelScope.launch {
             val prefs = userPreferencesRepository.userPreferences.first()
             val list = prefs.customFocalLengths.toMutableList()
             if (list.none { CustomFocalLengthValue.matches(it, focalLength) }) {
                 list.add(focalLength)
-                userPreferencesRepository.saveCustomFocalLengths(
-                    list.sortedBy { CustomFocalLengthValue.sortKey(it, state.value.getCurrentCameraInfo()) }
-                )
+                userPreferencesRepository.update { customFocalLengths = list.sortedBy { CustomFocalLengthValue.sortKey(it, state.value.getCurrentCameraInfo()) } }
             }
         }
     }
@@ -5702,11 +5009,11 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             val prefs = userPreferencesRepository.userPreferences.first()
             val list = prefs.customFocalLengths.toMutableList()
             list.removeAll { CustomFocalLengthValue.matches(it, focalLength) }
-            userPreferencesRepository.saveCustomFocalLengths(list)
+            userPreferencesRepository.update { customFocalLengths = list }
 
             // 如果删除了当前的默认焦段，重置为0
-            if (CustomFocalLengthValue.matches(prefs.defaultFocalLength, focalLength)) {
-                userPreferencesRepository.saveDefaultFocalLength(0f)
+            if (CustomFocalLengthValue.matches(userPreferencesRepository.latest().defaultFocalLength, focalLength)) {
+                userPreferencesRepository.update { defaultFocalLength = 0f }
             }
         }
     }
@@ -5721,35 +5028,21 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             } else {
                 list.add(focalLength)
                 // 如果隐藏了当前的默认焦段，重置默认焦段为0
-                if (abs(prefs.defaultFocalLength - focalLength) < 0.5f) {
-                    userPreferencesRepository.saveDefaultFocalLength(0f)
+                if (abs(userPreferencesRepository.latest().defaultFocalLength - focalLength) < 0.5f) {
+                    userPreferencesRepository.update { defaultFocalLength = 0f }
                 }
             }
-            userPreferencesRepository.saveHiddenFocalLengths(list)
-        }
-    }
-
-    /**
-     * 设置 RAW 色彩空间
-     */
-    fun setColorSpace(colorSpace: ColorSpace) {
-        viewModelScope.launch {
-            userPreferencesRepository.saveColorSpace(colorSpace)
-        }
-    }
-
-    /**
-     * 设置 RAW Log 曲线
-     */
-    fun setLogCurve(logCurve: TransferCurve) {
-        viewModelScope.launch {
-            userPreferencesRepository.saveLogCurve(logCurve)
+            userPreferencesRepository.update { hiddenFocalLengths = list }
         }
     }
 
     fun setRawProfile(rawProfile: RawProfile) {
         viewModelScope.launch {
-            userPreferencesRepository.saveRawProfile(rawProfile)
+            userPreferencesRepository.update {
+                colorSpace = rawProfile.colorSpace
+                logCurve = rawProfile.logCurve
+                rawLuts = rawLuts + (rawProfile.logCurve.name to rawProfile.rawLut)
+            }
         }
     }
 
@@ -5760,72 +5053,24 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         contentRepository.lutManager.recommendLutsForColor(color)
     }
 
-    /**
-     * 设置降噪等级
-     */
-    fun setNRLevel(level: Int) {
-        viewModelScope.launch {
-            userPreferencesRepository.saveNRLevel(level)
-        }
-    }
-
-    /**
-     * 设置锐化等级
-     */
-    fun setEdgeLevel(level: Int) {
-        viewModelScope.launch {
-            userPreferencesRepository.saveEdgeLevel(level)
-        }
-    }
-
-    fun setVideoNRLevel(level: Int) {
-        viewModelScope.launch {
-            userPreferencesRepository.saveVideoNRLevel(level)
-        }
-    }
-
-    fun setVideoEdgeLevel(level: Int) {
-        viewModelScope.launch {
-            userPreferencesRepository.saveVideoEdgeLevel(level)
-        }
-    }
-
     fun setVendorCaptureSettings(lensId: String, settings: VendorCaptureSettings) {
         viewModelScope.launch {
-            userPreferencesRepository.saveVendorCaptureSettingsForLens(lensId, settings)
+            if (lensId.isBlank()) return@launch
+            userPreferencesRepository.update {
+                vendorCaptureSettingsByLens = vendorCaptureSettingsByLens.withSettings(lensId, settings)
+            }
         }
     }
 
     fun upsertCustomVendorKey(key: CustomVendorKey) {
         viewModelScope.launch {
-            userPreferencesRepository.upsertCustomVendorKey(key)
+            userPreferencesRepository.update { customVendorKeySettings = customVendorKeySettings.upsert(key) }
         }
     }
 
     fun removeCustomVendorKey(id: String) {
         viewModelScope.launch {
-            userPreferencesRepository.removeCustomVendorKey(id)
-        }
-    }
-
-    /**
-     * 设置照片质量
-     */
-    fun setPhotoQuality(quality: Int) {
-        viewModelScope.launch {
-            userPreferencesRepository.savePhotoQuality(quality)
-        }
-    }
-
-    fun setUseHeicExport(enabled: Boolean) {
-        viewModelScope.launch {
-            userPreferencesRepository.saveUseHeicExport(enabled)
-        }
-    }
-
-    fun setUseJpeg444Export(enabled: Boolean) {
-        viewModelScope.launch {
-            userPreferencesRepository.saveUseJpeg444Export(enabled)
+            userPreferencesRepository.update { customVendorKeySettings = customVendorKeySettings.remove(id) }
         }
     }
 
@@ -5835,26 +5080,19 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
      * @param offset 旋转偏移角度 (0, 90, 180, 270)
      */
     fun setCameraOrientationOffset(cameraId: String, offset: Int) {
+        require(offset in listOf(0, 90, 180, 270)) { "Offset must be 0, 90, 180, or 270" }
         viewModelScope.launch {
-            userPreferencesRepository.saveCameraOrientationOffset(cameraId, offset)
-        }
-    }
-
-    /**
-     * 设置默认焦段
-     */
-    fun setDefaultFocalLength(focalLength: Float) {
-        viewModelScope.launch {
-            userPreferencesRepository.saveDefaultFocalLength(focalLength)
+            userPreferencesRepository.update {
+                cameraOrientationOffsets = cameraOrientationOffsets + (cameraId to offset)
+            }
         }
     }
 
     fun saveZoomDisplayMode(mode: ZoomDisplayMode) {
         viewModelScope.launch {
-            userPreferencesRepository.saveZoomDisplayMode(mode.name)
+            userPreferencesRepository.update { zoomDisplayMode = mode.name }
         }
     }
-
 
     fun setCustomLensIds(value: String) {
         viewModelScope.launch {
@@ -5862,7 +5100,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 .map { it.trim() }
                 .filter { it.isNotEmpty() }
                 .distinct()
-            userPreferencesRepository.saveCustomLensIds(lensIds)
+            userPreferencesRepository.update { customLensIds = lensIds }
             cameraController.refreshCameraList()
         }
     }
@@ -5873,7 +5111,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 .map { it.trim() }
                 .filter { it.isNotEmpty() }
                 .distinct()
-            userPreferencesRepository.saveLensIdBlacklist(lensIds)
+            userPreferencesRepository.update { lensIdBlacklist = lensIds }
             cameraController.refreshCameraList()
         }
     }
@@ -5907,12 +5145,11 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             val updatedConfigs = (prefs.iszLensConfigs
                 .filterNot { it.virtualCameraId == config.virtualCameraId } + config)
                 .distinctBy { it.virtualCameraId }
-            userPreferencesRepository.saveIszLensConfigs(updatedConfigs)
-            userPreferencesRepository.saveVendorCaptureSettingsForLens(config.virtualCameraId, settings)
-            userPreferencesRepository.saveRawDngMetadataCorrections(
-                config.virtualCameraId,
-                rawDngMetadataCorrections
-            )
+            userPreferencesRepository.update {
+                iszLensConfigs = updatedConfigs
+                vendorCaptureSettingsByLens = vendorCaptureSettingsByLens.withSettings(config.virtualCameraId, settings)
+                putRawDngMetadataCorrections(config.virtualCameraId, rawDngMetadataCorrections)
+            }
             cameraController.refreshCameraList()
         }
     }
@@ -5922,12 +5159,11 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             val prefs = userPreferencesRepository.userPreferences.first()
             val updatedConfigs = prefs.iszLensConfigs
                 .filterNot { it.virtualCameraId == config.virtualCameraId }
-            userPreferencesRepository.saveIszLensConfigs(updatedConfigs)
-            userPreferencesRepository.saveVendorCaptureSettingsForLens(
-                config.virtualCameraId,
-                VendorCaptureSettings.Empty
-            )
-            userPreferencesRepository.clearRawDngMetadataCorrections(config.virtualCameraId)
+            userPreferencesRepository.update {
+                iszLensConfigs = updatedConfigs
+                vendorCaptureSettingsByLens = vendorCaptureSettingsByLens.withSettings(config.virtualCameraId, VendorCaptureSettings.Empty)
+                removeRawDngMetadataCorrections(config.virtualCameraId)
+            }
             cameraController.refreshCameraList()
         }
     }
@@ -5942,28 +5178,21 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
 
     fun setPreferredMainCameraId(cameraId: String?) {
         viewModelScope.launch {
-            userPreferencesRepository.savePreferredMainCameraId(cameraId)
+            userPreferencesRepository.update { preferredMainCameraId = cameraId }
             cameraController.refreshCameraList()
         }
     }
 
     fun setPreferredMacroCameraId(cameraId: String?) {
         viewModelScope.launch {
-            userPreferencesRepository.savePreferredMacroCameraId(cameraId)
-            cameraController.refreshCameraList()
-        }
-    }
-
-    fun setEnableLogicalMultiCameraDiscovery(enabled: Boolean) {
-        viewModelScope.launch {
-            userPreferencesRepository.saveEnableLogicalMultiCameraDiscovery(enabled)
+            userPreferencesRepository.update { preferredMacroCameraId = cameraId }
             cameraController.refreshCameraList()
         }
     }
 
     fun setLogicalCameraBindingWhitelist(value: String) {
         viewModelScope.launch {
-            userPreferencesRepository.saveLogicalCameraBindingWhitelist(value.split(","))
+            userPreferencesRepository.update { logicalCameraBindingWhitelist = value.split(",") }
             cameraController.refreshCameraList()
         }
     }
@@ -6122,7 +5351,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 rawShadowsAdjustment = userPrefs?.rawShadowsAdjustment ?: 0f,
                 rawBlackPointCorrection = userPrefs?.rawBlackPointCorrection ?: 0f,
                 rawWhitePointCorrection = userPrefs?.rawWhitePointCorrection ?: 0f,
-                rawLensShadingCorrectionEnabled = userPrefs?.rawLensShadingCorrectionEnabled,
+                rawLensShadingCorrectionEnabled = userPreferencesRepository.latest().rawLensShadingCorrectionEnabled,
                 rawBlackLevelMode = userPrefs?.rawBlackLevelModes?.get(currentCameraId) ?: "Default",
                 rawCustomBlackLevel = userPrefs?.rawCustomBlackLevels?.get(currentCameraId) ?: 0f,
                 rawWhiteLevelMode = userPrefs?.rawWhiteLevelModes?.get(currentCameraId)
@@ -6237,14 +5466,14 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         try {
             val context = getApplication<Application>()
             val currentState = state.value
-            val shouldAutoSave = autoSaveAfterCapture.firstOrNull() ?: false
+            val shouldAutoSave = userPreferencesRepository.latest().autoSaveAfterCapture
             val sharpeningValue = 0f
             val noiseReductionValue = 0f
             val chromaNoiseReductionValue = 0f
-            val photoQualityValue = photoQuality.firstOrNull() ?: 95
+            val photoQualityValue = userPreferencesRepository.latest().photoQuality
             val userPrefs = userPreferencesRepository.userPreferences.firstOrNull()
             val shouldMirror = cameraController.getLensFacing() == CameraCharacteristics.LENS_FACING_FRONT &&
-                    (userPrefs?.mirrorFrontCamera ?: true)
+                    userPreferencesRepository.latest().mirrorFrontCamera
             val currentCameraId = cameraController.getCurrentCameraId()
             val effectiveRawAutoExposure = resolveEffectiveRawAutoExposure()
             val spectralFilmSettings = resolveRawSpectralFilmSettings(userPrefs)
@@ -6282,7 +5511,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 rawShadowsAdjustment = userPrefs?.rawShadowsAdjustment ?: 0f,
                 rawBlackPointCorrection = userPrefs?.rawBlackPointCorrection ?: 0f,
                 rawWhitePointCorrection = userPrefs?.rawWhitePointCorrection ?: 0f,
-                rawLensShadingCorrectionEnabled = userPrefs?.rawLensShadingCorrectionEnabled,
+                rawLensShadingCorrectionEnabled = userPreferencesRepository.latest().rawLensShadingCorrectionEnabled,
                 rawBlackLevelMode = userPrefs?.rawBlackLevelModes?.get(currentCameraId) ?: "Default",
                 rawCustomBlackLevel = userPrefs?.rawCustomBlackLevels?.get(currentCameraId) ?: 0f,
                 rawWhiteLevelMode = userPrefs?.rawWhiteLevelModes?.get(currentCameraId)
@@ -6315,7 +5544,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 focalLength35mm = captureInfo.formatFocalLength35mm(),
                 aperture = captureInfo.formatAperture(),
                 exposureBias = currentState.exposureBias,
-                droMode = droMode.value,
+                droMode = userPreferencesRepository.current.droMode,
                 isMirrored = shouldMirror,
                 colorSpace = captureInfo.colorSpace,
                 computationalAperture = computationalAperture,
@@ -6554,7 +5783,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 rawShadowsAdjustment = userPrefs?.rawShadowsAdjustment ?: 0f,
                 rawBlackPointCorrection = userPrefs?.rawBlackPointCorrection ?: 0f,
                 rawWhitePointCorrection = userPrefs?.rawWhitePointCorrection ?: 0f,
-                rawLensShadingCorrectionEnabled = userPrefs?.rawLensShadingCorrectionEnabled,
+                rawLensShadingCorrectionEnabled = userPreferencesRepository.latest().rawLensShadingCorrectionEnabled,
                 rawBlackLevelMode = userPrefs?.rawBlackLevelModes?.get(currentCameraId) ?: "Default",
                 rawCustomBlackLevel = userPrefs?.rawCustomBlackLevels?.get(currentCameraId) ?: 0f,
                 rawWhiteLevelMode = userPrefs?.rawWhiteLevelModes?.get(currentCameraId)
@@ -6876,7 +6105,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             rawShadowsAdjustment = userPrefs?.rawShadowsAdjustment ?: 0f,
             rawBlackPointCorrection = userPrefs?.rawBlackPointCorrection ?: 0f,
             rawWhitePointCorrection = userPrefs?.rawWhitePointCorrection ?: 0f,
-            rawLensShadingCorrectionEnabled = userPrefs?.rawLensShadingCorrectionEnabled,
+            rawLensShadingCorrectionEnabled = userPreferencesRepository.latest().rawLensShadingCorrectionEnabled,
             rawBlackLevelMode = userPrefs?.rawBlackLevelModes?.get(currentCameraId) ?: "Default",
             rawCustomBlackLevel = userPrefs?.rawCustomBlackLevels?.get(currentCameraId) ?: 0f,
             rawWhiteLevelMode = userPrefs?.rawWhiteLevelModes?.get(currentCameraId)
@@ -6951,15 +6180,6 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     /**
-     * 设置背景图
-     */
-    fun setBackgroundImage(image: String) {
-        viewModelScope.launch {
-            userPreferencesRepository.saveBackgroundImage(image)
-        }
-    }
-
-    /**
      * 保存从外部选择的背景图
      */
     fun saveCustomBackgroundImage(uri: Uri) {
@@ -6980,7 +6200,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                                 input.copyTo(output)
                             }
                         }
-                        setBackgroundImage(outputFile.absolutePath)
+                        userPreferencesRepository.update { backgroundImage = outputFile.absolutePath }
                     }
                 } catch (e: Exception) {
                     PLog.e(TAG, "Failed to save custom background image", e)
@@ -6989,21 +6209,12 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         }
     }
 
-    fun setAccentColor(color: Int) {
-        viewModelScope.launch {
-            userPreferencesRepository.saveAccentColor(color)
-        }
-    }
-
-    fun setCaptureButtonStyle(style: CaptureButtonStyle) {
-        viewModelScope.launch {
-            userPreferencesRepository.saveCaptureButtonStyle(style)
-        }
-    }
-
     fun setCaptureButtonColor(color: Int) {
         viewModelScope.launch {
-            userPreferencesRepository.saveCaptureButtonColor(color)
+            userPreferencesRepository.update {
+                captureButtonColor = color
+                captureButtonStyle = CaptureButtonStyle.COLOR
+            }
         }
     }
 
@@ -7029,7 +6240,10 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                     val previousPath = userPreferencesRepository.userPreferences
                         .first()
                         .captureButtonImagePath
-                    userPreferencesRepository.saveCaptureButtonImage(outputFile.absolutePath)
+                    userPreferencesRepository.update {
+                        captureButtonImagePath = outputFile.absolutePath
+                        captureButtonStyle = CaptureButtonStyle.IMAGE
+                    }
 
                     runCatching {
                         previousPath
@@ -7049,7 +6263,6 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             }
         }
     }
-
 
     fun onShutterAnimationTriggered() {
         _canStartShutterAnimation.value = true
@@ -7086,53 +6299,15 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     fun togglePhantomMode() {
-        val newMode = !phantomMode.value
+        val newMode = !userPreferencesRepository.current.phantomMode
         viewModelScope.launch {
-            userPreferencesRepository.savePhantomMode(newMode)
-        }
-    }
-
-    fun setPhantomButtonHidden(hidden: Boolean) {
-        viewModelScope.launch {
-            userPreferencesRepository.savePhantomButtonHidden(hidden)
-        }
-    }
-
-    fun setLaunchCameraOnPhantomMode(launch: Boolean) {
-        viewModelScope.launch {
-            userPreferencesRepository.saveLaunchCameraOnPhantomMode(launch)
-        }
-    }
-
-    fun setPhantomPipPreview(enabled: Boolean) {
-        viewModelScope.launch {
-            userPreferencesRepository.savePhantomPipPreview(enabled)
-        }
-    }
-
-    fun setPhantomPipCrop(crop: PhantomPipCrop) {
-        viewModelScope.launch {
-            userPreferencesRepository.savePhantomPipCrop(crop)
-        }
-    }
-
-    fun setPhantomSaveAsNew(enabled: Boolean) {
-        viewModelScope.launch {
-            userPreferencesRepository.savePhantomSaveAsNew(enabled)
-        }
-    }
-
-    fun setPhantomFrame(frameId: String?) {
-        viewModelScope.launch {
-            userPreferencesRepository.savePhantomFrameConfig(frameId)
+            userPreferencesRepository.update { phantomMode = newMode }
         }
     }
 
     fun setDefaultVirtualAperture(aperture: Float) {
         applyDefaultVirtualAperture(aperture)
-        viewModelScope.launch {
-            userPreferencesRepository.saveDefaultVirtualAperture(aperture)
-        }
+        userPreferencesRepository.updateAsync { defaultVirtualAperture = aperture }
     }
 
     private fun applyDefaultVirtualAperture(aperture: Float) {
@@ -7144,20 +6319,11 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     /**
-     * 设置是否启用自拍镜像
-     */
-    fun setMirrorFrontCamera(enabled: Boolean) {
-        viewModelScope.launch {
-            userPreferencesRepository.saveMirrorFrontCamera(enabled)
-        }
-    }
-
-    /**
      * 设置 Widget 主题
      */
     fun setWidgetTheme(theme: com.hinnka.mycamera.data.WidgetTheme) {
         viewModelScope.launch {
-            userPreferencesRepository.saveWidgetTheme(theme)
+            userPreferencesRepository.update { widgetTheme = theme }
             // 通知 Widget 更新
             val intent = Intent(
                 getApplication<Application>(),

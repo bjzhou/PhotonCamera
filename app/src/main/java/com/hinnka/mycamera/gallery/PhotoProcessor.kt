@@ -88,7 +88,7 @@ class PhotoProcessor(
                 // while an explicit photo-level edit is still honored above.
                 true
             } else {
-                userPreferencesRepository.userPreferences.firstOrNull()?.rawLensShadingCorrectionEnabled ?: true
+                userPreferencesRepository.latest().rawLensShadingCorrectionEnabled
             }
     }
 

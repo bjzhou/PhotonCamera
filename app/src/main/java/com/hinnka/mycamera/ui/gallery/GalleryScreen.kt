@@ -1,5 +1,7 @@
 package com.hinnka.mycamera.ui.gallery
 
+import com.hinnka.mycamera.data.UserPreferences
+import com.hinnka.mycamera.ui.prefs.rememberPreference
 import android.app.Activity
 import android.content.Context
 import android.content.pm.ApplicationInfo
@@ -621,7 +623,7 @@ fun GalleryScreen(
         }
     }
 
-    val deleteExportedPref by viewModel.deleteExported.collectAsState()
+    var deleteExportedPref by rememberPreference(UserPreferences::deleteExported)
 
     // 删除确认对话框
     if (showDeleteDialog) {
@@ -687,7 +689,7 @@ fun GalleryScreen(
                     onClick = {
                         val finalDeleteExported = if (viewModel.selectedTab == GalleryTab.PHOTON && exportedPhotosCount > 0) deleteExportedState else true
                         if (viewModel.selectedTab == GalleryTab.PHOTON && exportedPhotosCount > 0) {
-                            viewModel.setDeleteExported(deleteExportedState)
+                            deleteExportedPref = deleteExportedState
                         }
                         viewModel.deleteSelectedPhotos(finalDeleteExported)
                         showDeleteDialog = false

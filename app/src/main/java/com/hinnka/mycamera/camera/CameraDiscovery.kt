@@ -778,7 +778,7 @@ class CameraDiscovery(private val context: Context) {
     private fun saveIszLensConfigs(configs: List<IszLensConfig>) {
         try {
             runBlocking {
-                userPreferencesRepository.saveIszLensConfigs(configs)
+                userPreferencesRepository.update { iszLensConfigs = configs }
             }
         } catch (e: Exception) {
             PLog.e(TAG, "Failed to persist migrated ISZ lens crop coordinates", e)
@@ -871,7 +871,7 @@ class CameraDiscovery(private val context: Context) {
             runBlocking {
                 val preferences = userPreferencesRepository.userPreferences.firstOrNull()
                 LogicalCameraDiscoveryConfig(
-                    autoDiscoveryEnabled = preferences?.enableLogicalMultiCameraDiscovery ?: false,
+                    autoDiscoveryEnabled = userPreferencesRepository.latest().enableLogicalMultiCameraDiscovery,
                     forcedBindings = parseLogicalCameraBindingRequests(
                         preferences?.logicalCameraBindingWhitelist ?: emptyList()
                     )

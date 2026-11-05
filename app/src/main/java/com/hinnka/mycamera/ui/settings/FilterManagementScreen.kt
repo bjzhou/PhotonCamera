@@ -1,5 +1,7 @@
 package com.hinnka.mycamera.ui.settings
 
+import com.hinnka.mycamera.ui.prefs.rememberUserPreferencesRepository
+import com.hinnka.mycamera.ui.prefs.preferenceValue
 import com.hinnka.mycamera.ui.components.AppModalBottomSheet
 
 import android.annotation.SuppressLint
@@ -112,8 +114,9 @@ fun FilterManagementScreen(
     manageVideoLut: Boolean = false,
     modifier: Modifier = Modifier
 ) {
-    val photoLutId by viewModel.photoLutId.collectAsState()
-    val videoLutId by viewModel.videoLutId.collectAsState()
+    val preferencesRepository = rememberUserPreferencesRepository()
+    val photoLutId by preferenceValue { it.lutId }
+    val videoLutId by preferenceValue { it.videoLutId }
     val isPurchased by viewModel.isPurchased.collectAsState()
     val availableLuts = viewModel.availableLutList
     val fallbackLutId = availableLuts.firstOrNull { it.isDefault }?.id
@@ -223,7 +226,7 @@ fun FilterManagementScreen(
     }
 
     // 分类管理状态
-    val categoryOrder by viewModel.categoryOrder.collectAsState(emptyList())
+    val categoryOrder by preferenceValue { it.categoryOrder }
     var showCategoryManagement by remember { mutableStateOf(false) }
 
     val builtInText = stringResource(R.string.built_in)
@@ -404,7 +407,7 @@ fun FilterManagementScreen(
                     IconButton(
                         onClick = {
                             // 保存排序顺序
-                            viewModel.saveFilterOrder(localLutList.map { it.id })
+                            preferencesRepository.updateAsync { this.filterOrder = localLutList.map { it.id } }
                             onBack()
                         },
                         modifier = Modifier.autoRotate()
@@ -1403,7 +1406,7 @@ fun FilterManagementScreen(
         // 页面退出时保存排序
         DisposableEffect(Unit) {
             onDispose {
-                viewModel.saveFilterOrder(localLutList.map { it.id })
+                preferencesRepository.updateAsync { this.filterOrder = localLutList.map { it.id } }
             }
         }
 

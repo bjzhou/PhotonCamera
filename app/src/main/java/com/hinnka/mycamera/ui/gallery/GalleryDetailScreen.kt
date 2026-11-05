@@ -1,5 +1,8 @@
 package com.hinnka.mycamera.ui.gallery
 
+import com.hinnka.mycamera.ui.prefs.preferenceValue
+import com.hinnka.mycamera.data.UserPreferences
+import com.hinnka.mycamera.ui.prefs.rememberPreference
 import com.hinnka.mycamera.ui.components.AppModalBottomSheet
 
 import android.app.Activity
@@ -777,7 +780,7 @@ fun GalleryDetailScreen(
         }
     }
 
-    val deleteExportedPref by viewModel.deleteExported.collectAsState()
+    var deleteExportedPref by rememberPreference(UserPreferences::deleteExported)
 
     // 删除确认对话框
     if (showDeleteDialog && !isCurrentPhotoProcessing) {
@@ -837,7 +840,7 @@ fun GalleryDetailScreen(
                         currentPhoto?.let { photo ->
                             val finalDeleteExported = if (viewModel.selectedTab == GalleryTab.PHOTON && exportedPhotosCount > 0) deleteExportedState else true
                             if (viewModel.selectedTab == GalleryTab.PHOTON && exportedPhotosCount > 0) {
-                                viewModel.setDeleteExported(deleteExportedState)
+                                deleteExportedPref = deleteExportedState
                             }
                             viewModel.requestDeletePhoto(photo, finalDeleteExported)
                         }
@@ -1298,7 +1301,7 @@ private fun AiScoreBottomSheet(
     var requestToken by remember(photo.id) { mutableIntStateOf(0) }
     var uiState by remember(photo.id) { mutableStateOf<AiEvaluationUiState>(AiEvaluationUiState.Loading) }
 
-    val openAIKey by viewModel.openAIApiKey.collectAsState()
+    val openAIKey by preferenceValue { it.openAIApiKey }
     val canEvaluate = isPurchased || !openAIKey.isNullOrBlank()
 
     LaunchedEffect(photo.id, requestToken, canEvaluate) {

@@ -1,5 +1,6 @@
 package com.hinnka.mycamera.ui.components
 
+import com.hinnka.mycamera.ui.prefs.preferenceValue
 import com.hinnka.mycamera.ui.theme.AccentColor
 
 import androidx.compose.animation.animateColorAsState
@@ -48,10 +49,8 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.hinnka.mycamera.R
-import com.hinnka.mycamera.data.UserPreferencesRepository
 import androidx.compose.ui.platform.LocalContext
 import kotlinx.coroutines.flow.map
-import kotlinx.coroutines.flow.distinctUntilChanged
 import com.hinnka.mycamera.model.ColorRecipeParams
 import com.hinnka.mycamera.model.EffectParams
 import com.hinnka.mycamera.model.RecipeParam
@@ -150,11 +149,7 @@ fun ColorRecipePanel(
         param != RecipeParam.LOW_RES
     }
 
-    val context = LocalContext.current.applicationContext
-    val preferencesRepository = remember(context) { UserPreferencesRepository(context) }
-    val paletteEnabled by remember(preferencesRepository) {
-        preferencesRepository.userPreferences.map { it.colorPaletteEnabled }.distinctUntilChanged()
-    }.collectAsState(initial = false)
+    val paletteEnabled by preferenceValue { it.colorPaletteEnabled }
     var activeMode by remember(paletteEnabled) {
         mutableStateOf(if (paletteEnabled) RecipePanelMode.PALETTE else RecipePanelMode.BASIC)
     }

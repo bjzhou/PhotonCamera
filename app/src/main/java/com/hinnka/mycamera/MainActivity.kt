@@ -1,5 +1,8 @@
 package com.hinnka.mycamera
 
+import com.hinnka.mycamera.ui.prefs.rememberUserPreferencesRepository
+import com.hinnka.mycamera.ui.prefs.preferenceValue
+import com.hinnka.mycamera.data.ContentRepository
 import android.Manifest
 import android.content.Intent
 import android.content.pm.ActivityInfo
@@ -190,6 +193,9 @@ private val EXTERNAL_GALLERY_REVIEW_ACTIONS = setOf(
 class MainActivity : AppCompatActivity() {
 
     private val cameraViewModel: CameraViewModel by viewModels()
+    private val userPreferencesRepository by lazy {
+        ContentRepository.getInstance(this).userPreferencesRepository
+    }
     private val galleryViewModel: GalleryViewModel by viewModels()
 
     private val permissions =
@@ -247,8 +253,8 @@ class MainActivity : AppCompatActivity() {
         lifecycleScope.launch {
             repeatOnLifecycle(Lifecycle.State.STARTED) {
                 combine(
-                    cameraViewModel.useHdrScreenMode,
-                    cameraViewModel.useP3ColorSpace
+                    userPreferencesRepository.flow { it.useHdrScreenMode },
+                    userPreferencesRepository.flow { it.useP3ColorSpace }
                 ) { useHdrScreen, useP3 ->
                     useHdrScreen to useP3
                 }.collect { (useHdrScreen, useP3) ->
@@ -260,7 +266,7 @@ class MainActivity : AppCompatActivity() {
 
         lifecycleScope.launch {
             repeatOnLifecycle(Lifecycle.State.STARTED) {
-                cameraViewModel.windowScreenBrightness.collect { brightness ->
+                userPreferencesRepository.flow { it.windowScreenBrightness }.collect { brightness ->
                     applyWindowScreenBrightness(brightness)
                 }
             }
@@ -268,7 +274,7 @@ class MainActivity : AppCompatActivity() {
 
         lifecycleScope.launch {
             repeatOnLifecycle(Lifecycle.State.STARTED) {
-                cameraViewModel.autoRotateEnabled.collect { enabled ->
+                userPreferencesRepository.flow { it.autoRotateEnabled }.collect { enabled ->
                     OrientationObserver.updateUiAutoRotateEnabled(enabled)
                 }
             }
@@ -305,7 +311,7 @@ class MainActivity : AppCompatActivity() {
         setContent {
             StartupComposeReadyEffect()
             val currentRecipeParams by cameraViewModel.currentRecipeParams.collectAsState()
-            val phantomPipCrop by cameraViewModel.phantomPipCrop.collectAsState()
+            val phantomPipCrop by preferenceValue { it.phantomPipCrop }
             ScreenCaptureRenderConfigStore.save(
                 creativeLutConfig = cameraViewModel.currentLutConfig,
                 creativeColorRecipeParams = currentRecipeParams,
@@ -706,7 +712,7 @@ fun NavigationHost(
                                         locateLutId = lutId,
                                         videoLut = cameraViewModel.state.value.captureMode ==
                                             CaptureMode.VIDEO &&
-                                            cameraViewModel.separateVideoLutEnabled.value
+                                            cameraViewModel.userPreferences.value.separateVideoLutEnabled
                                     )
                                 )
                             },
@@ -769,7 +775,7 @@ fun NavigationHost(
                                     locateLutId = lutId,
                                     videoLut = cameraViewModel.state.value.captureMode ==
                                         CaptureMode.VIDEO &&
-                                        cameraViewModel.separateVideoLutEnabled.value
+                                        cameraViewModel.userPreferences.value.separateVideoLutEnabled
                                 )
                             )
                         },
@@ -933,12 +939,13 @@ fun NavigationHost(
             }
 
             composable(Routes.PHANTOM_PIP_CROP) {
-                val crop by cameraViewModel.phantomPipCrop.collectAsState()
+                val crop by preferenceValue { it.phantomPipCrop }
+                val preferencesRepository = rememberUserPreferencesRepository()
                 PhantomPipCropScreen(
                     initialCrop = crop,
                     onBack = { navController.popBackStack() },
                     onSave = {
-                        cameraViewModel.setPhantomPipCrop(it)
+                        preferencesRepository.updateAsync { phantomPipCrop = it }
                         navController.popBackStack()
                     }
                 )

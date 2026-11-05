@@ -1,5 +1,6 @@
 package com.hinnka.mycamera.ui.camera
 
+import com.hinnka.mycamera.ui.prefs.preferenceValue
 import androidx.compose.animation.*
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
@@ -72,8 +73,8 @@ fun ZoomControlBarVerticel(
         availableCameras.find { it.lensType == if (currentCamera?.lensType == LensType.FRONT) LensType.FRONT else LensType.BACK_MAIN }
 
     // 根据可用相机计算变焦档位
-    val customFocalLengths by viewModel.customFocalLengths.collectAsState(initial = emptyList())
-    val hiddenFocalLengths by viewModel.hiddenFocalLengths.collectAsState(initial = emptyList())
+    val customFocalLengths by preferenceValue { it.customFocalLengths }
+    val hiddenFocalLengths by preferenceValue { it.hiddenFocalLengths }
     val lensZoomStops = viewModel.calculateLensZoomStops(availableCameras, currentCamera)
     val zoomStops = viewModel.allZoomStops(lensZoomStops, mainCamera, currentCamera, customFocalLengths, hiddenFocalLengths)
 

@@ -1,5 +1,7 @@
 package com.hinnka.mycamera.ui.settings
 
+import com.hinnka.mycamera.ui.prefs.rememberUserPreferencesRepository
+import com.hinnka.mycamera.ui.prefs.preferenceValue
 import android.net.Uri
 import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -55,8 +57,9 @@ fun FrameManagementScreen(
     onEditFrameStyle: (String) -> Unit,
     modifier: Modifier = Modifier
 ) {
+    val preferencesRepository = rememberUserPreferencesRepository()
     val currentFrameId = viewModel.currentFrameId
-    val phantomFrameId by viewModel.phantomFrameId.collectAsState()
+    val phantomFrameId by preferenceValue { it.phantomFrameId }
     val availableFrames = viewModel.availableFrameList
     val customImportManager = viewModel.getCustomImportManager()
     val scope = rememberCoroutineScope()
@@ -187,7 +190,7 @@ fun FrameManagementScreen(
                 IconButton(
                     onClick = {
                         // 保存排序顺序
-                        viewModel.saveFrameOrder(localFrameList.map { it.id })
+                        preferencesRepository.updateAsync { this.frameOrder = localFrameList.map { it.id } }
                         onBack()
                     },
                     modifier = Modifier.autoRotate()
@@ -424,7 +427,7 @@ fun FrameManagementScreen(
                                 viewModel.setFrame(null)
                             }
                             if (phantomFrameId == deletingFrame!!.id) {
-                                viewModel.setPhantomFrame(null)
+                                preferencesRepository.updateAsync { this.phantomFrameId = null }
                             }
                             viewModel.refreshCustomContent()
                             showDeleteDialog = false
@@ -449,7 +452,7 @@ fun FrameManagementScreen(
     // 页面退出时保存排序
     DisposableEffect(Unit) {
         onDispose {
-            viewModel.saveFrameOrder(localFrameList.map { it.id })
+            preferencesRepository.updateAsync { this.frameOrder = localFrameList.map { it.id } }
         }
     }
 

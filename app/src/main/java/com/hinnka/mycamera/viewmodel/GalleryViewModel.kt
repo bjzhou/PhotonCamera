@@ -123,30 +123,7 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
     // 用户偏好设置仓库
     private val userPreferencesRepository = contentRepository.userPreferencesRepository
 
-    val rawLensShadingCorrectionEnabled: StateFlow<Boolean> = userPreferencesRepository.userPreferences
-        .map { it.rawLensShadingCorrectionEnabled }
-        .stateIn(viewModelScope, SharingStarted.Eagerly, true)
 
-    val categoryOrder: StateFlow<List<String>> = userPreferencesRepository.userPreferences
-        .map { it.categoryOrder }
-        .stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
-
-    val photoQuality: Flow<Int> = userPreferencesRepository.userPreferences.map { it.photoQuality }
-
-    val defaultLutId: Flow<String?> = userPreferencesRepository.userPreferences.map { it.lutId }
-    val defaultVirtualAperture: StateFlow<Float> = userPreferencesRepository.userPreferences.map { it.defaultVirtualAperture }
-        .stateIn(viewModelScope, SharingStarted.Eagerly, 0f)
-
-    val droMode: StateFlow<String> = userPreferencesRepository.userPreferences
-        .map { it.droMode }
-        .stateIn(viewModelScope, SharingStarted.Eagerly, "OFF")
-
-    val openAIApiKey = userPreferencesRepository.userPreferences.map { it.openAIApiKey }
-        .stateIn(viewModelScope, SharingStarted.Eagerly, "")
-
-    val deleteExported: StateFlow<Boolean> = userPreferencesRepository.userPreferences
-        .map { it.deleteExported }
-        .stateIn(viewModelScope, SharingStarted.Eagerly, true)
 
     // 计费管理器
     private val billingManager = com.hinnka.mycamera.billing.BillingManagerImpl(application)
@@ -1222,7 +1199,7 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
 
     private fun resolveRawLensShadingCorrectionForEdit(metadata: MediaMetadata?): Boolean {
         return metadata?.rawLensShadingCorrectionEnabled
-            ?: if (metadata?.isImported == true) true else rawLensShadingCorrectionEnabled.value
+            ?: if (metadata?.isImported == true) true else userPreferencesRepository.current.rawLensShadingCorrectionEnabled
     }
 
     /**
@@ -1874,12 +1851,6 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
         }
     }
 
-    fun setDeleteExported(enabled: Boolean) {
-        viewModelScope.launch {
-            userPreferencesRepository.saveDeleteExported(enabled)
-        }
-    }
-
     /**
      * 批量删除选中的照片
      *
@@ -2249,7 +2220,7 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                 editRawShadowsAdjustment.value = 0f
                 editRawBlackPointCorrection.value = 0f
                 editRawWhitePointCorrection.value = 0f
-                editRawLensShadingCorrectionEnabled.value = rawLensShadingCorrectionEnabled.value
+                editRawLensShadingCorrectionEnabled.value = userPreferencesRepository.current.rawLensShadingCorrectionEnabled
                 editRawBlackLevelMode.value = RawCfaCorrection.MODE_DEFAULT
                 editRawCustomBlackLevel.value = 0f
                 editRawWhiteLevelMode.value = RawWhiteLevelCorrection.MODE_DEFAULT
@@ -4094,7 +4065,7 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
             val context = getApplication<Application>()
             val success = GalleryManager.exportPhoto(
                 context, photoId, bitmap, contentRepository.photoProcessor, metadata,
-                0f, 0f, 0f, photoQuality.firstOrNull() ?: 95, suffix
+                0f, 0f, 0f, userPreferencesRepository.latest().photoQuality, suffix
             )
             if (success) {
                 exitEditMode()
@@ -4556,7 +4527,7 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
             
             try {
                 val context = getApplication<Application>()
-                val quality = photoQuality.firstOrNull() ?: 95
+                val quality = userPreferencesRepository.latest().photoQuality
                 
                 withContext(Dispatchers.IO) {
                     toExport.forEachIndexed { index, photo ->
@@ -4655,7 +4626,7 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                 // 使用用户设置的照片质量
                 processedBitmap.compress(
                     Bitmap.CompressFormat.JPEG,
-                    photoQuality.firstOrNull() ?: 95,
+                    userPreferencesRepository.latest().photoQuality,
                     out
                 )
             }

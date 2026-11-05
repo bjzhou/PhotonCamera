@@ -44,9 +44,9 @@ fun PhotonCameraTheme(
     content: @Composable () -> Unit
 ) {
     val context = LocalContext.current
-    // Observe only appearance, without decoding camera settings or initializing camera resources.
+    // 只订阅主题色，不初始化相机资源；UserPreferences 字段按需解析。
     val accentFlow = remember(context.applicationContext) {
-        UserPreferencesRepository(context.applicationContext).accentColor
+        UserPreferencesRepository(context.applicationContext).flow { it.accentColor }
     }
     val accentArgb by accentFlow.collectAsState(initial = AppAppearance.DEFAULT_ACCENT_COLOR)
     val accent = Color(accentArgb)

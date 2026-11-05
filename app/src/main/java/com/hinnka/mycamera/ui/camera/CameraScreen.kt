@@ -1,5 +1,9 @@
 package com.hinnka.mycamera.ui.camera
 
+import com.hinnka.mycamera.ui.prefs.rememberUserPreferencesRepository
+import com.hinnka.mycamera.data.UserPreferences
+import com.hinnka.mycamera.ui.prefs.rememberPreference
+import com.hinnka.mycamera.ui.prefs.preferenceValue
 import android.app.Activity
 import android.content.Context
 import android.content.ContextWrapper
@@ -225,45 +229,49 @@ fun CameraScreen(
     onPresetManagementClick: () -> Unit,
     modifier: Modifier = Modifier
 ) {
+    val preferencesRepository = rememberUserPreferencesRepository()
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val state by viewModel.state.collectAsState()
     val isCameraInitialized by viewModel.isInitialized.collectAsState()
     val latestPhoto by galleryViewModel.latestPhoto.collectAsState()
-    val showLevelIndicator by viewModel.showLevelIndicator.collectAsState(initial = false)
-    val focusPeakingEnabled by viewModel.focusPeakingEnabled.collectAsState(initial = true)
-    val eyeFocusEnabled by viewModel.eyeFocusEnabled.collectAsState()
-    val keepScreenOn by viewModel.keepScreenOn.collectAsState(initial = false)
+    val showLevelIndicator by preferenceValue { it.showLevelIndicator }
+    val focusPeakingEnabled by preferenceValue { it.focusPeakingEnabled }
+    val eyeFocusEnabled by preferenceValue { it.eyeFocusEnabled }
+    val keepScreenOn by preferenceValue { it.keepScreenOn }
     val currentLutId by viewModel.currentLutId.collectAsState()
     val lutSwipeState = rememberLutSwipeState()
     val currentRecipeParams by viewModel.currentRecipeParams.collectAsState()
     val lutSelectorMode by viewModel.lutSelectorMode.collectAsState()
-    val activePresetId by viewModel.activePresetId.collectAsState()
+    val activePresetId by preferenceValue { it.activePresetId }
     val activePresetModified by viewModel.isActivePresetModified.collectAsState()
-    val customPresets by viewModel.customPresets.collectAsState()
+    val customPresets by preferenceValue { it.customPresets }
     val currentBaselineRecipeParams by viewModel.currentBaselineRecipeParams.collectAsState()
-    val categoryOrder by viewModel.categoryOrder.collectAsState(emptyList())
-    val useRaw by viewModel.useRaw.collectAsState()
-    val useJpgMax by viewModel.useJpgMax.collectAsState()
-    val useMultipleExposure by viewModel.useMultipleExposure.collectAsState()
-    val useRawMax by viewModel.useRawMax.collectAsState()
-    val ultraHdrEnabled by viewModel.ultraHdrGainMapEnabled.collectAsState()
-    val useLivePhoto by viewModel.useLivePhoto.collectAsState()
-    val enableDevelopAnimation by viewModel.enableDevelopAnimation.collectAsState()
-    val developAnimationStyle by viewModel.developAnimationStyle.collectAsState()
-    val phantomMode by viewModel.phantomMode.collectAsState()
-    val topSheetAspectRatios by viewModel.topSheetAspectRatios.collectAsState()
-    val videoCodec by viewModel.videoCodec.collectAsState()
+    val categoryOrder by preferenceValue { it.categoryOrder }
+    val useRaw by preferenceValue { it.useRaw }
+    val useJpgMax by preferenceValue { it.useJpgMax }
+    val useMultipleExposure by preferenceValue { it.useMultipleExposure }
+    val useRawMax by preferenceValue { it.useRawMax }
+    val ultraHdrEnabled by preferenceValue { it.ultraHdrGainMapEnabled }
+    val useLivePhoto by preferenceValue { it.useLivePhoto }
+    val enableDevelopAnimation by preferenceValue { it.enableDevelopAnimation }
+    var showHistogram by rememberPreference(UserPreferences::showHistogram)
+    var videoTorchEnabled by rememberPreference(UserPreferences::videoTorchEnabled)
+    var videoAudioInputId by rememberPreference(UserPreferences::videoAudioInputId)
+    val developAnimationStyle by preferenceValue { it.developAnimationStyle }
+    val phantomMode by preferenceValue { it.phantomMode }
+    val topSheetAspectRatios by preferenceValue { it.topSheetAspectRatios }
+    val videoCodec by preferenceValue { it.videoCodec }
     val videoAudioInputOptions by viewModel.videoAudioInputOptions.collectAsState()
-    val phantomPipPreview by viewModel.phantomPipPreview.collectAsState()
-    val rawDcpId by viewModel.rawDcpId.collectAsState()
-    val rawDcpIdsByLens by viewModel.rawDcpIdsByLens.collectAsState()
-    val rawHncsFilmCurveMode by viewModel.rawHncsFilmCurveMode.collectAsState()
-    val rawColorEngine by viewModel.rawRenderingEngine.collectAsState()
-    val rawToneMappingParameters by viewModel.rawToneMappingParameters.collectAsState()
-    val rawSpectralFilmStock by viewModel.rawSpectralFilmStock.collectAsState()
+    val phantomPipPreview by preferenceValue { it.phantomPipPreview }
+    val rawDcpId by preferenceValue { it.rawDcpId }
+    val rawDcpIdsByLens by preferenceValue { it.rawDcpIdsByLens }
+    val rawHncsFilmCurveMode by preferenceValue { it.rawHncsFilmCurveMode }
+    val rawColorEngine by preferenceValue { it.rawRenderingEngine }
+    val rawToneMappingParameters by preferenceValue { it.rawToneMappingParameters }
+    val rawSpectralFilmStock by preferenceValue { it.rawSpectralFilmStock }
     val rawSpectralFilmSelection by viewModel.rawSpectralFilmSelection.collectAsState()
-    val rawSpectralFilmPrint by viewModel.rawSpectralFilmPrint.collectAsState()
+    val rawSpectralFilmPrint by preferenceValue { it.rawSpectralFilmPrint }
     val rawFotufilmDocument by viewModel.rawFotufilmDocument.collectAsState()
     val multipleExposureState = viewModel.multipleExposureState
     val canStartShutterAnimation by viewModel.canStartShutterAnimation.collectAsState()
@@ -924,15 +932,13 @@ fun CameraScreen(
                 },
                 timerSeconds = state.timerSeconds,
                 onTimerToggle = { viewModel.toggleTimer() },
-                showHistogram = viewModel.showHistogram,
-                onHistogramToggle = {
-                    viewModel.saveShowHistogram(!viewModel.showHistogram)
-                },
+                showHistogram = showHistogram,
+                onHistogramToggle = { showHistogram = !showHistogram },
                 useLivePhoto = useLivePhoto,
                 onLivePhotoToggle = { viewModel.setUseLivePhoto(!state.useLivePhoto) },
                 videoConfig = state.videoConfig,
                 videoCapabilities = state.videoCapabilities,
-                onVideoTorchToggle = { viewModel.setVideoTorchEnabled(!state.videoConfig.torchEnabled) },
+                onVideoTorchToggle = { videoTorchEnabled = !state.videoConfig.torchEnabled },
                 onVideoStabilizationModeChange = viewModel::setVideoStabilizationMode,
                 onVideoResolutionClick = {
                     cycleVideoResolution(state)?.let(viewModel::setVideoResolution)
@@ -1446,7 +1452,7 @@ fun CameraScreen(
                         }
 
                         // 实时直方图 (Overlaid on preview if enabled)
-                        if (isPhotoStyleMode && state.histogram != null && viewModel.showHistogram) {
+                        if (isPhotoStyleMode && state.histogram != null && showHistogram) {
                             HistogramView(
                                 histogram = state.histogram,
                                 modifier = Modifier
@@ -1735,10 +1741,10 @@ fun CameraScreen(
             videoBitrate = state.videoConfig.bitrate,
             onVideoBitrateChange = { viewModel.setVideoBitrate(it) },
             videoCodec = videoCodec,
-            onVideoCodecChange = { viewModel.setVideoCodec(it) },
+            onVideoCodecChange = { preferencesRepository.updateAsync { this.videoCodec = it } },
             videoAudioInputId = state.videoConfig.audioInputId,
             videoAudioInputOptions = videoAudioInputOptions,
-            onVideoAudioInputChange = { viewModel.setVideoAudioInputId(it) },
+            onVideoAudioInputChange = { videoAudioInputId = it },
             useRaw = useRaw && state.isRawSupported,
             isRawSupported = state.isRawSupported,
             rawDcpId = rawDcpId,
@@ -1751,7 +1757,7 @@ fun CameraScreen(
             rawSpectralFilmSelection = rawSpectralFilmSelection ?: SpectralFilmSelection(rawSpectralFilmStock ?: "kodak_portra_400"),
             rawSpectralFilmPrint = rawSpectralFilmPrint ?: "kodak_portra_endura",
             ultraHdrEnabled = ultraHdrEnabled,
-            onUltraHdrToggle = viewModel::setUltraHdrGainMapEnabled,
+            onUltraHdrToggle = { preferencesRepository.updateAsync { this.ultraHdrGainMapEnabled = it } },
             photoPreviewStabilizationEnabled =
                 state.photoPreviewStabilizationEnabled,
             photoPreviewStabilizationAvailable =
@@ -1772,7 +1778,7 @@ fun CameraScreen(
                 }
             },
             onRawColorEngineChange = { viewModel.setRawColorEngine(it) },
-            onRawToneMappingParametersChange = { viewModel.setRawToneMappingParameters(it) },
+            onRawToneMappingParametersChange = { preferencesRepository.updateAsync { this.rawToneMappingParameters = it } },
             onRawSpectralFilmSelectionChange = { viewModel.setRawSpectralFilmSelection(it) },
             onRawSpectralFilmPrintChange = { viewModel.setRawSpectralFilmPrint(it) },
             rawFotufilmDocument = rawFotufilmDocument,
@@ -2051,9 +2057,9 @@ private fun Controls(
     sideControlInset: Dp?,
     modifier: Modifier = Modifier.fillMaxSize()
 ) {
-    val captureButtonStyle by viewModel.captureButtonStyle.collectAsState()
-    val captureButtonColor by viewModel.captureButtonColor.collectAsState()
-    val captureButtonImagePath by viewModel.captureButtonImagePath.collectAsState()
+    val captureButtonStyle by preferenceValue { it.captureButtonStyle }
+    val captureButtonColor by preferenceValue { it.captureButtonColor }
+    val captureButtonImagePath by preferenceValue { it.captureButtonImagePath }
     val captureProcessingState by viewModel.captureProcessingState.collectAsState()
     val capturedThumbnail by viewModel.capturedThumbnail.collectAsState()
 

@@ -47,19 +47,12 @@ object ScreenCaptureRenderConfigStore {
     ) {
         val repository = ContentRepository.getInstance(context.applicationContext)
         val preferences = repository.userPreferencesRepository.userPreferences.firstOrNull()
-        val effectivePreferences = preferences?.let {
-            if (lutIdOverride == null) {
-                it
-            } else {
-                it.copy(lutId = lutIdOverride)
-            }
-        }
-        val creativeLutId = effectivePreferences?.lutId
+        val creativeLutId = lutIdOverride ?: preferences?.lutId
         val creativeRecipeParams = creativeRecipeParamsOverride
             ?: creativeLutId?.let { repository.lutManager.loadColorRecipeParams(it) }
             ?: ColorRecipeParams.DEFAULT
         val effectParams = effectParamsOverride
-            ?: effectivePreferences?.activeEffectParams
+            ?: preferences?.activeEffectParams
             ?: EffectParams.DEFAULT
 
         save(

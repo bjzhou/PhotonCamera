@@ -1,5 +1,6 @@
 package com.hinnka.mycamera.ui.settings
 
+import com.hinnka.mycamera.ui.prefs.preferenceValue
 import android.net.Uri
 import android.widget.Toast
 import androidx.activity.compose.BackHandler
@@ -96,7 +97,7 @@ fun PresetManagementScreen(
     modifier: Modifier = Modifier
 ) {
     val allPresets by viewModel.allPresets.collectAsState()
-    val activePresetId by viewModel.activePresetId.collectAsState()
+    val activePresetId by preferenceValue { it.activePresetId }
     val activePresetModified by viewModel.isActivePresetModified.collectAsState()
     val context = LocalContext.current
     val scope = rememberCoroutineScope()

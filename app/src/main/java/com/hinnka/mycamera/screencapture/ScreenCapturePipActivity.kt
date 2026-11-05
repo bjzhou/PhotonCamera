@@ -76,7 +76,7 @@ class ScreenCapturePipActivity : AppCompatActivity() {
         override fun onReceive(context: android.content.Context?, intent: Intent?) {
             if (intent?.action == PhantomPipPreviewCoordinator.ACTION_STOP_PHANTOM_PIP_PREVIEW) {
                 lifecycleScope.launch {
-                    userPreferencesRepository.savePhantomMode(false)
+                    userPreferencesRepository.update { phantomMode = false }
                 }
                 controller.stopCapture()
                 finish()
@@ -173,7 +173,7 @@ class ScreenCapturePipActivity : AppCompatActivity() {
         PLog.d(TAG, "handleCaptureClosed")
         hasReleasedCapture = true
         lifecycleScope.launch {
-            userPreferencesRepository.savePhantomMode(false)
+            userPreferencesRepository.update { phantomMode = false }
         }
         controller.release()
         ScreenCapturePipState.setInPipMode(false)

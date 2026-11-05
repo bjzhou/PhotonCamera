@@ -119,7 +119,8 @@ class MgcFilterSelectionActivity : AppCompatActivity() {
         isSaving = true
         lifecycleScope.launch {
             runCatching {
-                contentRepository.userPreferencesRepository.saveLutConfig(lutId)
+                contentRepository.userPreferencesRepository.update { this.lutId = lutId }
+                PhotonLookContract.notifyLookChanged(this@MgcFilterSelectionActivity)
             }.onSuccess {
                 setResult(
                     Activity.RESULT_OK,

@@ -1,5 +1,6 @@
 package com.hinnka.mycamera.ui.settings
 
+import com.hinnka.mycamera.ui.prefs.preferenceValue
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -368,7 +369,7 @@ fun PresetEditorScreen(
                 showTitle = false,
                 isExpandable = false
             ) {
-                val topSheetAspectRatios by viewModel.topSheetAspectRatios.collectAsState()
+                val topSheetAspectRatios by preferenceValue { it.topSheetAspectRatios }
                 DropdownSettingItem(
                     title = stringResource(R.string.aspect_ratio),
                     value = AspectRatio.valueOf(aspectRatio).getDisplayName(),

@@ -1,5 +1,6 @@
 package com.hinnka.mycamera.ui.gallery
 
+import com.hinnka.mycamera.ui.prefs.preferenceValue
 import android.annotation.SuppressLint
 import android.app.Activity
 import android.content.Context
@@ -234,7 +235,7 @@ fun GalleryEditScreen(
     val density = LocalDensity.current
     val showPaymentDialog = viewModel.showPaymentDialog
     val isPurchased by viewModel.isPurchased.collectAsState()
-    val categoryOrder by viewModel.categoryOrder.collectAsState()
+    val categoryOrder by preferenceValue { it.categoryOrder }
     val hasCopiedEditSettings by viewModel.hasCopiedEditSettings.collectAsState()
 
     var isSaving by remember { mutableStateOf(false) }
@@ -818,7 +819,7 @@ fun GalleryEditScreen(
                                                 .background(Color.Black.copy(alpha = 0.6f))
                                                 .clickable {
                                                     scope.launch {
-                                                        userPreferencesRepository.saveReferencePhotoUrl(null)
+                                                        userPreferencesRepository.update { this.referencePhotoUrl = null }
                                                     }
                                                 },
                                             contentAlignment = Alignment.Center

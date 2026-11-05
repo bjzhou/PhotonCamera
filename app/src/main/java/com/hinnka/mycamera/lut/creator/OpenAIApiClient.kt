@@ -34,22 +34,19 @@ class OpenAIApiClient() {
 
     suspend fun initialize(context: Context) {
         val userPrefs = ContentRepository.getInstance(context).userPreferencesRepository.userPreferences.firstOrNull()
-        val isBuiltIn = userPrefs?.openAIApiKey.isNullOrBlank()
+        val customApiKey = userPrefs?.openAIApiKey?.takeIf { it.isNotBlank() }
+        val isBuiltIn = customApiKey == null
         isBuiltInService = isBuiltIn
-        apiKey = if (isBuiltIn) {
-            BUILT_IN_API_KEY
-        } else {
-            userPrefs.openAIApiKey
-        }
+        apiKey = customApiKey ?: BUILT_IN_API_KEY
         apiBaseUrl = if (isBuiltIn) {
             BUILT_IN_API_URL
         } else {
-            userPrefs.openAIBaseUrl?.ifBlank { DEFAULT_API_URL } ?: DEFAULT_API_URL
+            userPrefs?.openAIBaseUrl?.ifBlank { DEFAULT_API_URL } ?: DEFAULT_API_URL
         }.trimEnd('/')
         model = if (isBuiltIn) {
             BUILT_IN_MODEL
         } else {
-            userPrefs.openAIModel?.ifBlank { DEFAULT_MODEL } ?: DEFAULT_MODEL
+            userPrefs?.openAIModel?.ifBlank { DEFAULT_MODEL } ?: DEFAULT_MODEL
         }
     }
 

@@ -72,7 +72,7 @@ class CaptureSoundRepository(
                 // File ownership and the preference update must commit together, even on cancellation.
                 withContext(NonCancellable) {
                     val previous = currentFileName(isBurst)
-                    preferences.saveCaptureSound(isBurst, file.name)
+                    preferences.update { if (isBurst) burstSoundFileName = file.name else shutterSoundFileName = file.name }
                     committed = true
                     deletePrevious(previous)
                 }
@@ -85,7 +85,7 @@ class CaptureSoundRepository(
     suspend fun reset(isBurst: Boolean) = mutex.withLock {
         withContext(Dispatchers.IO + NonCancellable) {
             val previous = currentFileName(isBurst)
-            preferences.saveCaptureSound(isBurst, null)
+            preferences.update { if (isBurst) burstSoundFileName = null else shutterSoundFileName = null }
             deletePrevious(previous)
         }
     }

@@ -1,5 +1,6 @@
 package com.hinnka.mycamera.phantom
 
+import com.hinnka.mycamera.mgc.PhotonLookContract
 import android.content.ContentValues
 import android.content.Context
 import android.content.Intent
@@ -489,9 +490,7 @@ class PhantomService(val context: Context) : LifecycleOwner, SavedStateRegistryO
         syncWindowAndObserver()
 
         lifecycleScope.launch {
-            userPreferencesRepository.userPreferences
-                .map { it.phantomPipPreview }
-                .distinctUntilChanged()
+            userPreferencesRepository.flow { it.phantomPipPreview }
                 .collect { enable ->
                     if (enable) {
                         val captureAlreadyRunning =
@@ -506,9 +505,7 @@ class PhantomService(val context: Context) : LifecycleOwner, SavedStateRegistryO
         }
 
         lifecycleScope.launch {
-            userPreferencesRepository.userPreferences
-                .map { it.phantomButtonHidden }
-                .distinctUntilChanged()
+            userPreferencesRepository.flow { it.phantomButtonHidden }
                 .collect { hidden ->
                     if (isWindowShown) {
                         updateWindowParams(hidden)
@@ -584,9 +581,9 @@ class PhantomService(val context: Context) : LifecycleOwner, SavedStateRegistryO
         val preferences = userPreferencesRepository.userPreferences.firstOrNull()
         val lutId = preferences?.lutId
             ?: availableLutList.firstOrNull { it.isDefault }?.id
-        val saveAsNew = preferences?.phantomSaveAsNew ?: false
+        val saveAsNew = userPreferencesRepository.latest().phantomSaveAsNew
         val phantomFrameId = preferences?.phantomFrameId
-        val computationalAperture = preferences?.defaultVirtualAperture?.let { if (it > 0f) it else null }
+        val computationalAperture = userPreferencesRepository.latest().defaultVirtualAperture.takeIf { it > 0f }
         val existingPhotoId = if (processingInfo?.uri == uri) processingInfo?.photoId else null
         val isRawSource = isRawMedia(name, mimeType)
         val photoId =
@@ -948,10 +945,9 @@ class PhantomService(val context: Context) : LifecycleOwner, SavedStateRegistryO
         composeView = ComposeView(overlayContext).apply {
             setViewCompositionStrategy(ViewCompositionStrategy.DisposeOnViewTreeLifecycleDestroyed)
             setContent {
-                val phantomButtonHiddenFlow = remember {
-                    userPreferencesRepository.userPreferences.map { it.phantomButtonHidden }
-                }
-                val phantomButtonHidden by phantomButtonHiddenFlow.collectAsState(initial = false)
+                val phantomButtonHidden by remember {
+                    userPreferencesRepository.flow { it.phantomButtonHidden }
+                }.collectAsState(initial = userPreferencesRepository.current.phantomButtonHidden)
 
                 if (phantomButtonHidden) return@setContent
 
@@ -1097,7 +1093,8 @@ class PhantomService(val context: Context) : LifecycleOwner, SavedStateRegistryO
                                         thumbnail = processingInfo?.thumbnail?.takeIf { !it.isRecycled },
                                         onLutSelected = { lutId ->
                                             scope.launch {
-                                                userPreferencesRepository.saveLutConfig(lutId)
+                                                userPreferencesRepository.update { this.lutId = lutId }
+                                                PhotonLookContract.notifyLookChanged(context)
                                                 syncScreenCaptureRenderConfig(lutId)
                                                 closeFilterPicker()
                                             }
@@ -1190,7 +1187,7 @@ class PhantomService(val context: Context) : LifecycleOwner, SavedStateRegistryO
                                     IconButton(
                                         onClick = {
                                             scope.launch {
-                                                userPreferencesRepository.savePhantomMode(false)
+                                                userPreferencesRepository.update { phantomMode = false }
                                             }
                                         },
                                         modifier = Modifier.size(48.dp)
@@ -1292,7 +1289,7 @@ class PhantomService(val context: Context) : LifecycleOwner, SavedStateRegistryO
                             currentEffects = currentEffectParams,
                             onEffectsChange = { effects ->
                                 scope.launch {
-                                    userPreferencesRepository.saveActiveEffectParams(effects)
+                                    userPreferencesRepository.update { activeEffectParams = effects }
                                     syncScreenCaptureRenderConfig(
                                         lutId = currentLutId,
                                         creativeRecipeParamsOverride = editingParams,
@@ -1355,8 +1352,7 @@ class PhantomService(val context: Context) : LifecycleOwner, SavedStateRegistryO
         if (isWindowShown) return
 
         lifecycleScope.launch {
-            val hidden = userPreferencesRepository.userPreferences.map { it.phantomButtonHidden }
-                .firstOrNull() ?: false
+            val hidden = userPreferencesRepository.latest().phantomButtonHidden
             updateWindowParams(hidden)
 
             // 关键：将状态标记与实际 addView 放在同一个调度周期或确保同步

@@ -206,8 +206,8 @@ object GalleryManager {
                 // while an explicit photo-level edit is still honored above.
                 true
             } else {
-                ContentRepository.getInstance(context).userPreferencesRepository.userPreferences.firstOrNull()
-                    ?.rawLensShadingCorrectionEnabled ?: true
+                ContentRepository.getInstance(context).userPreferencesRepository
+                    .latest().rawLensShadingCorrectionEnabled
             }
     }
 
@@ -315,7 +315,7 @@ object GalleryManager {
                 rawShadowsAdjustment = preferences?.rawShadowsAdjustment ?: 0f,
                 rawBlackPointCorrection = preferences?.rawBlackPointCorrection ?: 0f,
                 rawWhitePointCorrection = preferences?.rawWhitePointCorrection ?: 0f,
-                rawLensShadingCorrectionEnabled = preferences?.rawLensShadingCorrectionEnabled,
+                rawLensShadingCorrectionEnabled = repository.userPreferencesRepository.latest().rawLensShadingCorrectionEnabled,
                 rawBlackLevelMode = RawCfaCorrection.MODE_DEFAULT,
                 rawCustomBlackLevel = 0f,
                 rawWhiteLevelMode = RawWhiteLevelCorrection.MODE_DEFAULT,
