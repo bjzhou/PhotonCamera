@@ -2400,8 +2400,7 @@ internal object GlesMgcRawSpatialShaders {
      * been expanded onto this LK grid by UpsampleAlignment. Bilinear weights below are the
      * image-warp S16 Q15 conversion and saturating rounded shift used by the AArch64 worker.
      */
-    val blockLucasKanade = """
-        #version 300 es
+    private val blockLucasKanadeCommon = """
         precision highp float;
         precision highp sampler2D;
         precision highp int;
@@ -2416,14 +2415,16 @@ internal object GlesMgcRawSpatialShaders {
         uniform int uTileSize;
         uniform int uNormalize;
         uniform int uHasInitialAlignment;
-        out vec4 oAlignment;
 
-        float referenceAt(ivec2 p) {
-            return float(texelFetch(
+        int referenceValueAt(ivec2 p) {
+            return texelFetch(
                 uReference,
                 clamp(p, ivec2(0), uImageSize - ivec2(1)),
                 0
-            ).r);
+            ).r;
+        }
+        float referenceAt(ivec2 p) {
+            return float(referenceValueAt(p));
         }
         vec2 gradientAt(ivec2 p) {
             return clamp(
@@ -2455,7 +2456,7 @@ internal object GlesMgcRawSpatialShaders {
                 ? biased / 32768
                 : -((-biased + 32767) / 32768);
         }
-        float warpedCurrentAt(vec2 p) {
+        int warpedCurrentValueAt(vec2 p) {
             vec2 bounded = clamp(
                 p,
                 vec2(0.0),
@@ -2475,17 +2476,48 @@ internal object GlesMgcRawSpatialShaders {
                 currentAt(p0 + ivec2(1, 0)) * w10 +
                 currentAt(p0 + ivec2(0, 1)) * w01 +
                 currentAt(p0 + ivec2(1, 1)) * w11;
-            return float(clamp(roundedShiftRight15(weighted), -32768, 32767));
+            return clamp(roundedShiftRight15(weighted), -32768, 32767);
         }
-        void main() {
-            ivec2 tile = ivec2(gl_FragCoord.xy);
-            vec3 initialAlignment = uHasInitialAlignment != 0
+        float warpedCurrentAt(vec2 p) {
+            return float(warpedCurrentValueAt(p));
+        }
+        vec3 initialAlignmentAt(ivec2 tile) {
+            return uHasInitialAlignment != 0
                 ? texelFetch(
                     uInitialAlignment,
                     clamp(tile, ivec2(0), uGridSize - ivec2(1)),
                     0
                 ).xyz
                 : vec3(0.0);
+        }
+        vec4 solveAlignment(ivec2 tile, vec3 initialAlignment, vec2 target, float count) {
+            vec4 products0 = texelFetch(uProducts0, tile, 0);
+            float bx = 0.5 * target.x / count;
+            float by = 0.5 * target.y / count;
+            // det(H) crossed a Float32 texture boundary in the reference pass. Keep +1
+            // here: evaluating 1 + xx*yy - xy*xy can turn a rank-one tile into 1/0.
+            float inverseDeterminant = 1.0 / (1.0 + products0.w);
+            vec2 delta = inverseDeterminant * vec2(
+                products0.z * by - products0.y * bx,
+                products0.z * bx - products0.x * by
+            );
+            // BlockLucasKanadeHalide updates XY and carries the incoming candidate
+            // cost through unchanged in its third planar channel.
+            return vec4(
+                initialAlignment.xy + clamp(delta, vec2(-1.0), vec2(1.0)),
+                initialAlignment.z,
+                0.0
+            );
+        }
+    """.trimIndent()
+
+    /** Fragment fallback for GLES 3.0: one fragment walks a whole tile serially. */
+    val blockLucasKanade = "#version 300 es\n" + blockLucasKanadeCommon + "\n" + """
+        out vec4 oAlignment;
+
+        void main() {
+            ivec2 tile = ivec2(gl_FragCoord.xy);
+            vec3 initialAlignment = initialAlignmentAt(tile);
             vec2 flow = initialAlignment.xy;
             ivec2 origin = (tile + ivec2(1)) * uTileStride;
             float count = float(uTileSize * uTileSize);
@@ -2503,8 +2535,7 @@ internal object GlesMgcRawSpatialShaders {
                 meanResidual /= count;
             }
 
-            float targetX = 0.0;
-            float targetY = 0.0;
+            vec2 target = vec2(0.0);
             for (int y = 0; y < 64; ++y) {
                 if (y >= uTileSize) break;
                 for (int x = 0; x < 64; ++x) {
@@ -2514,119 +2545,77 @@ internal object GlesMgcRawSpatialShaders {
                     // and reference*gradient loses small residuals to Float32 cancellation.
                     float residual = warpedCurrentAt(vec2(p) + flow) -
                         referenceAt(p) - meanResidual;
-                    vec2 gradient = gradientAt(p);
-                    targetX += residual * gradient.x;
-                    targetY += residual * gradient.y;
+                    target += residual * gradientAt(p);
                 }
             }
-            vec4 products0 = texelFetch(uProducts0, tile, 0);
-            float bx = 0.5 * targetX / count;
-            float by = 0.5 * targetY / count;
-            // det(H) crossed a Float32 texture boundary in the reference pass. Keep +1
-            // here: evaluating 1 + xx*yy - xy*xy can turn a rank-one tile into 1/0.
-            float inverseDeterminant = 1.0 / (1.0 + products0.w);
-            vec2 delta = inverseDeterminant * vec2(
-                products0.z * by - products0.y * bx,
-                products0.z * bx - products0.x * by
-            );
-            flow += clamp(delta, vec2(-1.0), vec2(1.0));
-            // BlockLucasKanadeHalide updates XY and carries the incoming candidate
-            // cost through unchanged in its third planar channel.
-            oAlignment = vec4(flow, initialAlignment.z, 0.0);
+            oAlignment = solveAlignment(tile, initialAlignment, target, count);
         }
     """.trimIndent()
 
     /**
-     * AlignL1Halide UInt16 path (0x3be3c58). Candidate ties retain the first
-     * candidate. The quadratic correction is exactly
-     * .5*(Eminus-Eplus)/(Eminus+Eplus-2*Ecenter).
+     * Compute form of [blockLucasKanade]: one 128-lane work group solves one tile. Lanes stride
+     * the tile's pixels and reduce through shared memory. The normalize mean is an exact Int32
+     * sum (|residual| <= 65535 over at most 64x64 pixels), so it equals the serial Float32 sum
+     * whenever that sum is exact; the gradient products are a Float32 tree sum, whose rounding
+     * differs from the serial fragment order only in the last bits.
      */
-    val alignL1 = """
-        #version 300 es
-        precision highp float;
-        precision highp sampler2D;
-        precision highp int;
-        precision highp isampler2D;
-        uniform highp isampler2D uReference;
-        uniform highp isampler2D uCurrent;
-        uniform sampler2D uInitialAlignment;
-        uniform ivec2 uImageSize;
-        uniform ivec2 uGridSize;
-        uniform ivec2 uInitialGridSize;
-        uniform int uTileStride;
-        uniform int uTileSize;
-        uniform int uSearchRadius;
-        uniform float uInitialScale;
-        uniform int uHasInitialAlignment;
-        out vec4 oAlignment;
+    val blockLucasKanadeCompute = "#version 310 es\n" + blockLucasKanadeCommon + "\n" + """
+        layout(local_size_x = 128, local_size_y = 1, local_size_z = 1) in;
+        layout(rgba32f, binding = 0) writeonly uniform highp image2D uOutput;
+        shared int sResidualSum[128];
+        shared vec2 sTarget[128];
 
-        float valueAt(highp isampler2D image, ivec2 p) {
-            return float(texelFetch(
-                image,
-                clamp(p, ivec2(0), uImageSize - ivec2(1)),
-                0
-            ).r);
-        }
-        float sadAt(ivec2 origin, ivec2 displacement) {
-            float sad = 0.0;
-            for (int y = 0; y < 16; ++y) {
-                if (y >= uTileSize) break;
-                for (int x = 0; x < 16; ++x) {
-                    if (x >= uTileSize) break;
-                    ivec2 p = origin + ivec2(x, y);
-                    sad += abs(
-                        valueAt(uReference, p) -
-                        valueAt(uCurrent, p + displacement)
-                    );
-                }
-            }
-            return sad / float(uTileSize * uTileSize);
-        }
         void main() {
-            ivec2 tile = ivec2(gl_FragCoord.xy);
-            ivec2 initialTile = clamp(
-                ivec2(
-                    floor(
-                        (vec2(tile) + 0.5) *
-                        vec2(uInitialGridSize) / vec2(uGridSize)
-                    )
-                ),
-                ivec2(0),
-                uInitialGridSize - ivec2(1)
-            );
-            vec2 initial = uHasInitialAlignment != 0
-                ? texelFetch(uInitialAlignment, initialTile, 0).xy * uInitialScale
-                : vec2(0.0);
-            ivec2 center = ivec2(round(initial));
-            ivec2 origin = tile * uTileStride;
-            ivec2 best = center;
-            float bestCost = sadAt(origin, center);
-            for (int y = -3; y <= 3; ++y) {
-                for (int x = -3; x <= 3; ++x) {
-                    if (abs(x) > uSearchRadius || abs(y) > uSearchRadius) continue;
-                    if (x == 0 && y == 0) continue;
-                    ivec2 candidate = center + ivec2(x, y);
-                    float cost = sadAt(origin, candidate);
-                    if (cost < bestCost) {
-                        bestCost = cost;
-                        best = candidate;
-                    }
+            ivec2 tile = ivec2(gl_WorkGroupID.xy);
+            int lane = int(gl_LocalInvocationIndex);
+            vec3 initialAlignment = initialAlignmentAt(tile);
+            vec2 flow = initialAlignment.xy;
+            ivec2 origin = (tile + ivec2(1)) * uTileStride;
+            int pixelCount = uTileSize * uTileSize;
+
+            // Barriers stay outside uNormalize branches; disabled lanes contribute zero.
+            int residualSum = 0;
+            if (uNormalize != 0) {
+                for (int i = lane; i < pixelCount; i += 128) {
+                    ivec2 p = origin + ivec2(i % uTileSize, i / uTileSize);
+                    residualSum += warpedCurrentValueAt(vec2(p) + flow) - referenceValueAt(p);
                 }
             }
-            float minusX = sadAt(origin, best - ivec2(1, 0));
-            float plusX = sadAt(origin, best + ivec2(1, 0));
-            float minusY = sadAt(origin, best - ivec2(0, 1));
-            float plusY = sadAt(origin, best + ivec2(0, 1));
-            float denomX = minusX + plusX - 2.0 * bestCost;
-            float denomY = minusY + plusY - 2.0 * bestCost;
-            float subX = abs(denomX) > 1.0e-12
-                ? 0.5 * (minusX - plusX) / denomX
-                : 0.0;
-            float subY = abs(denomY) > 1.0e-12
-                ? 0.5 * (minusY - plusY) / denomY
-                : 0.0;
-            oAlignment = vec4(vec2(best) + clamp(vec2(subX, subY), -0.5, 0.5),
-                bestCost, 0.0);
+            sResidualSum[lane] = residualSum;
+            memoryBarrierShared();
+            barrier();
+            for (int stride = 64; stride > 0; stride >>= 1) {
+                if (lane < stride) {
+                    sResidualSum[lane] += sResidualSum[lane + stride];
+                }
+                memoryBarrierShared();
+                barrier();
+            }
+            float count = float(pixelCount);
+            float meanResidual = uNormalize != 0 ? float(sResidualSum[0]) / count : 0.0;
+
+            vec2 target = vec2(0.0);
+            for (int i = lane; i < pixelCount; i += 128) {
+                ivec2 p = origin + ivec2(i % uTileSize, i / uTileSize);
+                // Subtract before reduction. Separately accumulating current*gradient
+                // and reference*gradient loses small residuals to Float32 cancellation.
+                float residual = warpedCurrentAt(vec2(p) + flow) -
+                    referenceAt(p) - meanResidual;
+                target += residual * gradientAt(p);
+            }
+            sTarget[lane] = target;
+            memoryBarrierShared();
+            barrier();
+            for (int stride = 64; stride > 0; stride >>= 1) {
+                if (lane < stride) {
+                    sTarget[lane] += sTarget[lane + stride];
+                }
+                memoryBarrierShared();
+                barrier();
+            }
+            if (lane == 0) {
+                imageStore(uOutput, tile, solveAlignment(tile, initialAlignment, sTarget[0], count));
+            }
         }
     """.trimIndent()
 

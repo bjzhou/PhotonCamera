@@ -382,12 +382,12 @@ internal class GlesMgcRawSpatialStacker(
     private var rawToGrayProgram = 0
     private var downsampleProgram = 0
     private var downsample4Program = 0
-    private var alignProgram = 0
     private var alignmentGradientProductsProgram = 0
     private var upsampleAlignmentProgram = 0
     private var medianAlignmentProgram = 0
     private var globalAlignment: GlesSpatialGlobalAlignment? = null
     private var blockLucasKanadeProgram = 0
+    private var blockLucasKanadeUsesCompute = false
     private var convertAlignmentProgram = 0
     private var strengthAlignmentProgram = 0
     private var strengthRejectionProgram = 0
@@ -2790,10 +2790,7 @@ internal class GlesMgcRawSpatialStacker(
             "mgc_sabre_alignment_gradient_products",
         )
         upsampleAlignmentProgram = initMergeUpsampleAlignment()
-        blockLucasKanadeProgram = linkProgram(
-            GlesMgcRawSpatialShaders.blockLucasKanade,
-            "mgc_sabre_block_lucas_kanade",
-        )
+        initBlockLucasKanade("mgc_sabre_block_lucas_kanade")
         convertAlignmentProgram = linkProgram(
             GlesMgcRawSpatialShaders.convertAlignment,
             "mgc_sabre_convert_alignment",
@@ -2857,6 +2854,21 @@ internal class GlesMgcRawSpatialStacker(
         )
     }
 
+    private fun initBlockLucasKanade(name: String) {
+        // A tile reduction needs the GLES 3.1 compute baseline; GLES 3.0 keeps one serial
+        // fragment per tile with the same sampling and solve functions.
+        blockLucasKanadeUsesCompute = supportsComputePrograms
+        blockLucasKanadeProgram = if (blockLucasKanadeUsesCompute) {
+            linkComputeProgram(GlesMgcRawSpatialShaders.blockLucasKanadeCompute, "${name}_compute")
+        } else {
+            linkProgram(GlesMgcRawSpatialShaders.blockLucasKanade, name)
+        }
+        DngCaptureDiagnostics.put(
+            "merge.lkDispatch",
+            if (blockLucasKanadeUsesCompute) "compute-tile-reduction-128" else "fragment-serial",
+        )
+    }
+
     private fun initMergeUpsampleAlignment(): Int {
         if (processorPipeline == MgcRawProcessorPipeline.SPATIAL) {
             medianAlignmentProgram = linkProgram(
@@ -2908,11 +2920,7 @@ internal class GlesMgcRawSpatialStacker(
                 "mgc_alignment_gradient_products",
             )
             upsampleAlignmentProgram = initMergeUpsampleAlignment()
-            blockLucasKanadeProgram = linkProgram(
-                GlesMgcRawSpatialShaders.blockLucasKanade,
-                "mgc_block_lucas_kanade",
-            )
-            alignProgram = linkProgram(GlesMgcRawSpatialShaders.alignL1, "mgc_align_l1")
+            initBlockLucasKanade("mgc_block_lucas_kanade")
             convertAlignmentProgram = linkProgram(
                 GlesMgcRawSpatialShaders.convertAlignment,
                 "mgc_convert_alignment",
@@ -3985,12 +3993,16 @@ internal class GlesMgcRawSpatialStacker(
                 "uHasInitialAlignment",
                 if (input != null) 1 else 0,
             )
-            draw(
-                blockLucasKanadeProgram,
-                gridWidth,
-                gridHeight,
-                intArrayOf(output),
-            )
+            if (blockLucasKanadeUsesCompute) {
+                dispatchBlockLucasKanade(output, gridWidth, gridHeight)
+            } else {
+                draw(
+                    blockLucasKanadeProgram,
+                    gridWidth,
+                    gridHeight,
+                    intArrayOf(output),
+                )
+            }
             GlesGpuScheduler.yieldToUiRenderer()
             input = Alignment(
                 texture = output,
@@ -4004,55 +4016,34 @@ internal class GlesMgcRawSpatialStacker(
         return checkNotNull(input)
     }
 
-    private fun renderAlignmentLevel(
-        reference: TextureLevel,
-        current: TextureLevel,
-        initial: Alignment?,
-        tileStride: Int,
-        tileSize: Int,
-        searchRadius: Int,
-        initialScale: Float,
-    ): Alignment {
-        val gridWidth = ceilDiv(reference.width, tileStride)
-        val gridHeight = ceilDiv(reference.height, tileStride)
-        val output = createTexture(
-            gridWidth,
-            gridHeight,
-            GLES30.GL_RGBA16F,
-            GLES30.GL_NEAREST,
+    /** One work group per LK tile; [output] is an immutable RGBA32F scratch alignment. */
+    private fun dispatchBlockLucasKanade(output: Int, gridWidth: Int, gridHeight: Int) {
+        // GLES 3.1 guarantees 65535 work groups per axis; LK grids are tile counts.
+        check(gridWidth in 1..65535 && gridHeight in 1..65535) {
+            "LK grid ${gridWidth}x$gridHeight exceeds the GLES 3.1 dispatch baseline"
+        }
+        GLES31.glBindImageTexture(
+            0,
+            output,
+            0,
+            false,
+            0,
+            GLES31.GL_WRITE_ONLY,
+            GLES30.GL_RGBA32F,
         )
-        GLES30.glUseProgram(alignProgram)
-        bindTexture(alignProgram, "uReference", 0, reference.texture)
-        bindTexture(alignProgram, "uCurrent", 1, current.texture)
-        val initialTexture = initial?.texture ?: createZeroFlowTexture()
-        bindTexture(
-            alignProgram,
-            "uInitialAlignment",
-            2,
-            initialTexture,
+        GLES31.glDispatchCompute(gridWidth, gridHeight, 1)
+        // Consumers are the next iteration's sampler, upsample/convert draws and readbacks.
+        GlesGpuScheduler.memoryBarrier()
+        GLES31.glBindImageTexture(
+            0,
+            0,
+            0,
+            false,
+            0,
+            GLES31.GL_WRITE_ONLY,
+            GLES30.GL_RGBA32F,
         )
-        uniform2i(alignProgram, "uImageSize", reference.width, reference.height)
-        uniform2i(alignProgram, "uGridSize", gridWidth, gridHeight)
-        uniform2i(
-            alignProgram,
-            "uInitialGridSize",
-            initial?.gridWidth ?: gridWidth,
-            initial?.gridHeight ?: gridHeight,
-        )
-        uniform1i(alignProgram, "uTileStride", tileStride)
-        uniform1i(alignProgram, "uTileSize", tileSize)
-        uniform1i(alignProgram, "uSearchRadius", searchRadius)
-        uniform1f(alignProgram, "uInitialScale", initialScale)
-        uniform1i(alignProgram, "uHasInitialAlignment", if (initial != null) 1 else 0)
-        draw(alignProgram, gridWidth, gridHeight, intArrayOf(output))
-        return Alignment(
-            texture = output,
-            gridWidth = gridWidth,
-            gridHeight = gridHeight,
-            tileStride = tileStride,
-            scaleToBayerQuads = reference.scaleToBayerQuads,
-            gridMin = 0,
-        )
+        checkGlError("MGC LK compute ${gridWidth}x$gridHeight")
     }
 
     private fun createConvertedAlignment(alignment: Alignment): ConvertedAlignment {
@@ -6616,71 +6607,6 @@ internal class GlesMgcRawSpatialStacker(
      * Resolves the small persistent alignment grids once after temporal completion. Exact bounds
      * avoid replaying hundreds of unused RAW halo rows for every reconstruction band.
      */
-    private fun resolveRgbFlowBounds(frames: List<RgbMergeFrame>): List<RgbMergeFrame> {
-        val byteCount = bayerAlignmentWidth.toLong() * bayerAlignmentHeight * 4L * Float.SIZE_BYTES
-        require(byteCount in 1..Int.MAX_VALUE.toLong())
-        val readback = ByteBuffer.allocateDirect(byteCount.toInt()).order(ByteOrder.nativeOrder())
-        return frames.map { frame ->
-            if (frame.flowBounds == MgcSpatialRgbFlowBounds.Zero) {
-                frame
-            } else {
-                bindRenderTargets(
-                    intArrayOf(frame.alignmentTexture),
-                    "MGC RGB alignment bounds frame ${frame.imageIndex}",
-                )
-                GLES30.glPixelStorei(GLES30.GL_PACK_ALIGNMENT, Float.SIZE_BYTES)
-                GLES30.glPixelStorei(GLES30.GL_PACK_ROW_LENGTH, 0)
-                readback.clear()
-                GLES30.glReadPixels(
-                    0,
-                    0,
-                    bayerAlignmentWidth,
-                    bayerAlignmentHeight,
-                    GLES30.GL_RGBA,
-                    GLES30.GL_FLOAT,
-                    readback,
-                )
-                GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, 0)
-                checkGlError("read MGC RGB alignment bounds frame ${frame.imageIndex}")
-                val values = readback.asFloatBuffer()
-                var minimumX = Float.POSITIVE_INFINITY
-                var minimumY = Float.POSITIVE_INFINITY
-                var maximumX = Float.NEGATIVE_INFINITY
-                var maximumY = Float.NEGATIVE_INFINITY
-                for (pixel in 0 until bayerAlignmentWidth * bayerAlignmentHeight) {
-                    val x = values.get(pixel * 4)
-                    val y = values.get(pixel * 4 + 1)
-                    check(x.isFinite() && y.isFinite()) {
-                        "MGC RGB alignment frame ${frame.imageIndex} contains non-finite flow"
-                    }
-                    minimumX = minOf(minimumX, x)
-                    minimumY = minOf(minimumY, y)
-                    maximumX = maxOf(maximumX, x)
-                    maximumY = maxOf(maximumY, y)
-                }
-                val bounds = MgcSpatialRgbFlowBounds(
-                    minX = minimumX,
-                    minY = minimumY,
-                    maxX = maximumX,
-                    maxY = maximumY,
-                )
-                check(
-                    bounds.minX >= conservativeRgbFlowBounds.minX &&
-                        bounds.minY >= conservativeRgbFlowBounds.minY &&
-                        bounds.maxX <= conservativeRgbFlowBounds.maxX &&
-                        bounds.maxY <= conservativeRgbFlowBounds.maxY
-                ) {
-                    "MGC RGB alignment frame ${frame.imageIndex} exceeds analytical bounds: " +
-                        "$bounds expected=$conservativeRgbFlowBounds"
-                }
-                PLog.d(TAG, "MGC RGB flow bounds frame=${frame.imageIndex} $bounds")
-                frame.copy(flowBounds = bounds)
-            }
-        }.also {
-            detachRenderTargets()
-        }
-    }
-
     private fun detachRenderTargets() {
         if (renderFbo == 0 || renderTargetAttachmentCount == 0) return
         GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, renderFbo)
