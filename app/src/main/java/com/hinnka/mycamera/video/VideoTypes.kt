@@ -190,8 +190,7 @@ data class VideoCapabilities(
     val recordingSizesByResolution: Map<VideoResolutionPreset, Size> = emptyMap(),
     val openGatePortraitAspectRatio: Float = 3f / 4f,
     val availableStabilizationModes: List<VideoStabilizationMode> = emptyList(),
-    val supportsTorch: Boolean = false,
-    val linearTonemapSupported: Boolean = false
+    val supportsTorch: Boolean = false
 )
 
 data class VideoRecordingState(

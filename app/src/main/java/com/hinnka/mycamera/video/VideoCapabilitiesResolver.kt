@@ -28,9 +28,6 @@ object VideoCapabilitiesResolver {
     ): VideoCapabilitySnapshot {
         // Resolve from one metadata snapshot. Session caches are cleared while reopening,
         // which must not turn a supported user selection into an unsupported capability.
-        val availableTonemapModes = characteristics.get(
-            CameraCharacteristics.TONEMAP_AVAILABLE_TONE_MAP_MODES
-        ) ?: intArrayOf()
         val availableVideoStabilizationModes = characteristics.get(
             CameraCharacteristics.CONTROL_AVAILABLE_VIDEO_STABILIZATION_MODES
         ) ?: intArrayOf()
@@ -118,15 +115,8 @@ object VideoCapabilitiesResolver {
                 "fps=${availableFps.map { it.fps }}"
         )*/
 
-        val linearTonemapSupported = availableTonemapModes.contains(CaptureRequest.TONEMAP_MODE_CONTRAST_CURVE) ||
-            availableTonemapModes.contains(CaptureRequest.TONEMAP_MODE_GAMMA_VALUE)
-        val availableLogProfiles = if (linearTonemapSupported) {
-            VideoLogProfile.entries.toList()
-        } else {
-            listOf(VideoLogProfile.OFF)
-        }
-        val resolvedLogProfile = requestedConfig.logProfile.takeIf { availableLogProfiles.contains(it) }
-            ?: availableLogProfiles.first()
+        // Log 由 app 侧从 HAL sRGB 输出逆变换得到，不依赖 HAL tonemap 能力。
+        val availableLogProfiles = VideoLogProfile.entries.toList()
 
         val availableStabilizationModes = mutableListOf(VideoStabilizationMode.OFF)
         if (supportsElectronicStabilization(availableVideoStabilizationModes)) {
@@ -151,7 +141,7 @@ object VideoCapabilitiesResolver {
             config = requestedConfig.copy(
                 resolution = resolvedResolution,
                 fps = resolvedFps,
-                logProfile = resolvedLogProfile,
+                logProfile = requestedConfig.logProfile,
                 bitrate = requestedConfig.bitrate,
                 stabilizationMode = resolvedStabilizationMode,
                 torchEnabled = requestedConfig.torchEnabled && isFlashSupported
@@ -168,8 +158,7 @@ object VideoCapabilitiesResolver {
                 recordingSizesByResolution = recordingSizesByResolution,
                 openGatePortraitAspectRatio = openGateAspect,
                 availableStabilizationModes = availableStabilizationModes,
-                supportsTorch = isFlashSupported,
-                linearTonemapSupported = linearTonemapSupported
+                supportsTorch = isFlashSupported
             ),
             previewSize = previewSize,
             recordingSize = recordingSize
