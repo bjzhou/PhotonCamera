@@ -55,6 +55,7 @@ def params_from_json(p: dict) -> pd.Params:
         gate_luma=tuple(p["gateLuma"]),
         gate_chroma=tuple(p["gateChroma"]),
         bilateral_levels=p["bilateralLevels"],
+        chroma_gate_from=p.get("chromaGateFrom", 0),
         bilateral_luma=p["bilateralLuma"],
         bilateral_chroma=p["bilateralChroma"],
         luma_strength=p["lumaStrength"],
@@ -120,17 +121,16 @@ def compare(input_rgb: np.ndarray, params: pd.Params, textures: dict[str, np.nda
             params = replace(params, strength_table=gpu_table)
     # Section 6.0: an outlier decision near its threshold may flip with last-ulp differences, so
     # the correction passes when at most PREFILTER_FLIPS of the pixels disagree.
-    if params.luma_levels > 0 and params.luma_strength > 0:
+    if pd.prefilter_amounts(params).any():
         ref = pd.prefilter(g0, gaussians[1], params)
         gpu = textures.get("prefilter0")
         if gpu is None:
             results.append(("prefilter0", None))
         else:
-            gpu = gpu[0]
+            gpu = gpu[:3]
             flips = float(np.mean(np.abs(gpu - ref) > 1e-3 * np.maximum(np.abs(ref), np.abs(gpu)) + F32(1e-6)))
             results.append(("prefilter0", (flips / PREFILTER_FLIPS, int(flips > PREFILTER_FLIPS), 0.0)))
-            g0 = g0.copy()
-            g0[0] = g0[0] + gpu
+            g0 = g0 + gpu
     for level in range(params.levels - 1, -1, -1):
         fine = g0 if level == 0 else gaussians[level]
         denoised_coarse = gaussians[params.levels] if level == params.levels - 1 \
@@ -201,7 +201,7 @@ def self_test() -> bool:
                        np.full(4, 0.2, dtype=F32), np.full(4, 2.5, dtype=F32), (16.919, 27.877), (5.991, 13.816),
                        2, 4.0, 4.0, 1.0, 1.0, lsc,
                        merge_map=pd.MergeMap(rng.uniform(0.1, 1.0, (3, 4, 2)).astype(F32), (0, 0), (w, h)))
-    params = replace(params, gamma=np.array([0.5, 0.5, 0.5, 1.0], dtype=F32),
+    params = replace(params, gamma=np.array([0.5, 0.5, 0.5, 1.0], dtype=F32), chroma_gate_from=2,
                      strength_cap_luma=rng.uniform(0.5, 6.0, 4).astype(F32),
                      strength_cap_chroma=rng.uniform(0.01, 6.0, 4).astype(F32))
     trace = pd.run(rgb, params)
@@ -213,7 +213,7 @@ def self_test() -> bool:
     textures["output"] = trace.output
     textures["strength"] = trace.strength
     if trace.prefilter is not None:
-        textures["prefilter0"] = trace.prefilter[None]
+        textures["prefilter0"] = trace.prefilter
     return compare(rgb, params, textures)
 
 

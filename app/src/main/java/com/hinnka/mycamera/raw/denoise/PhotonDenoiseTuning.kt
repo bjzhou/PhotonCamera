@@ -32,6 +32,8 @@ internal object PhotonDenoiseTuning {
         val gateLuma: FloatArray,
         /** Chroma Mahalanobis gate (χ²₂ quantiles). */
         val gateChroma: FloatArray,
+        /** First level whose chroma detail the Mahalanobis gate may keep; finer ones use the luma gate only (§7.2). */
+        val chromaGateFrom: Int,
         /** Coarsest chroma levels receiving the luma-guided joint bilateral (§7.3). */
         val bilateralLevels: Int,
         val bilateralLuma: Float,
@@ -63,6 +65,9 @@ internal object PhotonDenoiseTuning {
         outlier = floatArrayOf(2.5f, 2.5f, 2.5f, 2.5f, 2.5f, 2.5f, 2.5f),
         gateLuma = floatArrayOf(16.919f, 27.877f),
         gateChroma = floatArrayOf(5.991f, 13.816f),
+        // At L0 / L1 the χ²₂ tail of demosaic-clustered chroma noise opens the gate as isolated
+        // colour dots (ISO 9100, 8 frames: all of them); real colour edges there carry luma (§7.2).
+        chromaGateFrom = 2,
         bilateralLevels = 3,
         bilateralLuma = 4f,
         bilateralChroma = 4f,
@@ -123,7 +128,7 @@ internal object PhotonDenoiseTuning {
         ),
         chroma = rows(
             1f, 1f, 1f,
-            1f, 1f, 1f,
+            2f, 2f, 1f,
             4f, 3f, 0.75f,
             12f, 8f, 1.5f,
             24f, 16f, 2f,
@@ -151,6 +156,7 @@ internal object PhotonDenoiseTuning {
             outlier = mix(a.outlier, b.outlier),
             gateLuma = mix(a.gateLuma, b.gateLuma),
             gateChroma = mix(a.gateChroma, b.gateChroma),
+            chromaGateFrom = if (f < 0.5f) a.chromaGateFrom else b.chromaGateFrom,
             bilateralLevels = if (f < 0.5f) a.bilateralLevels else b.bilateralLevels,
             bilateralLuma = a.bilateralLuma + f * (b.bilateralLuma - a.bilateralLuma),
             bilateralChroma = a.bilateralChroma + f * (b.bilateralChroma - a.bilateralChroma),

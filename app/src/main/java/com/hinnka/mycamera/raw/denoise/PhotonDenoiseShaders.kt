@@ -235,8 +235,7 @@ internal object PhotonDenoiseShaders {
         uniform sampler2D uNoisyCoarse;
         uniform ivec2 uSize;
         uniform ivec2 uCoarseSize;
-        uniform float uAmount;
-        uniform ivec2 uSampleOrigin;
+                uniform ivec2 uSampleOrigin;
         uniform ivec2 uExtent;
         $UPSAMPLE
         $MODEL_NOISE
@@ -244,49 +243,52 @@ internal object PhotonDenoiseShaders {
     """
 
     /**
-     * §6.0 level-0 outlier correction: a luma sample far from its 3×3 median whose deviation has at
-     * most PREFILTER_GUARD same-signed neighbours (a dot, not a line) in a noise-like neighbourhood
-     * (mean L0² of the 5×5 ring below PREFILTER_FLAT σ²) is moved to the median, scaled by
-     * uAmount = min(luma strength, 1). Writes that correction (R32F, 0 elsewhere); σ² is the L0
-     * model noise times the §5.1 strength at the noisy base. Per row strip this program writes the
-     * samples (fine luma, L rounded to float16, σ²) of the strip and its border, [PREFILTER] the
+     * §6.0 level-0 outlier correction, per channel of Y, Cb, Cr: a sample far from its 3×3 median
+     * whose deviation has at most PREFILTER_GUARD same-signed neighbours (a dot, not a line) in a
+     * noise-like neighbourhood (mean L0² of the 5×5 ring below PREFILTER_FLAT σ²) is moved to the
+     * median, scaled by uAmounts (min(luma strength, 1), min(chroma strength, 1) twice; 0 switches a
+     * channel off). Writes that correction (RGBA32F, 0 elsewhere); σ² is the L0 model noise times
+     * the §5.1 strength at the noisy base. Per row strip this program writes the samples of the
+     * strip and its border, fine (RGBA32F) and L rounded to float16 (RGBA16F); [PREFILTER] the
      * correction.
      */
     val PREFILTER_SAMPLES = """
         #version 310 es
         $PREFILTER_COMMON
         layout(rgba32f, binding = 0) writeonly uniform highp image2D uSamplesOut;
+        layout(rgba16f, binding = 1) writeonly uniform highp image2D uLapOut;
 
         void main() {
             ivec2 t = globalId();
             if (any(greaterThanEqual(t, uExtent))) return;
             ivec2 p = mirror2(uSampleOrigin + t, uSize);
-            float fine = working0(p).x;
-            vec3 base = upAt(uNoisyCoarse, p);
-            vec3 mu;
-            float noise = modelNoise(p, base, mu).x * strengthAt(base.x).x;
-            float lap = unpackHalf2x16(packHalf2x16(vec2(fine - base.x, 0.0))).x;
-            imageStore(uSamplesOut, t, vec4(fine, lap, noise, 0.0));
+            vec3 fine = working0(p);
+            vec3 lap = fine - upAt(uNoisyCoarse, p);
+            vec2 lapXy = unpackHalf2x16(packHalf2x16(lap.xy));
+            float lapZ = unpackHalf2x16(packHalf2x16(vec2(lap.z, 0.0))).x;
+            imageStore(uSamplesOut, t, vec4(fine, 0.0));
+            imageStore(uLapOut, t, vec4(lapXy, lapZ, 0.0));
         }
     """.trimIndent()
 
-    /** §6.0 correction of the strip rows from the [PREFILTER_SAMPLES] image (uSamples). */
+    /** §6.0 correction of the strip rows from the [PREFILTER_SAMPLES] images (uSamples, uLaps). */
     val PREFILTER = """
         #version 310 es
         $PREFILTER_COMMON
         uniform sampler2D uSamples;
+        uniform sampler2D uLaps;
         uniform ivec2 uOutputOrigin;       // pixel of texel 0
-        layout(r32f, binding = 0) writeonly uniform highp image2D uDelta;
+        uniform vec3 uAmounts;
+        layout(rgba32f, binding = 0) writeonly uniform highp image2D uDelta;
 
-        // Raw coordinates: the samples hold the values of the mirrored coordinate.
-        vec4 sampleAt(ivec2 c) { return texelFetch(uSamples, c - uSampleOrigin, 0); }
+        // Raw coordinates: the samples hold the values of the mirrored coordinate. mask selects the
+        // channel without dynamic vector indexing.
+        float fineAt(ivec2 c, vec3 mask) { return dot(texelFetch(uSamples, c - uSampleOrigin, 0).rgb, mask); }
+        float lapAt(ivec2 c, vec3 mask) { return dot(texelFetch(uLaps, c - uSampleOrigin, 0).rgb, mask); }
 
-        void main() {
-            ivec2 t = globalId();
-            if (any(greaterThanEqual(t, uExtent))) return;
-            ivec2 p = uOutputOrigin + t;
+        float correction(ivec2 p, vec3 mask, float noise) {
             float v[9];
-            for (int j = 0; j < 9; ++j) v[j] = sampleAt(p + ivec2(j % 3 - 1, j / 3 - 1)).x;
+            for (int j = 0; j < 9; ++j) v[j] = fineAt(p + ivec2(j % 3 - 1, j / 3 - 1), mask);
             for (int i = 1; i < 9; ++i) {
                 float x = v[i];
                 int j = i - 1;
@@ -297,32 +299,41 @@ internal object PhotonDenoiseShaders {
                 v[j + 1] = x;
             }
             float m = v[4];
-            vec4 centre = sampleAt(p);
-            float fineP = centre.x;
-            float sigma = sqrt(centre.z);
+            float fineP = fineAt(p, mask);
+            float sigma = sqrt(noise);
             float dev = fineP - m;
-            float delta = 0.0;
-            if (sigma > 0.0 && abs(dev) > $PREFILTER_K * sigma) {
-                int count = 0;
-                for (int j = 0; j < 9; ++j) {
-                    if (j == 4) continue;
-                    float d = sampleAt(p + ivec2(j % 3 - 1, j / 3 - 1)).x - m;
-                    if (abs(d) > $PREFILTER_K * sigma && sign(d) == sign(dev)) ++count;
-                }
-                if (count <= $PREFILTER_GUARD) {
-                    float sum = 0.0;
-                    for (int dy = -2; dy <= 2; ++dy) {
-                        for (int dx = -2; dx <= 2; ++dx) {
-                            float l = sampleAt(p + ivec2(dx, dy)).y;
-                            sum += l * l;
-                        }
-                    }
-                    float lp = centre.y;
-                    float energy = (sum - lp * lp) / 24.0;
-                    if (energy < $PREFILTER_FLAT * sigma * sigma) delta = (m - fineP) * uAmount;
+            if (!(sigma > 0.0) || abs(dev) <= $PREFILTER_K * sigma) return 0.0;
+            int count = 0;
+            for (int j = 0; j < 9; ++j) {
+                if (j == 4) continue;
+                float d = fineAt(p + ivec2(j % 3 - 1, j / 3 - 1), mask) - m;
+                if (abs(d) > $PREFILTER_K * sigma && sign(d) == sign(dev)) ++count;
+            }
+            if (count > $PREFILTER_GUARD) return 0.0;
+            float sum = 0.0;
+            for (int dy = -2; dy <= 2; ++dy) {
+                for (int dx = -2; dx <= 2; ++dx) {
+                    float l = lapAt(p + ivec2(dx, dy), mask);
+                    sum += l * l;
                 }
             }
-            imageStore(uDelta, p, vec4(delta, 0.0, 0.0, 0.0));
+            float lp = lapAt(p, mask);
+            float energy = (sum - lp * lp) / 24.0;
+            return energy < $PREFILTER_FLAT * sigma * sigma ? m - fineP : 0.0;
+        }
+
+        void main() {
+            ivec2 t = globalId();
+            if (any(greaterThanEqual(t, uExtent))) return;
+            ivec2 p = uOutputOrigin + t;
+            vec3 base = upAt(uNoisyCoarse, p);
+            vec3 mu;
+            vec3 noise = modelNoise(p, base, mu).xyz * strengthAt(base.x);
+            vec3 delta = vec3(0.0);
+            if (uAmounts.x > 0.0) delta.x = correction(p, vec3(1.0, 0.0, 0.0), noise.x) * uAmounts.x;
+            if (uAmounts.y > 0.0) delta.y = correction(p, vec3(0.0, 1.0, 0.0), noise.y) * uAmounts.y;
+            if (uAmounts.z > 0.0) delta.z = correction(p, vec3(0.0, 0.0, 1.0), noise.z) * uAmounts.z;
+            imageStore(uDelta, p, vec4(delta, 0.0));
         }
     """.trimIndent()
 
@@ -812,7 +823,7 @@ internal object PhotonDenoiseShaders {
                 }
                 float gateY = sumS2 > 0.0 ? smoothstep(uGateLuma.x, uGateLuma.y, 9.0 * sumL2 / max(sumS2, 1e-30)) : 1.0;
                 float stat = mahalanobis(lap.yz, noise);
-                float gateC = stat >= 0.0 ? smoothstep(uGateChroma.x, uGateChroma.y, stat) : 1.0;
+                float gateC = uChromaGate == 0 ? 0.0 : stat >= 0.0 ? smoothstep(uGateChroma.x, uGateChroma.y, stat) : 1.0;
                 float gate = max(gateY, gateC);
                 chromaBand = (uChromaStrength * gate + (1.0 - uChromaStrength)) * lap.yz;
 
@@ -863,7 +874,7 @@ internal object PhotonDenoiseShaders {
         $UPSAMPLE
         $MODEL_NOISE
         $STRENGTH_LOOKUP
-        // §6.0 level-0 isolated-outlier correction of the input luma (PREFILTER); used when FINE_IS_INPUT.
+        // §6.0 level-0 isolated-outlier correction of the input Y, Cb, Cr (PREFILTER); used when FINE_IS_INPUT.
         uniform sampler2D uPrefilter;
         uniform float uOutlier;
         uniform float uAlpha;
@@ -872,6 +883,7 @@ internal object PhotonDenoiseShaders {
         uniform float uChromaStrength;      // min(s, 1)
         uniform vec2 uGateLuma;
         uniform vec2 uGateChroma;
+        uniform int uChromaGate;            // §7.2 Mahalanobis gate on at this level
         uniform float uBilateralLuma;
         uniform float uBilateralChroma;
 
@@ -889,7 +901,7 @@ internal object PhotonDenoiseShaders {
             // Level 0 reads the input at uLevel = 0: one gain serves the input and the clip test.
             vec3 gain = lscGain(levelCentre(p, uLevel));
             vec3 fine = FINE_IS_INPUT ? working0Gain(p, gain) : texelFetch(uFine, p, 0).rgb;
-            if (FINE_IS_INPUT && PREFILTER_ENABLED) fine.x += texelFetch(uPrefilter, p, 0).r;
+            if (FINE_IS_INPUT && PREFILTER_ENABLED) fine += texelFetch(uPrefilter, p, 0).rgb;
             base = upDenoised(p);
             lap = fine - upNoisy(p);
             vec3 mu;

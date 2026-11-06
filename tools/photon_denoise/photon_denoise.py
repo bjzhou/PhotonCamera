@@ -148,6 +148,7 @@ class Params:
     strength_cap_chroma: np.ndarray | None = None
     merge_map: "MergeMap | None" = None  # section 2.2 per-pixel ratios; None: the scalars
     gamma: np.ndarray | None = None  # [levels] section 6.1 second-stage gain exponent; None: 1 (MMSE)
+    chroma_gate_from: int = 0  # section 7.2 first level whose Mahalanobis gate is on
 
     def luma_grain(self, level: int) -> float:
         t, s = float(self.grain[level]), self.luma_strength
@@ -536,7 +537,7 @@ def final(lap: np.ndarray, base: np.ndarray, noise: np.ndarray, pilot_tex: np.nd
         chroma_stat = np.where(det > 0, (s_cr * cb * cb - 2 * s_x * cb * cr + s_cb * cr * cr) / np.maximum(det, F32(1e-30)),
                                F32(np.inf))
         low, high = params.chroma_thresholds(params.gate_chroma)
-        gate_c = _smoothstep(low, high, chroma_stat)
+        gate_c = _smoothstep(low, high, chroma_stat) if level >= params.chroma_gate_from else np.zeros_like(chroma_stat)
         gate = np.maximum(gate_y, gate_c)
         s = F32(min(params.chroma_strength, 1.0))
         chroma_band = (s * gate + (1 - s)) * lap[1:3]
@@ -584,7 +585,7 @@ class Trace:
     pilots: dict[int, np.ndarray] = field(default_factory=dict)
     denoised: dict[int, np.ndarray] = field(default_factory=dict)  # G~_l (stored f16 for l >= 1)
     strength: np.ndarray | None = None                           # section 5.1 table used
-    prefilter: np.ndarray | None = None                          # section 6.0 level-0 luma correction
+    prefilter: np.ndarray | None = None                          # section 6.0 level-0 Y, Cb, Cr correction
     output: np.ndarray | None = None
 
 
@@ -594,27 +595,39 @@ def _windows(image: np.ndarray, radius: int) -> np.ndarray:
     return np.lib.stride_tricks.sliding_window_view(np.pad(image, radius, mode="reflect"), (side, side))
 
 
+def prefilter_amounts(params: Params) -> np.ndarray:
+    """Section 6.0 correction scale of Y, Cb, Cr; 0 where that channel is not denoised."""
+    luma = min(params.luma_strength, 1.0) if params.luma_levels > 0 else 0.0
+    chroma = min(params.chroma_strength, 1.0)
+    return np.array([max(luma, 0.0), max(chroma, 0.0), max(chroma, 0.0)], dtype=F32)
+
+
 def prefilter(g0: np.ndarray, g1: np.ndarray, params: Params) -> np.ndarray:
-    """Section 6.0 level-0 luma correction [H, W]: an isolated outlier in a noise-like
-    neighbourhood moves to its 3x3 median, scaled by min(luma strength, 1)."""
+    """Section 6.0 level-0 correction [3, H, W] of Y, Cb, Cr: per channel, an isolated outlier in a
+    noise-like neighbourhood moves to its 3x3 median, scaled by prefilter_amounts."""
     shape = g0.shape[1:]
     base = up(g1, shape)
-    lap = f16(g0[0] - base[0])
     noise, _ = model_noise(base, 0, params)
     s = strength_at(params.strength_table, 0, base[0], params.scale)
-    sigma = np.sqrt(noise[0] * s[0])
-    y = g0[0]
-    n9 = _windows(y, 1)
-    m = np.sort(n9.reshape(*shape, 9), axis=-1)[..., 4]
-    dev = y - m
-    big = np.abs(n9 - m[..., None, None]) > PREFILTER_K * sigma[..., None, None]
-    same = big & (np.sign(n9 - m[..., None, None]) == np.sign(dev)[..., None, None])
-    outlier = np.abs(dev) > PREFILTER_K * sigma
-    count = same.sum(axis=(-1, -2)) - outlier
-    energy = ((_windows(lap, 2) ** 2).sum(axis=(-1, -2), dtype=F32) - lap * lap) / F32(24)
-    selected = (sigma > 0) & outlier & (count <= PREFILTER_GUARD) & (energy < PREFILTER_FLAT * sigma * sigma)
-    amount = F32(min(params.luma_strength, 1.0))
-    return np.where(selected, (m - y) * amount, F32(0)).astype(F32)
+    amounts = prefilter_amounts(params)
+    result = np.zeros((3,) + shape, dtype=F32)
+    for ch in range(3):
+        if amounts[ch] <= 0:
+            continue
+        lap = f16(g0[ch] - base[ch])
+        sigma = np.sqrt(noise[ch] * s[ch])
+        y = g0[ch]
+        n9 = _windows(y, 1)
+        m = np.sort(n9.reshape(*shape, 9), axis=-1)[..., 4]
+        dev = y - m
+        big = np.abs(n9 - m[..., None, None]) > PREFILTER_K * sigma[..., None, None]
+        same = big & (np.sign(n9 - m[..., None, None]) == np.sign(dev)[..., None, None])
+        outlier = np.abs(dev) > PREFILTER_K * sigma
+        count = same.sum(axis=(-1, -2)) - outlier
+        energy = ((_windows(lap, 2) ** 2).sum(axis=(-1, -2), dtype=F32) - lap * lap) / F32(24)
+        selected = (sigma > 0) & outlier & (count <= PREFILTER_GUARD) & (energy < PREFILTER_FLAT * sigma * sigma)
+        result[ch] = np.where(selected, (m - y) * amounts[ch], F32(0))
+    return result
 
 
 def run(rgb: np.ndarray, params: Params) -> Trace:
@@ -628,10 +641,9 @@ def run(rgb: np.ndarray, params: Params) -> Trace:
     if params.strength_table is None:
         params = replace(params, strength_table=estimate_strength(g0, trace.gaussians, params))
     trace.strength = params.strength_table
-    if params.luma_levels > 0 and params.luma_strength > 0:
+    if prefilter_amounts(params).any():
         trace.prefilter = prefilter(g0, gaussians[1], params)
-        g0 = g0.copy()
-        g0[0] = g0[0] + trace.prefilter
+        g0 = g0 + trace.prefilter
     denoised = gaussians[params.levels]
     for level in range(params.levels - 1, -1, -1):
         fine = g0 if level == 0 else gaussians[level]

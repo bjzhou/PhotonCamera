@@ -122,7 +122,7 @@ internal class PhotonMultiScaleDenoiser {
         sink: PassSink? = null,
     ): Int? {
         if (!initialize()) return null
-        val prefilterEnabled = params.lumaLevels > 0 && params.lumaStrength > 0f
+        val prefilterEnabled = prefilterAmounts(params).any { it > 0f }
         val variants = List(params.levels) { level ->
             val chroma = params.chromaStrength > 0f
             PhotonSynthesisVariant(
@@ -201,7 +201,7 @@ internal class PhotonMultiScaleDenoiser {
 
             prefilterTexture = 0
             if (prefilterEnabled) {
-                prefilterTexture = texture(sizes[0], GLES30.GL_R32F)
+                prefilterTexture = texture(sizes[0], GLES30.GL_RGBA32F)
                 timing.gpu("prefilter", "L0 ${width}x$height") { prefilter(frame, prefilterTexture) }
                 sink?.onPass("prefilter0", prefilterTexture, 0, 0, width, height, true)
             }
@@ -251,8 +251,9 @@ internal class PhotonMultiScaleDenoiser {
     }
 
     /**
-     * §6.0 per row strip: the luma samples (fine, rounded L, σ²) of the strip plus PREFILTER_BORDER
-     * into the strip noise image, then the correction of the strip's rows into [target].
+     * §6.0 per row strip: the samples of the strip plus PREFILTER_BORDER, fine Y/Cb/Cr into the
+     * strip noise image and L rounded to float16 into the strip lap image, then the correction of
+     * the strip's rows into [target].
      */
     private fun prefilter(frame: SynthesisFrame, target: Int) {
         val strips = frame.strips
@@ -268,16 +269,19 @@ internal class PhotonMultiScaleDenoiser {
             uniform2i(prefilterSamplesProgram, "uSampleOrigin", sampleOrigin)
             uniform2i(prefilterSamplesProgram, "uExtent", sampleExtent)
             bindImage(0, strips.noise, GLES30.GL_RGBA32F)
+            bindImage(1, strips.lap, GLES30.GL_RGBA16F)
             dispatch(prefilterSamplesProgram, sampleExtent)
 
             val extent = intArrayOf(size[0], rows)
             GLES31.glUseProgram(prefilterProgram)
             bindPrefilter(prefilterProgram, frame)
             bindSampler(prefilterProgram, "uSamples", UNIT_NOISE, strips.noise)
+            bindSampler(prefilterProgram, "uLaps", UNIT_LAP, strips.lap)
+            uniform3f(prefilterProgram, "uAmounts", prefilterAmounts(frame.params))
             uniform2i(prefilterProgram, "uSampleOrigin", sampleOrigin)
             uniform2i(prefilterProgram, "uOutputOrigin", intArrayOf(0, y))
             uniform2i(prefilterProgram, "uExtent", extent)
-            bindImage(0, target, GLES30.GL_R32F)
+            bindImage(0, target, GLES30.GL_RGBA32F)
             dispatch(prefilterProgram, extent)
             GlesGpuScheduler.yieldToUiRenderer()
             y += rows
@@ -291,7 +295,13 @@ internal class PhotonMultiScaleDenoiser {
         bindSampler(program, "uNoisyCoarse", UNIT_NOISY_COARSE, frame.gaussians[1])
         uniform2i(program, "uSize", frame.sizes[0])
         uniform2i(program, "uCoarseSize", frame.sizes[1])
-        uniform1f(program, "uAmount", minOf(params.lumaStrength, 1f))
+    }
+
+    /** §6.0 correction scale of Y, Cb, Cr; 0 where that channel is not denoised. */
+    private fun prefilterAmounts(params: PhotonDenoiseParams): FloatArray {
+        val luma = if (params.lumaLevels > 0) minOf(params.lumaStrength, 1f) else 0f
+        val chroma = minOf(params.chromaStrength, 1f)
+        return floatArrayOf(maxOf(luma, 0f), maxOf(chroma, 0f), maxOf(chroma, 0f))
     }
 
     /**
@@ -554,6 +564,7 @@ internal class PhotonMultiScaleDenoiser {
         uniform1f(program, "uGrain", params.lumaGrain(level))
         uniform1f(program, "uGamma", params.gamma[level])
         uniform1f(program, "uChromaStrength", minOf(params.chromaStrength, 1f))
+        uniform1i(program, "uChromaGate", if (level >= params.chromaGateFrom) 1 else 0)
         val thresholdScale = params.chromaThresholdScale()
         GLES31.glUniform2f(location(program, "uGateLuma"),
             params.gateLuma[0] * thresholdScale, params.gateLuma[1] * thresholdScale)
