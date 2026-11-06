@@ -34,6 +34,12 @@ internal object PhotonDenoiseTuning {
         val gateChroma: FloatArray,
         /** First level whose chroma detail the Mahalanobis gate may keep; finer ones use the luma gate only (§7.2). */
         val chromaGateFrom: Int,
+        /** Levels below this keep their chroma detail only where the point luma SNR allows (§7.2). */
+        val chromaDetailFrom: Int,
+        /** Point luma SNR (low, high) over which those levels' chroma detail fades in (§7.2). */
+        val chromaDetailSnr: FloatArray,
+        /** Luma-noise regularisation ε of the luma-guided chroma detail at luma structure (§7.2). */
+        val chromaGuide: Float,
         /** Coarsest chroma levels receiving the luma-guided joint bilateral (§7.3). */
         val bilateralLevels: Int,
         val bilateralLuma: Float,
@@ -42,7 +48,7 @@ internal object PhotonDenoiseTuning {
         init {
             require(alpha.size == MAX_LEVELS && grain.size == MAX_LEVELS && gamma.size == MAX_LEVELS &&
                 outlier.size == MAX_LEVELS)
-            require(gateLuma.size == 2 && gateChroma.size == 2)
+            require(gateLuma.size == 2 && gateChroma.size == 2 && chromaDetailSnr.size == 2)
         }
     }
 
@@ -68,6 +74,13 @@ internal object PhotonDenoiseTuning {
         // At L0 / L1 the χ²₂ tail of demosaic-clustered chroma noise opens the gate as isolated
         // colour dots (ISO 9100, 8 frames: all of them); real colour edges there carry luma (§7.2).
         chromaGateFrom = 2,
+        // Luma-coupled colour dots of 4–8 px pass the L2 luma gate in the shadows (point SNR
+        // 1.8–2.8 at ISO 9100); the clean mid-grey wall sits at 5.4, highlights near 38 (§7.2).
+        chromaDetailFrom = 3,
+        chromaDetailSnr = floatArrayOf(4f, 10f),
+        // Chroma noise along luma edges passed the luma gate whole (ISO 9100 charger edge); the
+        // 5×5 luma regression brings it to the floor of dropping L0–L2 chroma (§7.2).
+        chromaGuide = 2f,
         bilateralLevels = 3,
         bilateralLuma = 4f,
         bilateralChroma = 4f,
@@ -157,6 +170,9 @@ internal object PhotonDenoiseTuning {
             gateLuma = mix(a.gateLuma, b.gateLuma),
             gateChroma = mix(a.gateChroma, b.gateChroma),
             chromaGateFrom = if (f < 0.5f) a.chromaGateFrom else b.chromaGateFrom,
+            chromaDetailFrom = if (f < 0.5f) a.chromaDetailFrom else b.chromaDetailFrom,
+            chromaDetailSnr = mix(a.chromaDetailSnr, b.chromaDetailSnr),
+            chromaGuide = a.chromaGuide + f * (b.chromaGuide - a.chromaGuide),
             bilateralLevels = if (f < 0.5f) a.bilateralLevels else b.bilateralLevels,
             bilateralLuma = a.bilateralLuma + f * (b.bilateralLuma - a.bilateralLuma),
             bilateralChroma = a.bilateralChroma + f * (b.bilateralChroma - a.bilateralChroma),

@@ -149,6 +149,9 @@ class Params:
     merge_map: "MergeMap | None" = None  # section 2.2 per-pixel ratios; None: the scalars
     gamma: np.ndarray | None = None  # [levels] section 6.1 second-stage gain exponent; None: 1 (MMSE)
     chroma_gate_from: int = 0  # section 7.2 first level whose Mahalanobis gate is on
+    chroma_detail_from: int = 0  # section 7.2 levels below fade their chroma detail with the point luma SNR
+    chroma_detail_snr: tuple[float, float] = (0.0, 0.0)
+    chroma_guide: float = 0.0  # section 7.2 luma-noise regularisation of the guided chroma detail
 
     def luma_grain(self, level: int) -> float:
         t, s = float(self.grain[level]), self.luma_strength
@@ -538,9 +541,21 @@ def final(lap: np.ndarray, base: np.ndarray, noise: np.ndarray, pilot_tex: np.nd
                                F32(np.inf))
         low, high = params.chroma_thresholds(params.gate_chroma)
         gate_c = _smoothstep(low, high, chroma_stat) if level >= params.chroma_gate_from else np.zeros_like(chroma_stat)
-        gate = np.maximum(gate_y, gate_c)
+        # Section 7.2: where only luma structure opens the gate, the detail is the chroma the 5x5
+        # luma regression predicts, not the noisy band itself.
+        num = sum(_shift(gate_luma * lap[1:3], dy, dx) for dy in range(-2, 3) for dx in range(-2, 3))
+        den = sum(_shift(gate_luma * gate_luma + F32(params.chroma_guide) * noise_y, dy, dx)
+                  for dy in range(-2, 3) for dx in range(-2, 3))
+        guided = np.where(den > 0, num / np.maximum(den, F32(1e-30)), F32(0)) * gate_luma
+        detail = gate_c * lap[1:3] + (1 - gate_c) * gate_y * guided
+        if level < params.chroma_detail_from:
+            # Section 7.2: point luma SNR of one source sample (level independent).
+            cov, _ = point_covariance(base, params, level)
+            snr = np.where(cov[0, 0] > 0, base[0] / np.sqrt(np.maximum(cov[0, 0], F32(1e-30))), F32(1e30))
+            detail = detail * _smoothstep(params.chroma_detail_snr[0], params.chroma_detail_snr[1], snr)
+        detail = np.where(noise_y > 0, detail, lap[1:3])  # clipped: no model, detail kept
         s = F32(min(params.chroma_strength, 1.0))
-        chroma_band = (s * gate + (1 - s)) * lap[1:3]
+        chroma_band = s * detail + (1 - s) * lap[1:3]
 
     base_chroma = base[1:3]
     if params.chroma_strength > 0 and level >= params.levels - params.bilateral_levels:

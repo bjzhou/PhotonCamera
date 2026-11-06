@@ -177,10 +177,23 @@ internal object PhotonDenoiseShaders {
 
         // (σ²_Y, σ²_Cb, σ²_Cr, σ_CbCr) at level pixel p; mu receives the camera signal.
         // gain = lscGain(levelCentre(p, uLevel)).
-        vec4 modelNoiseGain(ivec2 p, vec3 base, vec3 gain, out vec3 mu) {
+        // §2.1 per-channel source variance of the camera signal at base; mu receives that signal.
+        vec3 pointVariance(ivec2 p, vec3 base, out vec3 mu) {
             mu = max(rgbFromYcc(base) / uScale / uWb, vec3(0.0));
             vec2 merge = mergeRatio(levelCentre(p, uLevel));
-            vec3 v = merge.x * uRead + merge.y * uShot * mu;
+            return merge.x * uRead + merge.y * uShot * mu;
+        }
+
+        // Point luma SNR Y / σ_Y of one source sample, the same at every level (§7.2).
+        float pointLumaSnr(ivec2 p, vec3 base) {
+            vec3 mu;
+            vec3 aY = uScale * vec3(0.25, 0.5, 0.25) * uWb;
+            float variance = dot(aY * aY, pointVariance(p, base, mu));
+            return variance > 0.0 ? base.x / sqrt(variance) : 1e30;
+        }
+
+        vec4 modelNoiseGain(ivec2 p, vec3 base, vec3 gain, out vec3 mu) {
+            vec3 v = pointVariance(p, base, mu);
             vec3 aY = uScale * vec3(0.25, 0.5, 0.25) * uWb;
             vec3 aCb = uScale * vec3(0.0, -1.0, 1.0) * uWb;
             vec3 aCr = uScale * vec3(1.0, -1.0, 0.0) * uWb;
@@ -824,8 +837,27 @@ internal object PhotonDenoiseShaders {
                 float gateY = sumS2 > 0.0 ? smoothstep(uGateLuma.x, uGateLuma.y, 9.0 * sumL2 / max(sumS2, 1e-30)) : 1.0;
                 float stat = mahalanobis(lap.yz, noise);
                 float gateC = uChromaGate == 0 ? 0.0 : stat >= 0.0 ? smoothstep(uGateChroma.x, uGateChroma.y, stat) : 1.0;
-                float gate = max(gateY, gateC);
-                chromaBand = (uChromaStrength * gate + (1.0 - uChromaStrength)) * lap.yz;
+                // §7.2: where only luma structure opens the gate, the detail is the chroma the 5×5
+                // luma regression predicts, not the noisy band itself.
+                vec2 num = vec2(0.0);
+                float den = 0.0;
+                for (int dy = -2; dy <= 2; ++dy) {
+                    for (int dx = -2; dx <= 2; ++dx) {
+                        ivec2 q = p + ivec2(dx, dy);
+                        float l = LUMA_ENABLED ? pilotAt(q).x : lapAt(q).x;
+                        num += l * lapAt(q).yz;
+                        den += l * l + uChromaGuide * noiseAt(q).x;
+                    }
+                }
+                float l0 = LUMA_ENABLED ? pilotAt(p).x : lap.x;
+                vec2 guided = den > 0.0 ? num / max(den, 1e-30) * l0 : vec2(0.0);
+                vec2 detail = gateC * lap.yz + (1.0 - gateC) * gateY * guided;
+                // §7.2: below chromaDetailFrom the detail fades out with the point luma SNR.
+                if (uChromaDetail != 0) {
+                    detail *= smoothstep(uChromaDetailSnr.x, uChromaDetailSnr.y, pointLumaSnr(p, base));
+                }
+                if (noise.x <= 0.0) detail = lap.yz;  // clipped: no model, detail kept
+                chromaBand = uChromaStrength * detail + (1.0 - uChromaStrength) * lap.yz;
 
                 if (BILATERAL_ENABLED) {
                     vec2 sum = vec2(0.0);
@@ -884,6 +916,9 @@ internal object PhotonDenoiseShaders {
         uniform vec2 uGateLuma;
         uniform vec2 uGateChroma;
         uniform int uChromaGate;            // §7.2 Mahalanobis gate on at this level
+        uniform int uChromaDetail;          // §7.2 chroma detail faded by the point luma SNR at this level
+        uniform vec2 uChromaDetailSnr;
+        uniform float uChromaGuide;         // §7.2 luma-noise regularisation of the guided chroma detail
         uniform float uBilateralLuma;
         uniform float uBilateralChroma;
 

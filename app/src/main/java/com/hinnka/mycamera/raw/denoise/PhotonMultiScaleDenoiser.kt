@@ -565,6 +565,9 @@ internal class PhotonMultiScaleDenoiser {
         uniform1f(program, "uGamma", params.gamma[level])
         uniform1f(program, "uChromaStrength", minOf(params.chromaStrength, 1f))
         uniform1i(program, "uChromaGate", if (level >= params.chromaGateFrom) 1 else 0)
+        uniform1i(program, "uChromaDetail", if (level < params.chromaDetailFrom) 1 else 0)
+        uniform2f(program, "uChromaDetailSnr", params.chromaDetailSnr)
+        uniform1f(program, "uChromaGuide", params.chromaGuide)
         val thresholdScale = params.chromaThresholdScale()
         GLES31.glUniform2f(location(program, "uGateLuma"),
             params.gateLuma[0] * thresholdScale, params.gateLuma[1] * thresholdScale)
@@ -664,6 +667,8 @@ internal class PhotonMultiScaleDenoiser {
     private fun uniform1f(program: Int, name: String, value: Float) = GLES31.glUniform1f(location(program, name), value)
     private fun uniform2i(program: Int, name: String, size: IntArray) =
         GLES31.glUniform2i(location(program, name), size[0], size[1])
+    private fun uniform2f(program: Int, name: String, v: FloatArray) =
+        GLES31.glUniform2f(location(program, name), v[0], v[1])
     private fun uniform3f(program: Int, name: String, v: FloatArray) =
         GLES31.glUniform3f(location(program, name), v[0], v[1], v[2])
 
