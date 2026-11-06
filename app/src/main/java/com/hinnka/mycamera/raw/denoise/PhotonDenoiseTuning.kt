@@ -38,6 +38,8 @@ internal object PhotonDenoiseTuning {
         val chromaDetailFrom: Int,
         /** Point luma SNR (low, high) over which those levels' chroma detail fades in (§7.2). */
         val chromaDetailSnr: FloatArray,
+        /** Edge strength (low, high) over which the along-edge luma smoothing fades in (§6.1). */
+        val edgeMarker: FloatArray,
         /** Luma-noise regularisation ε of the luma-guided chroma detail at luma structure (§7.2). */
         val chromaGuide: Float,
         /** Coarsest chroma levels receiving the luma-guided joint bilateral (§7.3). */
@@ -48,7 +50,7 @@ internal object PhotonDenoiseTuning {
         init {
             require(alpha.size == MAX_LEVELS && grain.size == MAX_LEVELS && gamma.size == MAX_LEVELS &&
                 outlier.size == MAX_LEVELS)
-            require(gateLuma.size == 2 && gateChroma.size == 2 && chromaDetailSnr.size == 2)
+            require(gateLuma.size == 2 && gateChroma.size == 2 && chromaDetailSnr.size == 2 && edgeMarker.size == 2)
         }
     }
 
@@ -81,6 +83,9 @@ internal object PhotonDenoiseTuning {
         // Chroma noise along luma edges passed the luma gate whole (ISO 9100 charger edge); the
         // 5×5 luma regression brings it to the floor of dropping L0–L2 chroma (§7.2).
         chromaGuide = 2f,
+        // Charger edge strip at ISO 9100: 2.5–3 source σ per pixel; hair and eye lids of the ISO 694
+        // portrait stay below 1 (p90 ≈ 1.85 on lids), whose texture the smoothing would flatten (§6.1).
+        edgeMarker = floatArrayOf(1f, 2f),
         bilateralLevels = 3,
         bilateralLuma = 4f,
         bilateralChroma = 4f,
@@ -173,6 +178,7 @@ internal object PhotonDenoiseTuning {
             chromaDetailFrom = if (f < 0.5f) a.chromaDetailFrom else b.chromaDetailFrom,
             chromaDetailSnr = mix(a.chromaDetailSnr, b.chromaDetailSnr),
             chromaGuide = a.chromaGuide + f * (b.chromaGuide - a.chromaGuide),
+            edgeMarker = mix(a.edgeMarker, b.edgeMarker),
             bilateralLevels = if (f < 0.5f) a.bilateralLevels else b.bilateralLevels,
             bilateralLuma = a.bilateralLuma + f * (b.bilateralLuma - a.bilateralLuma),
             bilateralChroma = a.bilateralChroma + f * (b.bilateralChroma - a.bilateralChroma),

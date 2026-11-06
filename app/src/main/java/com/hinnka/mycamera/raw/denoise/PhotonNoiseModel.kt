@@ -70,6 +70,7 @@ internal class PhotonDenoiseParams(
     val chromaDetailFrom: Int,
     val chromaDetailSnr: FloatArray,
     val chromaGuide: Float,
+    val edgeMarker: FloatArray,
     val bilateralLevels: Int,
     val bilateralLuma: Float,
     val bilateralChroma: Float,
@@ -160,6 +161,7 @@ internal class PhotonDenoiseParams(
         put("chromaDetailFrom", chromaDetailFrom)
         put("chromaDetailSnr", JSONArray(chromaDetailSnr.map(Float::toDouble)))
         put("chromaGuide", chromaGuide.toDouble())
+        put("edgeMarker", JSONArray(edgeMarker.map(Float::toDouble)))
         put("bilateralLevels", bilateralLevels)
         put("bilateralLuma", bilateralLuma.toDouble())
         put("bilateralChroma", bilateralChroma.toDouble())
@@ -362,6 +364,7 @@ internal object PhotonNoiseModel {
             chromaDetailFrom = tuning.chromaDetailFrom,
             chromaDetailSnr = tuning.chromaDetailSnr.copyOf(),
             chromaGuide = tuning.chromaGuide,
+            edgeMarker = tuning.edgeMarker.copyOf(),
             bilateralLevels = tuning.bilateralLevels,
             bilateralLuma = tuning.bilateralLuma,
             bilateralChroma = tuning.bilateralChroma,

@@ -59,6 +59,7 @@ def params_from_json(p: dict) -> pd.Params:
         chroma_detail_from=p.get("chromaDetailFrom", 0),
         chroma_detail_snr=tuple(p.get("chromaDetailSnr", (0.0, 0.0))),
         chroma_guide=p.get("chromaGuide", 0.0),
+        edge_marker=tuple(p.get("edgeMarker", (1e30, 2e30))),
         bilateral_luma=p["bilateralLuma"],
         bilateral_chroma=p["bilateralChroma"],
         luma_strength=p["lumaStrength"],
@@ -204,7 +205,7 @@ def self_test() -> bool:
                        np.full(4, 0.2, dtype=F32), np.full(4, 2.5, dtype=F32), (16.919, 27.877), (5.991, 13.816),
                        2, 4.0, 4.0, 1.0, 1.0, lsc,
                        merge_map=pd.MergeMap(rng.uniform(0.1, 1.0, (3, 4, 2)).astype(F32), (0, 0), (w, h)))
-    params = replace(params, gamma=np.array([0.5, 0.5, 0.5, 1.0], dtype=F32), chroma_gate_from=2, chroma_detail_from=3, chroma_detail_snr=(4.0, 10.0), chroma_guide=2.0,
+    params = replace(params, gamma=np.array([0.5, 0.5, 0.5, 1.0], dtype=F32), chroma_gate_from=2, chroma_detail_from=3, chroma_detail_snr=(4.0, 10.0), chroma_guide=2.0, edge_marker=(1.0, 2.0),
                      strength_cap_luma=rng.uniform(0.5, 6.0, 4).astype(F32),
                      strength_cap_chroma=rng.uniform(0.01, 6.0, 4).astype(F32))
     trace = pd.run(rgb, params)

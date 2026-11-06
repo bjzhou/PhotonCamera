@@ -184,11 +184,16 @@ internal object PhotonDenoiseShaders {
             return merge.x * uRead + merge.y * uShot * mu;
         }
 
-        // Point luma SNR Y / σ_Y of one source sample, the same at every level (§7.2).
-        float pointLumaSnr(ivec2 p, vec3 base) {
+        // Luma variance σ²_Y of one source sample at base, the same at every level (§6.1, §7.2).
+        float pointLumaVariance(ivec2 p, vec3 base) {
             vec3 mu;
             vec3 aY = uScale * vec3(0.25, 0.5, 0.25) * uWb;
-            float variance = dot(aY * aY, pointVariance(p, base, mu));
+            return dot(aY * aY, pointVariance(p, base, mu));
+        }
+
+        // Point luma SNR Y / σ_Y of one source sample (§7.2).
+        float pointLumaSnr(ivec2 p, vec3 base) {
+            float variance = pointLumaVariance(p, base);
             return variance > 0.0 ? base.x / sqrt(variance) : 1e30;
         }
 
@@ -764,6 +769,9 @@ internal object PhotonDenoiseShaders {
             float theta = root > 0.0 ? 0.5 * atan(2.0 * jxy, jxx - jyy) + 0.5 * PI : 0.5 * PI;
             float c = cos(theta);
             float s = sin(theta);
+            // §6.1: edge strength, the base gradient in source-sample σ per finest pixel.
+            float pointVar = pointLumaVariance(p, baseAt(p));
+            float edge = pointVar > 0.0 ? min(sqrt(root) / sqrt(pointVar) / float(1 << uLevel), EDGE_MAX) : EDGE_MAX;
             float sigma = sqrt(noiseP);
             // §6.1 step 2: the Huber weights are relative to the centre, so a noise sample a few σ
             // out would down-weight every neighbour and carry the energy by itself. The centre
@@ -783,7 +791,7 @@ internal object PhotonDenoiseShaders {
             }
             float energy = max(num / den, 0.0);
             float s1 = noiseP > 0.0 ? lapP * energy / (energy + uAlpha * noiseP + 1e-30) : lapP;
-            return vec4(s1, anisotropy, c, s);
+            return vec4(s1, anisotropy, theta, edge);
         }
 
         float mahalanobis(vec2 d, vec4 noise) {
@@ -801,13 +809,30 @@ internal object PhotonDenoiseShaders {
             float lumaBand = lap.x;
             if (LUMA_ENABLED) {
                 vec4 pilotP = pilotAt(p);
+                float c = cos(pilotP.z);
+                float s = sin(pilotP.z);
                 float sigma = sqrt(noise.x);
                 float num = 0.0;
                 float den = 0.0;
+                float edgeMax = 0.0;
+                float steerNum = 0.0;
+                float steerDen = 0.0;
                 for (int dy = -2; dy <= 2; ++dy) {
                     for (int dx = -2; dx <= 2; ++dx) {
                         ivec2 d = ivec2(dx, dy);
-                        float w = windowWeight(d, lap.x, lapAt(p + d).x, sigma, pilotP.y, pilotP.z, pilotP.w);
+                        float lapQ = lapAt(p + d).x;
+                        edgeMax = max(edgeMax, pilotAt(p + d).w);
+                        // §6.1: along the edge only; the Huber term keeps corners and crossings.
+                        float along = float(dx) * c + float(dy) * s;
+                        float across = -float(dx) * s + float(dy) * c;
+                        float diff = abs(lapQ - lap.x);
+                        float limit = uOutlier * sigma;
+                        float huber = diff <= limit ? 1.0 : limit / max(diff, 1e-30);
+                        float ws = exp(-0.5 * (along * along / (EDGE_ALONG * EDGE_ALONG) +
+                            across * across / (EDGE_ACROSS * EDGE_ACROSS))) * huber;
+                        steerNum += ws * lapQ;
+                        steerDen += ws;
+                        float w = windowWeight(d, lap.x, lapQ, sigma, pilotP.y, c, s);
                         float s1 = pilotAt(p + d).x;
                         num += w * s1 * s1;
                         den += w;
@@ -817,7 +842,10 @@ internal object PhotonDenoiseShaders {
                 float gain = energy / (energy + uAlpha * noise.x + 1e-30);
                 // §6.1: gain^γ only where the gain shows detail; noise-only gains stay MMSE.
                 gain += smoothstep(GAMMA_LOW, GAMMA_HIGH, gain) * (pow(gain, uGamma) - gain);
-                float shrunk = noise.x > 0.0 ? lap.x * gain : lap.x;
+                float marker = smoothstep(uEdgeMarker.x, uEdgeMarker.y, edgeMax);
+                float steer = marker * smoothstep(EDGE_ANISOTROPY_LOW, EDGE_ANISOTROPY_HIGH, pilotP.y);
+                float steered = lap.x + steer * (steerNum / steerDen - lap.x);
+                float shrunk = noise.x > 0.0 ? steered * gain : lap.x;
                 lumaBand = shrunk + uGrain * (lap.x - shrunk);
             }
 
@@ -919,6 +947,7 @@ internal object PhotonDenoiseShaders {
         uniform int uChromaDetail;          // §7.2 chroma detail faded by the point luma SNR at this level
         uniform vec2 uChromaDetailSnr;
         uniform float uChromaGuide;         // §7.2 luma-noise regularisation of the guided chroma detail
+        uniform vec2 uEdgeMarker;           // §6.1 edge strength fade-in of the edge smoothing
         uniform float uBilateralLuma;
         uniform float uBilateralChroma;
 
@@ -927,6 +956,11 @@ internal object PhotonDenoiseShaders {
         const float GAMMA_HIGH = 0.5;
         const float CENTRE_LOW = 6.0;
         const float CENTRE_HIGH = 10.0;
+        const float EDGE_ALONG = 3.0;          // §6.1 along-edge radius of the edge smoothing
+        const float EDGE_ACROSS = 0.35;        // across-edge radius (no blur across the edge)
+        const float EDGE_ANISOTROPY_LOW = 0.2; // smoothstep of the anisotropy that orients it
+        const float EDGE_ANISOTROPY_HIGH = 0.6;
+        const float EDGE_MAX = 1000.0;         // pilot storage bound of the edge strength (f16)
 
         // Band at image pixel p: L = G_l − ↑G_{l+1}, base = ↑G̃_{l+1}, noise = §2.1 × §5.1. The program
         // defines upNoisy and upDenoised, the ↑2 of G_{l+1} and G̃_{l+1} at p.

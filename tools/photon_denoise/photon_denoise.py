@@ -27,6 +27,10 @@ BASE_RADIUS = 1.25         # luma window radius before anisotropic stretching
 BILATERAL_SIGMA = 1.5
 CENTRE_LOW = F32(6.0)      # pilot: the window centre enters the energy only as a point of
 CENTRE_HIGH = F32(10.0)    # smoothstep(CENTRE_LOW, CENTRE_HIGH, |L| / sigma)
+EDGE_ALONG = F32(3.0)      # Section 6.1: along-edge window radius of the edge smoothing
+EDGE_ACROSS = F32(0.35)    # across-edge radius (no blur across the edge)
+EDGE_ANISOTROPY = (F32(0.2), F32(0.6))  # smoothstep of the anisotropy that orients the window
+EDGE_MAX = F32(1000.0)     # pilot storage bound of the edge strength (f16)
 GAMMA_LOW = F32(0.25)      # section 6.1: the gain exponent applies from smoothstep(GAMMA_LOW,
 GAMMA_HIGH = F32(0.5)      # GAMMA_HIGH, gain); below, the MMSE gain
 PREFILTER_K = F32(2.5)     # section 6.0: outlier distance from the 3x3 median, in L0 sigmas
@@ -152,6 +156,7 @@ class Params:
     chroma_detail_from: int = 0  # section 7.2 levels below fade their chroma detail with the point luma SNR
     chroma_detail_snr: tuple[float, float] = (0.0, 0.0)
     chroma_guide: float = 0.0  # section 7.2 luma-noise regularisation of the guided chroma detail
+    edge_marker: tuple[float, float] = (1e30, 2e30)  # Section 6.1 edge strength fade-in (off by default)
 
     def luma_grain(self, level: int) -> float:
         t, s = float(self.grain[level]), self.luma_strength
@@ -458,7 +463,7 @@ def _structure(base_luma: np.ndarray, noise_luma: np.ndarray):
     # Along the edge; a degenerate tensor (root == 0) has no orientation and is fixed at pi / 2,
     # matching the shader (GLSL leaves atan(0, 0) undefined).
     theta = np.where(root > 0, 0.5 * np.arctan2(2 * jxy, jxx - jyy) + F32(np.pi / 2), F32(np.pi / 2))
-    return anisotropy, np.cos(theta).astype(F32), np.sin(theta).astype(F32)
+    return anisotropy, theta.astype(F32), root.astype(F32)
 
 
 def _window_weights(lap_y, noise_y, anisotropy, cos_t, sin_t, outlier):
@@ -481,7 +486,11 @@ def _window_weights(lap_y, noise_y, anisotropy, cos_t, sin_t, outlier):
 def pilot(lap: np.ndarray, base: np.ndarray, noise: np.ndarray, level: int, params: Params) -> np.ndarray:
     """Luma pilot (s1, anisotropy, cos, sin), section 6.1 steps 1-3."""
     lap_y, noise_y = lap[0], noise[0]
-    anisotropy, cos_t, sin_t = _structure(base[0], noise_y)
+    anisotropy, theta, root = _structure(base[0], noise_y)
+    cos_t, sin_t = np.cos(theta).astype(F32), np.sin(theta).astype(F32)
+    # Section 6.1: edge strength, the base gradient in source-sample sigmas per finest pixel.
+    cov, _ = point_covariance(base, params, level)
+    edge = np.where(cov[0, 0] > 0, np.sqrt(root) / np.sqrt(np.maximum(cov[0, 0], F32(1e-30))) / F32(2 ** level), EDGE_MAX)
     sigma = np.sqrt(noise_y)
     centre = np.where(sigma > 0, _smoothstep(CENTRE_LOW, CENTRE_HIGH, np.abs(lap_y) / np.maximum(sigma, F32(1e-30))),
                       F32(1)).astype(F32)
@@ -495,7 +504,7 @@ def pilot(lap: np.ndarray, base: np.ndarray, noise: np.ndarray, level: int, para
     energy = np.maximum(num / den, 0)
     alpha = F32(params.luma_alpha(level))
     s1 = np.where(noise_y > 0, lap_y * energy / (energy + alpha * noise_y + F32(1e-30)), lap_y)
-    return f16(np.stack([s1, anisotropy, cos_t, sin_t]))
+    return f16(np.stack([s1, anisotropy, theta, np.minimum(edge, EDGE_MAX)]))
 
 
 def _smoothstep(edge0: float, edge1: float, x: np.ndarray) -> np.ndarray:
@@ -508,7 +517,8 @@ def final(lap: np.ndarray, base: np.ndarray, noise: np.ndarray, pilot_tex: np.nd
     """Denoised Gaussian level G~_l = base' + shrunk band (sections 6.1-6.2, 7.2-7.3)."""
     lap_y, noise_y = lap[0], noise[0]
     if level < params.luma_levels and params.luma_strength > 0:
-        s1, anisotropy, cos_t, sin_t = pilot_tex
+        s1, anisotropy, theta, edge = pilot_tex
+        cos_t, sin_t = np.cos(theta).astype(F32), np.sin(theta).astype(F32)
         num = np.zeros_like(lap_y)
         den = np.zeros_like(lap_y)
         for dy, dx, w in _window_weights(lap_y, noise_y, anisotropy, cos_t, sin_t, params.outlier[level]):
@@ -520,7 +530,28 @@ def final(lap: np.ndarray, base: np.ndarray, noise: np.ndarray, pilot_tex: np.nd
         gain = energy / (energy + alpha * noise_y + F32(1e-30))
         # Section 6.1: gain^gamma only where the gain shows detail; noise-only gains stay MMSE.
         gain = gain + _smoothstep(GAMMA_LOW, GAMMA_HIGH, gain) * (gain ** gamma - gain)
-        shrunk = np.where(noise_y > 0, lap_y * gain, lap_y)
+        # Section 6.1: on marked edges the band is first averaged along the edge.
+        marker = _smoothstep(params.edge_marker[0], params.edge_marker[1],
+                             np.max(np.stack([_shift(edge, dy, dx) for dy in range(-WINDOW_RADIUS, WINDOW_RADIUS + 1)
+                                              for dx in range(-WINDOW_RADIUS, WINDOW_RADIUS + 1)]), 0))
+        mix = marker * _smoothstep(EDGE_ANISOTROPY[0], EDGE_ANISOTROPY[1], anisotropy)
+        sigma = np.sqrt(noise_y)
+        num = np.zeros_like(lap_y)
+        den = np.zeros_like(lap_y)
+        for dy in range(-WINDOW_RADIUS, WINDOW_RADIUS + 1):
+            for dx in range(-WINDOW_RADIUS, WINDOW_RADIUS + 1):
+                d_par = dx * cos_t + dy * sin_t
+                d_perp = -dx * sin_t + dy * cos_t
+                v = _shift(lap_y, dy, dx)
+                diff = np.abs(v - lap_y)
+                limit = F32(params.outlier[level]) * sigma
+                huber = np.where(diff <= limit, F32(1), limit / np.maximum(diff, F32(1e-30)))
+                w = np.exp(F32(-0.5) * (d_par * d_par / (EDGE_ALONG * EDGE_ALONG)
+                                        + d_perp * d_perp / (EDGE_ACROSS * EDGE_ACROSS))) * huber
+                num += w * v
+                den += w
+        steered = lap_y + mix * (num / den - lap_y)
+        shrunk = np.where(noise_y > 0, steered * gain, lap_y)
         t = F32(params.luma_grain(level))
         luma_band = shrunk + t * (lap_y - shrunk)
     else:

@@ -568,6 +568,7 @@ internal class PhotonMultiScaleDenoiser {
         uniform1i(program, "uChromaDetail", if (level < params.chromaDetailFrom) 1 else 0)
         uniform2f(program, "uChromaDetailSnr", params.chromaDetailSnr)
         uniform1f(program, "uChromaGuide", params.chromaGuide)
+        uniform2f(program, "uEdgeMarker", params.edgeMarker)
         val thresholdScale = params.chromaThresholdScale()
         GLES31.glUniform2f(location(program, "uGateLuma"),
             params.gateLuma[0] * thresholdScale, params.gateLuma[1] * thresholdScale)
