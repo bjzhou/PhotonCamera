@@ -225,7 +225,7 @@ internal data class CaptureDenoiseStrengths(
  * RAW captures take the RAWmax luma / chroma strengths from the settings. A merge bakes them into
  * its default denoise before the DNG is written, so its editable strengths start at 0; a single
  * frame has no default denoise, so the same strengths become its editable initial values and the
- * user-adjustment denoise applies them (docs/photon-multiscale-denoise.md §10.3).
+ * user-adjustment denoise applies them: MGC USER_ADJUSTMENT pass.
  */
 internal fun resolveCaptureDenoiseStrengths(
     isRawCapture: Boolean,

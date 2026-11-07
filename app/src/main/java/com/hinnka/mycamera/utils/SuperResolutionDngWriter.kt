@@ -10,6 +10,7 @@ import android.os.Build
 import android.os.SystemClock
 import com.hinnka.mycamera.camera.readMetadataOrThrow
 import com.hinnka.mycamera.camera.CaptureInfo
+import com.hinnka.mycamera.raw.DngNoiseProfile
 import com.hinnka.mycamera.raw.DngProfileGainTableMap
 import com.hinnka.mycamera.raw.DngCameraRawProfileXmp
 import com.hinnka.mycamera.raw.ColorSpace
@@ -298,6 +299,7 @@ object SuperResolutionDngWriter {
         profileName: String? = null,
         profileToneCurve: FloatArray? = null,
         rawSceneExposureSummaryText: String? = null,
+        noiseProfile: FloatArray? = null,
         imageLayout: ImageLayout = ImageLayout.CFA,
         compression: Compression = Compression.UNCOMPRESSED,
         inputRowStepSamples: Int? = null,
@@ -410,6 +412,7 @@ object SuperResolutionDngWriter {
                 imageByteCount = imageByteCount,
                 baselineExposureEv = baselineExposureEv,
                 profileGainTableMap = writtenProfileGainTableMap,
+                noiseProfileOverride = noiseProfile,
                 profileName = profileName,
                 profileToneCurve = writtenProfileToneCurve,
                 rawSceneExposureSummaryText = rawSceneExposureSummaryText,
@@ -477,6 +480,7 @@ object SuperResolutionDngWriter {
         imageByteCount: Long,
         baselineExposureEv: Float?,
         profileGainTableMap: DngProfileGainTableMap?,
+        noiseProfileOverride: FloatArray?,
         profileName: String?,
         profileToneCurve: FloatArray?,
         rawSceneExposureSummaryText: String?,
@@ -523,7 +527,9 @@ object SuperResolutionDngWriter {
         val forwardMatrix2 = calibration.forwardMatrix2
         val calibrationMatrix1 = calibration.calibration1
         val calibrationMatrix2 = calibration.calibration2
-        val noiseProfile = buildNoiseProfile(captureResult)
+        val noiseProfile = (noiseProfileOverride
+            ?: DngNoiseProfile.fromCamera2(captureResult, characteristics))
+            ?.map(Float::toDouble)
         val captureDate =
             captureMetadataResult.get(CaptureResult.SENSOR_TIMESTAMP)?.let { timestampNs ->
                 Date(System.currentTimeMillis() - SystemClock.elapsedRealtime() + timestampNs / 1_000_000L)
@@ -1602,37 +1608,6 @@ object SuperResolutionDngWriter {
             },
             scaleX = if (physicalRawCrop != null) 1.0 else scaleX,
             scaleY = if (physicalRawCrop != null) 1.0 else scaleY,
-        )
-    }
-
-    private fun buildNoiseProfile(captureResult: CaptureResult): List<Double>? {
-        val profile = captureResult.get(CaptureResult.SENSOR_NOISE_PROFILE)
-            ?.takeIf { it.size >= 3 }
-            ?: return null
-        fun safePair(index: Int): Pair<Double, Double>? {
-            val pair = profile.getOrNull(index) ?: return null
-            val slope = pair.first.takeIf { it.isFinite() && it >= 0.0 } ?: return null
-            val offset = pair.second.takeIf { it.isFinite() && it >= 0.0 } ?: return null
-            return slope to offset
-        }
-        val red = safePair(0) ?: return null
-        val green = when {
-            profile.size >= 4 -> {
-                val even = safePair(1) ?: return null
-                val odd = safePair(2) ?: return null
-                ((even.first + odd.first) * 0.5) to ((even.second + odd.second) * 0.5)
-            }
-
-            else -> safePair(1) ?: return null
-        }
-        val blue = safePair(if (profile.size >= 4) 3 else 2) ?: return null
-        return listOf(
-            red.first,
-            red.second,
-            green.first,
-            green.second,
-            blue.first,
-            blue.second
         )
     }
 

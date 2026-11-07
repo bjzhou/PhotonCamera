@@ -1,0 +1,490 @@
+/* Generated mechanically from pinned MGC 9.6.080 V24 MeasureMoireS16Halide.
+ * Do not edit; regenerate with
+ * scripts/research/generate_mgc_demoire_static_asm.py.
+ */
+
+#if !defined(__aarch64__)
+#error "MGC MeasureMoire static lift is arm64-only"
+#endif
+
+    .hidden photon_mgc_halide_error_5ef61ac
+    .hidden photon_mgc_halide_error_5ef6294
+    .hidden photon_mgc_halide_error_5ef636c
+    .hidden photon_mgc_halide_error_5ef63f8
+    .hidden photon_mgc_halide_error_5ef64dc
+    .hidden photon_mgc_halide_error_5ef6568
+    .hidden photon_mgc_halide_error_5ef6600
+    .hidden photon_mgc_halide_error_5ef6794
+    .hidden photon_mgc_halide_error_5ef6a74
+    .hidden photon_mgc_halide_error_5ef6a94
+    .hidden photon_mgc_halide_error_5ef6b6c
+    .hidden photon_mgc_halide_error_5ef6bd8
+    .hidden photon_mgc_halide_error_5ef6c38
+    .hidden photon_mgc_halide_error_5ef6cd0
+    .hidden photon_mgc_halide_do_par_for
+    .hidden photon_mgc_halide_free
+    .hidden photon_mgc_halide_malloc
+    .hidden photon_mgc_halide_trace
+
+.section .text.photon_mgc.MeasureMoireS16Halide,"ax",@progbits
+    .p2align 12
+    .global photon_mgc_measure_moire_s16_halide
+    .hidden photon_mgc_measure_moire_s16_halide
+    .type photon_mgc_measure_moire_s16_halide, %function
+photon_mgc_demoire_page_54e1000:
+    .incbin "@MGC_DEMOIRE_CAPSULE@", 0x0, 0x100
+photon_mgc_demoire_address_54e1100:
+    .incbin "@MGC_DEMOIRE_CAPSULE@", 0x100, 0x194
+    bl photon_mgc_halide_malloc
+    .incbin "@MGC_DEMOIRE_CAPSULE@", 0x294, 0x30
+    bl photon_mgc_halide_malloc
+    .incbin "@MGC_DEMOIRE_CAPSULE@", 0x2c4, 0x38
+    bl photon_mgc_halide_malloc
+    .incbin "@MGC_DEMOIRE_CAPSULE@", 0x2fc, 0x138
+    adrp x2, photon_mgc_demoire_page_6b2000
+    .incbin "@MGC_DEMOIRE_CAPSULE@", 0x434, 0x4
+    adrp x3, photon_mgc_demoire_page_6b0000
+    .incbin "@MGC_DEMOIRE_CAPSULE@", 0x438, 0x404
+    adrp x26, photon_mgc_demoire_page_6b0000
+    .incbin "@MGC_DEMOIRE_CAPSULE@", 0x83c, 0x16c
+    adrp x25, photon_mgc_demoire_page_6b0000
+    .incbin "@MGC_DEMOIRE_CAPSULE@", 0x9a8, 0x144
+    bl photon_mgc_halide_malloc
+    .incbin "@MGC_DEMOIRE_CAPSULE@", 0xaec, 0x4f4
+photon_mgc_demoire_page_54e2000:
+    .incbin "@MGC_DEMOIRE_CAPSULE@", 0xfe0, 0x638
+    adrp x25, photon_mgc_demoire_page_6b0000
+    adrp x26, photon_mgc_demoire_page_6b0000
+    .incbin "@MGC_DEMOIRE_CAPSULE@", 0x1618, 0x9c0
+photon_mgc_demoire_page_54e3000:
+    .incbin "@MGC_DEMOIRE_CAPSULE@", 0x1fd8, 0x3f4
+    adrp x25, photon_mgc_demoire_page_6b0000
+    .incbin "@MGC_DEMOIRE_CAPSULE@", 0x23cc, 0x2c
+    adrp x26, photon_mgc_demoire_page_6b0000
+    .incbin "@MGC_DEMOIRE_CAPSULE@", 0x23f8, 0x464
+    bl photon_mgc_halide_free
+    .incbin "@MGC_DEMOIRE_CAPSULE@", 0x285c, 0x90
+    bl photon_mgc_halide_malloc
+    .incbin "@MGC_DEMOIRE_CAPSULE@", 0x28ec, 0x308
+    adrp x25, photon_mgc_demoire_page_6b0000
+    adrp x26, photon_mgc_demoire_page_6b0000
+    .incbin "@MGC_DEMOIRE_CAPSULE@", 0x2bf4, 0x3cc
+photon_mgc_demoire_page_54e4000:
+    .incbin "@MGC_DEMOIRE_CAPSULE@", 0x2fc0, 0x130
+    bl photon_mgc_halide_malloc
+    .incbin "@MGC_DEMOIRE_CAPSULE@", 0x30f0, 0x124
+    bl photon_mgc_halide_free
+    .incbin "@MGC_DEMOIRE_CAPSULE@", 0x3214, 0x1ac
+    adrp x26, photon_mgc_demoire_page_6b0000
+    .incbin "@MGC_DEMOIRE_CAPSULE@", 0x33c0, 0x178
+    adrp x8, photon_mgc_demoire_page_6b9000
+    .incbin "@MGC_DEMOIRE_CAPSULE@", 0x3538, 0x4b0
+    adrp x8, photon_mgc_demoire_page_6ba000
+    .incbin "@MGC_DEMOIRE_CAPSULE@", 0x39e8, 0x5c4
+photon_mgc_demoire_page_54e5000:
+    .incbin "@MGC_DEMOIRE_CAPSULE@", 0x3fac, 0x694
+    adrp x26, photon_mgc_demoire_page_6b0000
+    .incbin "@MGC_DEMOIRE_CAPSULE@", 0x4640, 0x5c
+    bl photon_mgc_halide_free
+    .incbin "@MGC_DEMOIRE_CAPSULE@", 0x469c, 0x64
+    bl photon_mgc_halide_malloc
+    .incbin "@MGC_DEMOIRE_CAPSULE@", 0x4700, 0x34
+    bl photon_mgc_halide_malloc
+    .incbin "@MGC_DEMOIRE_CAPSULE@", 0x4734, 0x38
+    bl photon_mgc_halide_malloc
+    .incbin "@MGC_DEMOIRE_CAPSULE@", 0x476c, 0x14c
+    adrp x26, photon_mgc_demoire_page_6b0000
+    .incbin "@MGC_DEMOIRE_CAPSULE@", 0x48b8, 0x14
+    adrp x24, photon_mgc_demoire_page_6b0000
+    .incbin "@MGC_DEMOIRE_CAPSULE@", 0x48cc, 0x184
+    adrp x26, photon_mgc_demoire_page_6b0000
+    .incbin "@MGC_DEMOIRE_CAPSULE@", 0x4a50, 0x11c
+    bl photon_mgc_halide_malloc
+    .incbin "@MGC_DEMOIRE_CAPSULE@", 0x4b6c, 0x24
+    adrp x4, photon_mgc_demoire_page_6b0000
+    .incbin "@MGC_DEMOIRE_CAPSULE@", 0x4b90, 0x8
+    adrp x5, photon_mgc_demoire_page_6b2000
+    .incbin "@MGC_DEMOIRE_CAPSULE@", 0x4b98, 0x3e8
+photon_mgc_demoire_page_54e6000:
+    .incbin "@MGC_DEMOIRE_CAPSULE@", 0x4f80, 0x550
+    adrp x26, photon_mgc_demoire_page_6b0000
+    .incbin "@MGC_DEMOIRE_CAPSULE@", 0x54d0, 0x188
+    adrp x4, photon_mgc_demoire_page_6b0000
+    adrp x24, photon_mgc_demoire_page_6b0000
+    .incbin "@MGC_DEMOIRE_CAPSULE@", 0x5658, 0x8
+    adrp x5, photon_mgc_demoire_page_6b2000
+    .incbin "@MGC_DEMOIRE_CAPSULE@", 0x5660, 0x2e4
+    bl photon_mgc_halide_free
+    .incbin "@MGC_DEMOIRE_CAPSULE@", 0x5944, 0x74
+    bl photon_mgc_halide_malloc
+    .incbin "@MGC_DEMOIRE_CAPSULE@", 0x59b8, 0xe8
+    adrp x21, photon_mgc_demoire_page_6b0000
+    adrp x20, photon_mgc_demoire_page_6b0000
+    adrp x8, photon_mgc_demoire_page_6b2000
+    .incbin "@MGC_DEMOIRE_CAPSULE@", 0x5aa0, 0x208
+    adrp x24, photon_mgc_demoire_page_6b0000
+    .incbin "@MGC_DEMOIRE_CAPSULE@", 0x5ca8, 0x140
+    bl photon_mgc_halide_malloc
+    .incbin "@MGC_DEMOIRE_CAPSULE@", 0x5de8, 0x120
+    bl photon_mgc_halide_free
+    .incbin "@MGC_DEMOIRE_CAPSULE@", 0x5f08, 0x48
+photon_mgc_demoire_page_54e7000:
+    .incbin "@MGC_DEMOIRE_CAPSULE@", 0x5f50, 0x158
+    adrp x24, photon_mgc_demoire_page_6b0000
+    .incbin "@MGC_DEMOIRE_CAPSULE@", 0x60a8, 0xac
+    adrp x10, photon_mgc_demoire_page_6b2000
+    .incbin "@MGC_DEMOIRE_CAPSULE@", 0x6154, 0x30
+    adrp x15, photon_mgc_demoire_page_6b0000
+    .incbin "@MGC_DEMOIRE_CAPSULE@", 0x6184, 0x38
+    adrp x15, photon_mgc_demoire_page_6b0000
+    .incbin "@MGC_DEMOIRE_CAPSULE@", 0x61bc, 0xf4
+    adrp x0, photon_mgc_demoire_page_6b9000
+    .incbin "@MGC_DEMOIRE_CAPSULE@", 0x62b0, 0x45c
+    adrp x18, photon_mgc_demoire_page_6ba000
+    .incbin "@MGC_DEMOIRE_CAPSULE@", 0x670c, 0x82c
+photon_mgc_demoire_page_54e8000:
+    .incbin "@MGC_DEMOIRE_CAPSULE@", 0x6f38, 0x394
+    adrp x24, photon_mgc_demoire_page_6b0000
+    .incbin "@MGC_DEMOIRE_CAPSULE@", 0x72cc, 0x44
+    adrp x24, photon_mgc_demoire_page_6b0000
+    .incbin "@MGC_DEMOIRE_CAPSULE@", 0x7310, 0x50
+    bl photon_mgc_halide_free
+    .incbin "@MGC_DEMOIRE_CAPSULE@", 0x7360, 0x10
+    bl photon_mgc_halide_free
+    .incbin "@MGC_DEMOIRE_CAPSULE@", 0x7370, 0xc
+    bl photon_mgc_halide_free
+    .incbin "@MGC_DEMOIRE_CAPSULE@", 0x737c, 0xc
+    bl photon_mgc_halide_free
+    .incbin "@MGC_DEMOIRE_CAPSULE@", 0x7388, 0x40
+    bl photon_mgc_halide_free
+    .incbin "@MGC_DEMOIRE_CAPSULE@", 0x73c8, 0x28
+    bl photon_mgc_halide_free
+    .incbin "@MGC_DEMOIRE_CAPSULE@", 0x73f0, 0x2c
+    bl photon_mgc_halide_free
+    .incbin "@MGC_DEMOIRE_CAPSULE@", 0x741c, 0x28
+    bl photon_mgc_halide_free
+    .incbin "@MGC_DEMOIRE_CAPSULE@", 0x7444, 0x28
+    bl photon_mgc_halide_free
+    .incbin "@MGC_DEMOIRE_CAPSULE@", 0x746c, 0x28
+    bl photon_mgc_halide_free
+    .incbin "@MGC_DEMOIRE_CAPSULE@", 0x7494, 0x24
+    bl photon_mgc_halide_free
+    .incbin "@MGC_DEMOIRE_CAPSULE@", 0x74b8, 0x3c
+    bl photon_mgc_halide_free
+    .incbin "@MGC_DEMOIRE_CAPSULE@", 0x74f4, 0xc
+    bl photon_mgc_halide_free
+    .incbin "@MGC_DEMOIRE_CAPSULE@", 0x7500, 0x14
+    bl photon_mgc_halide_error_5ef6a74
+    .incbin "@MGC_DEMOIRE_CAPSULE@", 0x7514, 0x38
+    bl photon_mgc_halide_error_5ef6a74
+    .incbin "@MGC_DEMOIRE_CAPSULE@", 0x754c, 0x38
+    bl photon_mgc_halide_error_5ef6a74
+    .incbin "@MGC_DEMOIRE_CAPSULE@", 0x7584, 0x38
+    bl photon_mgc_halide_error_5ef6a74
+    .incbin "@MGC_DEMOIRE_CAPSULE@", 0x75bc, 0x28
+    bl photon_mgc_halide_free
+    .incbin "@MGC_DEMOIRE_CAPSULE@", 0x75e4, 0x40
+    adrp x1, photon_mgc_demoire_page_10aa000
+    .incbin "@MGC_DEMOIRE_CAPSULE@", 0x7624, 0x4
+    adrp x2, photon_mgc_demoire_page_10aa000
+    .incbin "@MGC_DEMOIRE_CAPSULE@", 0x7628, 0x4
+    adrp x3, photon_mgc_demoire_page_10aa000
+    .incbin "@MGC_DEMOIRE_CAPSULE@", 0x762c, 0xc
+    bl photon_mgc_halide_error_5ef6c38
+    .incbin "@MGC_DEMOIRE_CAPSULE@", 0x7638, 0x8
+    adrp x1, photon_mgc_demoire_page_10aa000
+    .incbin "@MGC_DEMOIRE_CAPSULE@", 0x7640, 0x4
+    adrp x2, photon_mgc_demoire_page_10aa000
+    .incbin "@MGC_DEMOIRE_CAPSULE@", 0x7644, 0x4
+    adrp x3, photon_mgc_demoire_page_10aa000
+    .incbin "@MGC_DEMOIRE_CAPSULE@", 0x7648, 0x4
+    bl photon_mgc_halide_error_5ef6c38
+    .incbin "@MGC_DEMOIRE_CAPSULE@", 0x764c, 0x4
+    adrp x1, photon_mgc_demoire_page_10aa000
+    .incbin "@MGC_DEMOIRE_CAPSULE@", 0x7650, 0x4
+    adrp x2, photon_mgc_demoire_page_10aa000
+    .incbin "@MGC_DEMOIRE_CAPSULE@", 0x7654, 0x4
+    adrp x3, photon_mgc_demoire_page_10aa000
+    .incbin "@MGC_DEMOIRE_CAPSULE@", 0x7658, 0x10
+    adrp x1, photon_mgc_demoire_page_10aa000
+    .incbin "@MGC_DEMOIRE_CAPSULE@", 0x7668, 0x4
+    adrp x2, photon_mgc_demoire_page_10aa000
+    .incbin "@MGC_DEMOIRE_CAPSULE@", 0x766c, 0x4
+    adrp x3, photon_mgc_demoire_page_10aa000
+    .incbin "@MGC_DEMOIRE_CAPSULE@", 0x7670, 0x8
+    bl photon_mgc_halide_error_5ef6c38
+    .incbin "@MGC_DEMOIRE_CAPSULE@", 0x7678, 0x18
+    adrp x1, photon_mgc_demoire_page_10aa000
+    .incbin "@MGC_DEMOIRE_CAPSULE@", 0x7690, 0x4
+    adrp x2, photon_mgc_demoire_page_10aa000
+    .incbin "@MGC_DEMOIRE_CAPSULE@", 0x7694, 0x4
+    adrp x4, photon_mgc_demoire_page_10aa000
+    .incbin "@MGC_DEMOIRE_CAPSULE@", 0x7698, 0x20
+    bl photon_mgc_halide_error_5ef6cd0
+    .incbin "@MGC_DEMOIRE_CAPSULE@", 0x76b8, 0xc
+    adrp x1, photon_mgc_demoire_page_10aa000
+    .incbin "@MGC_DEMOIRE_CAPSULE@", 0x76c4, 0x4
+    adrp x2, photon_mgc_demoire_page_10aa000
+    .incbin "@MGC_DEMOIRE_CAPSULE@", 0x76c8, 0xc
+    adrp x4, photon_mgc_demoire_page_10aa000
+    .incbin "@MGC_DEMOIRE_CAPSULE@", 0x76d4, 0x18
+    bl photon_mgc_halide_error_5ef6cd0
+    .incbin "@MGC_DEMOIRE_CAPSULE@", 0x76ec, 0xc
+    adrp x1, photon_mgc_demoire_page_10aa000
+    .incbin "@MGC_DEMOIRE_CAPSULE@", 0x76f8, 0xc
+    bl photon_mgc_halide_error_5ef64dc
+    .incbin "@MGC_DEMOIRE_CAPSULE@", 0x7704, 0x10
+    adrp x1, photon_mgc_demoire_page_10aa000
+    .incbin "@MGC_DEMOIRE_CAPSULE@", 0x7714, 0x20
+    bl photon_mgc_halide_error_5ef64dc
+    .incbin "@MGC_DEMOIRE_CAPSULE@", 0x7734, 0x10
+    adrp x1, photon_mgc_demoire_page_10aa000
+    .incbin "@MGC_DEMOIRE_CAPSULE@", 0x7744, 0x14
+    bl photon_mgc_halide_error_5ef64dc
+    .incbin "@MGC_DEMOIRE_CAPSULE@", 0x7758, 0x20
+    adrp x1, photon_mgc_demoire_page_10aa000
+    .incbin "@MGC_DEMOIRE_CAPSULE@", 0x7778, 0x10
+    bl photon_mgc_halide_error_5ef64dc
+    .incbin "@MGC_DEMOIRE_CAPSULE@", 0x7788, 0x4
+    adrp x1, photon_mgc_demoire_page_10aa000
+    .incbin "@MGC_DEMOIRE_CAPSULE@", 0x778c, 0x4
+    adrp x2, photon_mgc_demoire_page_10aa000
+    .incbin "@MGC_DEMOIRE_CAPSULE@", 0x7790, 0x4
+    adrp x3, photon_mgc_demoire_page_10aa000
+    .incbin "@MGC_DEMOIRE_CAPSULE@", 0x7794, 0x8
+    bl photon_mgc_halide_error_5ef6c38
+    .incbin "@MGC_DEMOIRE_CAPSULE@", 0x779c, 0xc
+    bl photon_mgc_halide_error_5ef6a74
+    .incbin "@MGC_DEMOIRE_CAPSULE@", 0x77a8, 0x20
+    adrp x1, photon_mgc_demoire_page_10aa000
+    .incbin "@MGC_DEMOIRE_CAPSULE@", 0x77c8, 0x20
+    bl photon_mgc_halide_error_5ef64dc
+    .incbin "@MGC_DEMOIRE_CAPSULE@", 0x77e8, 0xc
+    adrp x1, photon_mgc_demoire_page_10aa000
+    .incbin "@MGC_DEMOIRE_CAPSULE@", 0x77f4, 0x18
+    bl photon_mgc_halide_error_5ef64dc
+    .incbin "@MGC_DEMOIRE_CAPSULE@", 0x780c, 0x1c
+    adrp x1, photon_mgc_demoire_page_10aa000
+    .incbin "@MGC_DEMOIRE_CAPSULE@", 0x7828, 0xc
+    bl photon_mgc_halide_error_5ef64dc
+    .incbin "@MGC_DEMOIRE_CAPSULE@", 0x7834, 0x4
+    adrp x1, photon_mgc_demoire_page_10aa000
+    .incbin "@MGC_DEMOIRE_CAPSULE@", 0x7838, 0x4
+    adrp x2, photon_mgc_demoire_page_10aa000
+    .incbin "@MGC_DEMOIRE_CAPSULE@", 0x783c, 0x4
+    adrp x3, photon_mgc_demoire_page_10aa000
+    .incbin "@MGC_DEMOIRE_CAPSULE@", 0x7840, 0x8
+    bl photon_mgc_halide_error_5ef6c38
+    .incbin "@MGC_DEMOIRE_CAPSULE@", 0x7848, 0x24
+    bl photon_mgc_halide_error_5ef6a74
+    .incbin "@MGC_DEMOIRE_CAPSULE@", 0x786c, 0x3c
+    bl photon_mgc_halide_error_5ef6a74
+    .incbin "@MGC_DEMOIRE_CAPSULE@", 0x78a8, 0x24
+    bl photon_mgc_halide_error_5ef6a74
+    .incbin "@MGC_DEMOIRE_CAPSULE@", 0x78cc, 0x1c
+    bl photon_mgc_halide_error_5ef6a74
+    .incbin "@MGC_DEMOIRE_CAPSULE@", 0x78e8, 0x34
+photon_mgc_demoire_address_54e8afc:
+photon_mgc_measure_moire_s16_halide:
+    .incbin "@MGC_DEMOIRE_CAPSULE@", 0x791c, 0x370
+    adrp x18, photon_mgc_demoire_page_6aa000
+    .incbin "@MGC_DEMOIRE_CAPSULE@", 0x7c8c, 0xbc
+    adrp x9, photon_mgc_demoire_page_6aa000
+    .incbin "@MGC_DEMOIRE_CAPSULE@", 0x7d48, 0x88
+    adrp x15, photon_mgc_demoire_page_6aa000
+    .incbin "@MGC_DEMOIRE_CAPSULE@", 0x7dd0, 0x44
+photon_mgc_demoire_page_54e9000:
+    .incbin "@MGC_DEMOIRE_CAPSULE@", 0x7e14, 0x330
+    adrp x1, photon_mgc_demoire_page_10aa000
+    .incbin "@MGC_DEMOIRE_CAPSULE@", 0x8144, 0x44
+    adrp x1, photon_mgc_demoire_page_10aa000
+    .incbin "@MGC_DEMOIRE_CAPSULE@", 0x8188, 0x44
+    adrp x1, photon_mgc_demoire_page_10aa000
+    .incbin "@MGC_DEMOIRE_CAPSULE@", 0x81cc, 0x34
+    adrp x1, photon_mgc_demoire_page_10aa000
+    .incbin "@MGC_DEMOIRE_CAPSULE@", 0x8200, 0x3c
+    adrp x1, photon_mgc_demoire_page_10aa000
+    .incbin "@MGC_DEMOIRE_CAPSULE@", 0x823c, 0x28
+    adrp x1, photon_mgc_demoire_page_10aa000
+    .incbin "@MGC_DEMOIRE_CAPSULE@", 0x8264, 0x2c
+    adrp x1, photon_mgc_demoire_page_10aa000
+    .incbin "@MGC_DEMOIRE_CAPSULE@", 0x8290, 0x34
+    adrp x1, photon_mgc_demoire_page_10aa000
+    .incbin "@MGC_DEMOIRE_CAPSULE@", 0x82c4, 0x4
+    adrp x3, photon_mgc_demoire_page_10aa000
+    .incbin "@MGC_DEMOIRE_CAPSULE@", 0x82c8, 0x1c
+    adrp x1, photon_mgc_demoire_page_10aa000
+    .incbin "@MGC_DEMOIRE_CAPSULE@", 0x82e4, 0x30
+    adrp x1, photon_mgc_demoire_page_10aa000
+    .incbin "@MGC_DEMOIRE_CAPSULE@", 0x8314, 0x2a4
+    adrp x1, photon_mgc_demoire_page_10aa000
+    .incbin "@MGC_DEMOIRE_CAPSULE@", 0x85b8, 0x30
+    adrp x1, photon_mgc_demoire_page_10aa000
+    .incbin "@MGC_DEMOIRE_CAPSULE@", 0x85e8, 0x28
+    adrp x1, photon_mgc_demoire_page_10aa000
+    .incbin "@MGC_DEMOIRE_CAPSULE@", 0x8610, 0x30
+    adrp x1, photon_mgc_demoire_page_10aa000
+    .incbin "@MGC_DEMOIRE_CAPSULE@", 0x8640, 0x24
+    adrp x1, photon_mgc_demoire_page_10aa000
+    .incbin "@MGC_DEMOIRE_CAPSULE@", 0x8664, 0x24
+    adrp x1, photon_mgc_demoire_page_10aa000
+    .incbin "@MGC_DEMOIRE_CAPSULE@", 0x8688, 0x28
+    adrp x1, photon_mgc_demoire_page_10aa000
+    .incbin "@MGC_DEMOIRE_CAPSULE@", 0x86b0, 0x38
+    adrp x8, photon_mgc_demoire_page_10aa000
+    .incbin "@MGC_DEMOIRE_CAPSULE@", 0x86e8, 0x4
+    adrp x1, photon_mgc_demoire_page_10aa000
+    .incbin "@MGC_DEMOIRE_CAPSULE@", 0x86ec, 0x20
+    bl photon_mgc_halide_trace
+    .incbin "@MGC_DEMOIRE_CAPSULE@", 0x870c, 0xd0
+    adrp x14, photon_mgc_demoire_page_6a8000
+    .incbin "@MGC_DEMOIRE_CAPSULE@", 0x87dc, 0x128
+    adrp x1, photon_mgc_demoire_page_6152000
+    .incbin "@MGC_DEMOIRE_CAPSULE@", 0x8904, 0x58
+    bl photon_mgc_halide_do_par_for
+    .incbin "@MGC_DEMOIRE_CAPSULE@", 0x895c, 0x14
+    adrp x8, photon_mgc_demoire_page_10aa000
+    .incbin "@MGC_DEMOIRE_CAPSULE@", 0x8970, 0x4
+    adrp x1, photon_mgc_demoire_page_10aa000
+    .incbin "@MGC_DEMOIRE_CAPSULE@", 0x8974, 0x20
+    bl photon_mgc_halide_trace
+    .incbin "@MGC_DEMOIRE_CAPSULE@", 0x8994, 0x30
+    adrp x1, photon_mgc_demoire_page_10aa000
+    .incbin "@MGC_DEMOIRE_CAPSULE@", 0x89c4, 0x8
+    adrp x1, photon_mgc_demoire_page_10aa000
+    .incbin "@MGC_DEMOIRE_CAPSULE@", 0x89cc, 0xc
+    adrp x1, photon_mgc_demoire_page_10aa000
+    .incbin "@MGC_DEMOIRE_CAPSULE@", 0x89d8, 0x2c
+    b photon_mgc_halide_error_5ef6a94
+    .incbin "@MGC_DEMOIRE_CAPSULE@", 0x8a04, 0x4
+    adrp x1, photon_mgc_demoire_page_10aa000
+    .incbin "@MGC_DEMOIRE_CAPSULE@", 0x8a08, 0x4
+    adrp x2, photon_mgc_demoire_page_10aa000
+    .incbin "@MGC_DEMOIRE_CAPSULE@", 0x8a0c, 0x38
+    b photon_mgc_halide_error_5ef61ac
+    .incbin "@MGC_DEMOIRE_CAPSULE@", 0x8a44, 0x4
+    adrp x1, photon_mgc_demoire_page_10aa000
+    .incbin "@MGC_DEMOIRE_CAPSULE@", 0x8a48, 0x10
+    adrp x1, photon_mgc_demoire_page_10aa000
+    .incbin "@MGC_DEMOIRE_CAPSULE@", 0x8a58, 0x8
+    adrp x1, photon_mgc_demoire_page_10aa000
+    .incbin "@MGC_DEMOIRE_CAPSULE@", 0x8a60, 0x18
+    adrp x1, photon_mgc_demoire_page_10aa000
+    .incbin "@MGC_DEMOIRE_CAPSULE@", 0x8a78, 0x24
+    adrp x1, photon_mgc_demoire_page_10aa000
+    .incbin "@MGC_DEMOIRE_CAPSULE@", 0x8a9c, 0x18
+    adrp x1, photon_mgc_demoire_page_10aa000
+    .incbin "@MGC_DEMOIRE_CAPSULE@", 0x8ab4, 0x18
+    adrp x1, photon_mgc_demoire_page_10aa000
+    .incbin "@MGC_DEMOIRE_CAPSULE@", 0x8acc, 0x18
+    adrp x1, photon_mgc_demoire_page_10aa000
+    .incbin "@MGC_DEMOIRE_CAPSULE@", 0x8ae4, 0x10
+    adrp x1, photon_mgc_demoire_page_10aa000
+    .incbin "@MGC_DEMOIRE_CAPSULE@", 0x8af4, 0x30
+    b photon_mgc_halide_error_5ef636c
+    .incbin "@MGC_DEMOIRE_CAPSULE@", 0x8b24, 0x8
+    adrp x1, photon_mgc_demoire_page_10aa000
+    .incbin "@MGC_DEMOIRE_CAPSULE@", 0x8b2c, 0x34
+    b photon_mgc_halide_error_5ef6294
+    adrp x1, photon_mgc_demoire_page_10aa000
+    .incbin "@MGC_DEMOIRE_CAPSULE@", 0x8b60, 0x10
+    adrp x1, photon_mgc_demoire_page_10aa000
+    .incbin "@MGC_DEMOIRE_CAPSULE@", 0x8b70, 0x10
+    adrp x1, photon_mgc_demoire_page_10aa000
+    .incbin "@MGC_DEMOIRE_CAPSULE@", 0x8b80, 0x10
+    adrp x1, photon_mgc_demoire_page_10aa000
+    .incbin "@MGC_DEMOIRE_CAPSULE@", 0x8b90, 0x8
+    adrp x1, photon_mgc_demoire_page_10aa000
+    .incbin "@MGC_DEMOIRE_CAPSULE@", 0x8b98, 0x30
+    b photon_mgc_halide_error_5ef6b6c
+    adrp x1, photon_mgc_demoire_page_10aa000
+    .incbin "@MGC_DEMOIRE_CAPSULE@", 0x8bc8, 0x10
+    adrp x1, photon_mgc_demoire_page_10aa000
+    .incbin "@MGC_DEMOIRE_CAPSULE@", 0x8bd8, 0xc
+    adrp x1, photon_mgc_demoire_page_10aa000
+    .incbin "@MGC_DEMOIRE_CAPSULE@", 0x8be4, 0x10
+    adrp x1, photon_mgc_demoire_page_10aa000
+    .incbin "@MGC_DEMOIRE_CAPSULE@", 0x8bf4, 0x10
+    adrp x1, photon_mgc_demoire_page_10aa000
+    .incbin "@MGC_DEMOIRE_CAPSULE@", 0x8c04, 0x38
+    b photon_mgc_halide_error_5ef6600
+    adrp x1, photon_mgc_demoire_page_10aa000
+    .incbin "@MGC_DEMOIRE_CAPSULE@", 0x8c3c, 0x38
+    b photon_mgc_halide_error_5ef64dc
+    adrp x1, photon_mgc_demoire_page_10aa000
+    .incbin "@MGC_DEMOIRE_CAPSULE@", 0x8c74, 0x8
+    adrp x1, photon_mgc_demoire_page_10aa000
+    .incbin "@MGC_DEMOIRE_CAPSULE@", 0x8c7c, 0x8
+    adrp x1, photon_mgc_demoire_page_10aa000
+    .incbin "@MGC_DEMOIRE_CAPSULE@", 0x8c84, 0x30
+    b photon_mgc_halide_error_5ef6bd8
+    .incbin "@MGC_DEMOIRE_CAPSULE@", 0x8cb4, 0x8
+    adrp x1, photon_mgc_demoire_page_10aa000
+    .incbin "@MGC_DEMOIRE_CAPSULE@", 0x8cbc, 0x20
+    adrp x1, photon_mgc_demoire_page_10aa000
+    .incbin "@MGC_DEMOIRE_CAPSULE@", 0x8cdc, 0x14
+    adrp x1, photon_mgc_demoire_page_10aa000
+    .incbin "@MGC_DEMOIRE_CAPSULE@", 0x8cf0, 0x14
+    adrp x1, photon_mgc_demoire_page_10aa000
+photon_mgc_demoire_page_54ea000:
+    .incbin "@MGC_DEMOIRE_CAPSULE@", 0x8d04, 0x3c
+    b photon_mgc_halide_error_5ef63f8
+    .incbin "@MGC_DEMOIRE_CAPSULE@", 0x8d40, 0x8
+    adrp x1, photon_mgc_demoire_page_10aa000
+    .incbin "@MGC_DEMOIRE_CAPSULE@", 0x8d48, 0x30
+    b photon_mgc_halide_error_5ef6568
+    .incbin "@MGC_DEMOIRE_CAPSULE@", 0x8d78, 0x4
+    adrp x1, photon_mgc_demoire_page_10aa000
+    .incbin "@MGC_DEMOIRE_CAPSULE@", 0x8d7c, 0x4
+    adrp x3, photon_mgc_demoire_page_10aa000
+    .incbin "@MGC_DEMOIRE_CAPSULE@", 0x8d80, 0xc
+    adrp x1, photon_mgc_demoire_page_10aa000
+    .incbin "@MGC_DEMOIRE_CAPSULE@", 0x8d8c, 0x4
+    adrp x3, photon_mgc_demoire_page_10aa000
+    .incbin "@MGC_DEMOIRE_CAPSULE@", 0x8d90, 0x34
+    b photon_mgc_halide_error_5ef6794
+    .incbin "@MGC_DEMOIRE_CAPSULE@", 0x8dc4, 0xf20
+
+.section .rodata.photon_mgc.demoire_page_6a8000,"a",@progbits
+    .p2align 12
+photon_mgc_demoire_page_6a8000:
+    .incbin "@MGC_DEMOIRE_CAPSULE@", 0x9ce4, 0x1000
+
+.section .rodata.photon_mgc.demoire_page_6aa000,"a",@progbits
+    .p2align 12
+photon_mgc_demoire_page_6aa000:
+    .incbin "@MGC_DEMOIRE_CAPSULE@", 0xace4, 0x1000
+
+.section .rodata.photon_mgc.demoire_page_6b0000,"a",@progbits
+    .p2align 12
+photon_mgc_demoire_page_6b0000:
+    .incbin "@MGC_DEMOIRE_CAPSULE@", 0xbce4, 0x1000
+
+.section .rodata.photon_mgc.demoire_page_6b2000,"a",@progbits
+    .p2align 12
+photon_mgc_demoire_page_6b2000:
+    .incbin "@MGC_DEMOIRE_CAPSULE@", 0xcce4, 0x1000
+
+.section .rodata.photon_mgc.demoire_page_6b9000,"a",@progbits
+    .p2align 12
+photon_mgc_demoire_page_6b9000:
+    .incbin "@MGC_DEMOIRE_CAPSULE@", 0xdce4, 0x1000
+
+.section .rodata.photon_mgc.demoire_page_6ba000,"a",@progbits
+    .p2align 12
+photon_mgc_demoire_page_6ba000:
+    .incbin "@MGC_DEMOIRE_CAPSULE@", 0xece4, 0x1000
+
+.section .rodata.photon_mgc.demoire_page_10aa000,"a",@progbits
+    .p2align 12
+photon_mgc_demoire_page_10aa000:
+    .incbin "@MGC_DEMOIRE_CAPSULE@", 0xfce4, 0x1000
+
+.section .data.rel.ro.photon_mgc.demoire_page_6152000,"aw",@progbits
+    .p2align 12
+photon_mgc_demoire_page_6152000:
+    .incbin "@MGC_DEMOIRE_CAPSULE@", 0x10ce4, 0xb10
+    .xword photon_mgc_demoire_address_54e1100
+    .incbin "@MGC_DEMOIRE_CAPSULE@", 0x117f4, 0x4e8
+
+.section .note.GNU-stack,"",@progbits

@@ -97,6 +97,12 @@ data class PhotonDenoiseTuning(
     val sabreLumaOutlierNodes: PhotonSabreLumaTuningNodes = PhotonSabreLumaTuningNodes.DEFAULT,
     /** Initial value of a default 128-bin spectrum; never a multiplier for measured spectra. */
     val noiseSpectrumSeed: Float = DEFAULT_SPECTRUM_SEED,
+    /**
+     * GCam raw_finish_tuning chroma_median_filter_type of the low-frequency branch:
+     * 0 none (GCam's default), 1 dual_5_point, 2 dual_3_point (the type GCam's sensor
+     * tunings enable most often).
+     */
+    val chromaMedianFilterType: Int = CHROMA_MEDIAN_DUAL_3_POINT,
 ) {
     fun normalized(): PhotonDenoiseTuning = copy(
         lumaStrengthScale = lumaStrengthScale.normalized(),
@@ -109,10 +115,17 @@ data class PhotonDenoiseTuning(
         sabreLumaOutlierNodes = sabreLumaOutlierNodes.normalized(allowNegative = true),
         noiseSpectrumSeed = noiseSpectrumSeed.takeIf(Float::isFinite)
             ?.coerceIn(0f, 8f) ?: DEFAULT_SPECTRUM_SEED,
+        chromaMedianFilterType = chromaMedianFilterType.coerceIn(
+            CHROMA_MEDIAN_NONE,
+            CHROMA_MEDIAN_DUAL_3_POINT,
+        ),
     )
 
     companion object {
         const val DEFAULT_SPECTRUM_SEED = 1f
+        const val CHROMA_MEDIAN_NONE = 0
+        const val CHROMA_MEDIAN_DUAL_5_POINT = 1
+        const val CHROMA_MEDIAN_DUAL_3_POINT = 2
         val DEFAULT = PhotonDenoiseTuning()
     }
 }

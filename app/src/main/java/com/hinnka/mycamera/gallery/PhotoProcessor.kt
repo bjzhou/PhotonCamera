@@ -30,9 +30,8 @@ import com.hinnka.mycamera.raw.RawDigitalZoomResampling
 import com.hinnka.mycamera.raw.RawDemosaicProcessor
 import com.hinnka.mycamera.raw.RawHdrRenderResult
 import com.hinnka.mycamera.raw.RawMetadata
-import com.hinnka.mycamera.raw.RawAppliedLensShadingMetadata
-import com.hinnka.mycamera.raw.RawDenoiseHistoryMetadata
 import com.hinnka.mycamera.raw.RawPhotonHdrMetadata
+import com.hinnka.mycamera.raw.RawMgcTuningSnr
 import com.hinnka.mycamera.raw.RawNoiseProfileManager
 import com.hinnka.mycamera.raw.SpectralFilmTuning
 import com.hinnka.mycamera.utils.BitmapUtils
@@ -94,7 +93,7 @@ class PhotoProcessor(
 
     /**
      * 非 RAW 照片的降噪基底（对应 RAW 烘焙进 original.jpg 的降噪）：对 [source] 全分辨率跑一次
-     * Photon 降噪并持久化，预览/导出直接加载基底并以 0 强度走 LUT。
+     * Bitmap 降噪（LutImageProcessor.applyBitmapDenoise）并持久化，预览/导出直接加载基底并以 0 强度走 LUT。
      *
      * 每个条目以源文件内容与强度为 key，最多保留 [PHOTON_DENOISE_MAX_ENTRIES] 个、按最近使用淘汰：
      * 已保存的强度与编辑中（未保存）的强度各占一个条目，互不覆盖。真正开始重建前调用 [onBuild]。
@@ -731,8 +730,7 @@ class PhotoProcessor(
             rawBlackPointCorrection = metadata.rawBlackPointCorrection ?: 0f,
             rawWhitePointCorrection = metadata.rawWhitePointCorrection ?: 0f,
             applyLensShadingCorrection = resolveRawLensShadingCorrectionEnabled(metadata),
-            appliedLensShading = RawAppliedLensShadingMetadata.read(metadata.customProperties),
-            denoiseHistory = RawDenoiseHistoryMetadata.read(metadata.customProperties),
+            mgcTuningSnr = RawMgcTuningSnr.read(metadata.customProperties),
             rawBlackLevelMode = metadata.rawBlackLevelMode,
             rawCustomBlackLevel = metadata.rawCustomBlackLevel,
             rawWhiteLevelMode = metadata.rawWhiteLevelMode,
@@ -817,8 +815,7 @@ class PhotoProcessor(
             rawBlackPointCorrection = metadata.rawBlackPointCorrection ?: 0f,
             rawWhitePointCorrection = metadata.rawWhitePointCorrection ?: 0f,
             applyLensShadingCorrection = resolveRawLensShadingCorrectionEnabled(metadata),
-            appliedLensShading = RawAppliedLensShadingMetadata.read(metadata.customProperties),
-            denoiseHistory = RawDenoiseHistoryMetadata.read(metadata.customProperties),
+            mgcTuningSnr = RawMgcTuningSnr.read(metadata.customProperties),
             rawBlackLevelMode = metadata.rawBlackLevelMode,
             rawCustomBlackLevel = metadata.rawCustomBlackLevel,
             rawWhiteLevelMode = metadata.rawWhiteLevelMode,

@@ -185,6 +185,46 @@ internal object GlesMgcSpatialRgbMergeShaders {
             accumulateTile(tile, remainder);
         }
     """.trimIndent()
+
+    /**
+     * The merge sum / weight as the planar signed Fixed16 [channel][y][x] signal of the Spatial
+     * RGB noise-model AOT; planes are padded to complete 16x16 tiles by edge clamping and laid
+     * out as a MgcSpatialStrengthAtlasLayout atlas. The AOT runs with black 0 / white 16384 and
+     * evaluates the input noise model (normalized to the sensor's white - black range) at
+     * signal / 16384, so [uSignalScale] maps the merge's RAW-code x overallGain domain onto
+     * 16384 x normalized signal.
+     */
+    val packFixed16 = """
+        #version 300 es
+        precision highp float;
+        precision highp int;
+        precision highp sampler2D;
+        uniform highp sampler2D uSumRed;
+        uniform highp sampler2D uSumGreen;
+        uniform highp sampler2D uSumBlue;
+        uniform highp sampler2D uWeightSum;
+        uniform ivec2 uSourceSize;
+        uniform ivec2 uPlaneSize;
+        uniform int uAtlasColumns;
+        uniform float uSignalScale;
+        layout(location = 0) out highp int oFixed16;
+
+        void main() {
+            ivec2 packed = ivec2(gl_FragCoord.xy);
+            ivec2 cell = packed / uPlaneSize;
+            int channel = cell.y * uAtlasColumns + cell.x;
+            if (channel > 2) {
+                oFixed16 = 0;
+                return;
+            }
+            ivec2 p = min(packed - cell * uPlaneSize, uSourceSize - ivec2(1));
+            float sum = channel == 0 ? texelFetch(uSumRed, p, 0).r :
+                (channel == 1 ? texelFetch(uSumGreen, p, 0).r : texelFetch(uSumBlue, p, 0).r);
+            float merged = sum / max(texelFetch(uWeightSum, p, 0).r, 1.0e-8) * uSignalScale;
+            oFixed16 = int(round(clamp(merged, 0.0, 32767.0)));
+        }
+    """.trimIndent()
+
     /**
      * The merged ratio sum / weight (Q14 scale) followed by the output normalization: exposure
      * scale, CameraWhite bound, lens shading and RGB16 encoding.

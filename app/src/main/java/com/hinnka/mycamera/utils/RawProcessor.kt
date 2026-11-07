@@ -21,6 +21,7 @@ import com.hinnka.mycamera.raw.RawDngProfilePreparation
 import com.hinnka.mycamera.raw.RawDngProfilePreparationOptions
 import com.hinnka.mycamera.raw.RawMetadata
 import com.hinnka.mycamera.raw.RawPhysicalCrop
+import com.hinnka.mycamera.raw.DngNoiseProfile
 import com.hinnka.mycamera.raw.RawNoiseProfileLayout
 import com.hinnka.mycamera.raw.RawRenderingEngine
 import com.hinnka.mycamera.raw.RawSceneExposureDeviceLimits
@@ -116,8 +117,10 @@ object RawProcessor {
         defaultCrop: Rect,
         rotation: Int,
         profilePreparation: RawDngProfilePreparation,
+        /** [DngNoiseProfile] of merged pixels; null for the single-frame Camera2 model. */
+        noiseProfile: FloatArray? = null,
     ): RawMetadata {
-        val dngChannelNoise = resolveDngWriterNoiseProfile(captureResult)
+        val dngChannelNoise = resolveDngWriterNoiseProfile(captureResult, characteristics, noiseProfile)
         val metadata = buildAdobeDngColorMetadata(
             width = width,
             height = height,
@@ -204,7 +207,7 @@ object RawProcessor {
             postRawSensitivityBoost = 1f,
             baselineExposure = DngBaselineExposure.sanitize(profilePreparation.baselineExposureEv),
             shadowScale = 1f,
-            channelNoiseProfile = resolveDngWriterNoiseProfile(captureResult),
+            channelNoiseProfile = resolveDngWriterNoiseProfile(captureResult, characteristics),
             noiseProfileLayout = RawNoiseProfileLayout.DNG_RGB,
             afRegions = null,
             activeArray = Rect(0, 0, width, height),
@@ -265,38 +268,19 @@ object RawProcessor {
         )
     }
 
-    private fun resolveDngWriterNoiseProfile(captureResult: CaptureResult): FloatArray {
-        val source = captureResult.get(CaptureResult.SENSOR_NOISE_PROFILE)
-            ?.takeIf { it.size >= 3 }
+    /**
+     * The NoiseProfile serialized into Photon DNGs ([DngNoiseProfile] R, G, B order) in the
+     * DNG_RGB metadata layout. [override] replaces the single-frame Camera2 model when the
+     * pixels are not single-frame (a merge's output noise model).
+     */
+    private fun resolveDngWriterNoiseProfile(
+        captureResult: CaptureResult,
+        characteristics: CameraCharacteristics,
+        override: FloatArray? = null,
+    ): FloatArray {
+        val rgb = override ?: DngNoiseProfile.fromCamera2(captureResult, characteristics)
             ?: return floatArrayOf(0f, 0f)
-
-        fun safePair(index: Int): Pair<Float, Float>? {
-            val pair = source.getOrNull(index) ?: return null
-            val slope = pair.first.takeIf { it.isFinite() && it >= 0.0 }?.toFloat() ?: return null
-            val offset = pair.second.takeIf { it.isFinite() && it >= 0.0 }?.toFloat() ?: return null
-            return slope to offset
-        }
-
-        val red = safePair(0) ?: return floatArrayOf(0f, 0f)
-        val green = if (source.size >= 4) {
-            val even = safePair(1) ?: return floatArrayOf(0f, 0f)
-            val odd = safePair(2) ?: return floatArrayOf(0f, 0f)
-            (even.first + odd.first) * 0.5f to (even.second + odd.second) * 0.5f
-        } else {
-            safePair(1) ?: return floatArrayOf(0f, 0f)
-        }
-        val blue = safePair(if (source.size >= 4) 3 else 2)
-            ?: return floatArrayOf(0f, 0f)
-        return floatArrayOf(
-            red.first,
-            red.second,
-            green.first,
-            green.second,
-            blue.first,
-            blue.second,
-            0f,
-            0f,
-        )
+        return rgb.copyOf(8)
     }
 
     /**
@@ -677,6 +661,8 @@ object RawProcessor {
         options: RawDngProfilePreparationOptions,
         defaultCrop: Rect,
         physicalRawCrop: RawPhysicalCrop? = null,
+        /** [DngNoiseProfile] of merged pixels; null for the single-frame Camera2 model. */
+        noiseProfile: FloatArray? = null,
     ): RawDngProfilePreparation? {
         if (!captureExposureCompensationEv.isFinite()) {
             PLog.e(
@@ -729,7 +715,7 @@ object RawProcessor {
             // The reusable single-frame demosaic must be bit-for-bit equivalent to the
             // demosaic that the immediate in-memory DNG render would have produced. That
             // render consumes the serialized DNG RGB noise profile, not Camera2's CFA layout.
-            channelNoiseProfile = resolveDngWriterNoiseProfile(captureResult),
+            channelNoiseProfile = resolveDngWriterNoiseProfile(captureResult, characteristics, noiseProfile),
             noiseProfileLayout = RawNoiseProfileLayout.DNG_RGB,
             postRawSensitivityBoost = 1f,
             baselineExposure = sourceBaselineExposureEv,
@@ -892,6 +878,8 @@ object RawProcessor {
         defaultCrop: Rect,
         preparedDngProfile: RawDngProfilePreparation? = null,
         physicalRawCrop: RawPhysicalCrop? = null,
+        /** [DngNoiseProfile] of merged pixels; null for the single-frame Camera2 model. */
+        noiseProfile: FloatArray? = null,
     ): Boolean {
         val resolvedCfaPattern = resolveCfaPatternForMode(cfaPattern, cfaCorrectionMode)
         val resolvedBlackLevel = resolveBlackLevelForMode(blackLevel, blackLevelMode, customBlackLevel)
@@ -989,6 +977,7 @@ object RawProcessor {
             profileName = writtenProfileName,
             profileToneCurve = writtenProfileToneCurve,
             rawSceneExposureSummaryText = preparedProfile?.rawSceneExposureSummaryText,
+            noiseProfile = noiseProfile,
             imageLayout = imageLayout,
             compression = compression,
             inputRowStepSamples = inputRowStepSamples,
