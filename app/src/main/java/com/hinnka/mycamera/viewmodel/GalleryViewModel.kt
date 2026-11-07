@@ -39,7 +39,11 @@ import com.hinnka.mycamera.video.VideoLogProfile
 import com.hinnka.mycamera.lut.getVideoExportOptions as resolveVideoExportOptions
 import com.hinnka.mycamera.lut.isVideoTransformerExportSupported
 import com.hinnka.mycamera.lut.creator.OpenAIApiClient
+import com.hinnka.mycamera.camera.AspectRatio
+import com.hinnka.mycamera.model.CameraPreset
 import com.hinnka.mycamera.model.ColorRecipeParams
+import com.hinnka.mycamera.model.toEffectParams
+import com.hinnka.mycamera.model.withoutIndependentEffects
 import com.hinnka.mycamera.processor.DenoiseStrength
 import com.hinnka.mycamera.processor.BokehStyle
 import com.hinnka.mycamera.raw.DcpInfo
@@ -111,6 +115,8 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
         private const val TAG = "GalleryViewModel"
         private const val FULL_QUALITY_PREVIEW_MAX_EDGE = 4096
         private const val HDR_DETAIL_MAX_BITMAP_BYTES = 80L * 1024L * 1024L
+        /** 画幅匹配的相对容差，吸收裁切取整与拉直带来的像素误差。 */
+        private const val ASPECT_RATIO_MATCH_TOLERANCE = 0.01f
     }
 
 
@@ -2582,6 +2588,88 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
             normalizedCropRect = normalizedCrop
         )
         _hasCopiedEditSettings.value = true
+    }
+
+    /**
+     * 以 [base] 为底，用当前编辑页实际生效的设置生成预设。
+     *
+     * 照片携带的 LUT、色彩配方、独立效果与边框总是覆盖底稿；照片裁切后的画幅
+     * 命中内置画幅时一并写入。RAW 开发参数仅在源照片为 RAW 时覆盖，非 RAW
+     * 照片没有这些参数，保留底稿值。
+     */
+    fun createPresetFromCurrentEdit(base: CameraPreset): CameraPreset {
+        val sourcePhoto = getCurrentPhoto()?.let { it.relatedPhoto ?: it }
+        val sourceIsRaw = sourcePhoto?.let(::isRawMedia) == true
+        val effectiveRecipe = editPhotoRecipeParams.value ?: editLutRecipeParams.value
+        val lookPreset = base.copy(
+            lutId = CameraPreset.normalizeLutId(editLutId.value),
+            colorRecipe = effectiveRecipe.withoutIndependentEffects(),
+            effects = effectiveRecipe.toEffectParams(),
+            frameId = editFrameId.value,
+            aspectRatio = sourcePhoto?.let(::resolveEditedAspectRatio)?.name ?: base.aspectRatio,
+        )
+        if (!sourceIsRaw) return lookPreset
+
+        val toneMapping = editRawToneMappingParameters.value
+        return lookPreset.copy(
+            rawDcpId = editRawDcpId.value,
+            rawDcpIdsByLens = emptyMap(),
+            rawHncsProfileId = editRawHncsProfileId.value,
+            rawHncsRenderIntent = editRawHncsRenderIntent.value.assetValue,
+            rawHncsFilmCurveMode = editRawHncsFilmCurveMode.value.persistedValue,
+            rawRenderingEngine = editRawRenderingEngine.value.name,
+            rawMaxSharpening = editSharpening.value,
+            rawMaxNoiseReduction = editNoiseReduction.value,
+            rawMaxChromaNoiseReduction = editChromaNoiseReduction.value,
+            rawExposureCompensation = editRawExposureCompensation.value,
+            rawHighlightsAdjustment = editRawHighlightsAdjustment.value,
+            rawShadowsAdjustment = editRawShadowsAdjustment.value,
+            rawBlackPointCorrection = editRawBlackPointCorrection.value,
+            rawWhitePointCorrection = editRawWhitePointCorrection.value,
+            rawOppoMasterToneMap = toneMapping.useOppoMasterToneMap,
+            rawLumixPhotoStyle = toneMapping.lumixPhotoStyle.assetName,
+            rawCanonPictureStyle = toneMapping.canonPictureStyle.persistedValue,
+            rawCanonExposureCompensationEv = toneMapping.canonExposureCompensationEv,
+            rawLumixColorMatchingEnabled = toneMapping.lumixColorMatchingEnabled,
+            rawHncsColorMatchingEnabled = toneMapping.hncsColorMatchingEnabled,
+            rawCanonUseR5ColorMatrix = toneMapping.canonUseR5ColorMatrix,
+            rawLeicaUseM9ColorMatrix = toneMapping.leicaUseM9ColorMatrix,
+            rawAgxBlackRelativeExposure = toneMapping.agxBlackRelativeExposure,
+            rawAgxWhiteRelativeExposure = toneMapping.agxWhiteRelativeExposure,
+            rawAgxToe = toneMapping.agxToe,
+            rawAgxShoulder = toneMapping.agxShoulder,
+            rawFilmicBlackRelativeExposure = toneMapping.filmicBlackRelativeExposure,
+            rawFilmicWhiteRelativeExposure = toneMapping.filmicWhiteRelativeExposure,
+            rawSpectralFilmStock = editRawSpectralFilmStock.value,
+            rawSpectralFilmPrint = editRawSpectralFilmPrint.value,
+            rawFotufilmDocument = FotufilmDocumentStorage.encode(editRawFotufilmDocument.value),
+            rawDROMode = editRawDROMode.value,
+            rawBaselineLutId = editRawBaselineLutId.value,
+        )
+    }
+
+    /** 按旋转、拉直与裁切后的成片长短边比匹配内置画幅，与方向无关；不命中时返回 null。 */
+    private fun resolveEditedAspectRatio(photo: MediaData): AspectRatio? {
+        val metadata = photo.metadata
+        val baseWidth = metadata?.width?.takeIf { it > 0 } ?: photo.width
+        val baseHeight = metadata?.height?.takeIf { it > 0 } ?: photo.height
+        val (editedWidth, editedHeight) = PostEditGeometry.editedDimensions(
+            baseWidth,
+            baseHeight,
+            editRotationDegrees.value,
+            editStraightenDegrees.value
+        )
+        if (editedWidth <= 0 || editedHeight <= 0) return null
+        val crop = editCropRect.value
+        val width = editedWidth * (crop?.width() ?: 1f)
+        val height = editedHeight * (crop?.height() ?: 1f)
+        if (width <= 0f || height <= 0f) return null
+        val ratio = maxOf(width, height) / minOf(width, height)
+        return AspectRatio.entries.firstOrNull { candidate ->
+            val candidateRatio = maxOf(candidate.widthRatio, candidate.heightRatio).toFloat() /
+                minOf(candidate.widthRatio, candidate.heightRatio)
+            kotlin.math.abs(ratio - candidateRatio) / candidateRatio < ASPECT_RATIO_MATCH_TOLERANCE
+        }
     }
 
     /**

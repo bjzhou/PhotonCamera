@@ -487,4 +487,5 @@
     <string name="fotufilm_value_minutes">%1$s min</string>
     <string name="fotufilm_value_years">%1$s anos</string>
     <!-- /Fotufilm controls -->
+    <string name="save_as_preset">Salvar como predefinição</string>
 </resources>

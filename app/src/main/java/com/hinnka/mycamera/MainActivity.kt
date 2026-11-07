@@ -878,6 +878,9 @@ fun NavigationHost(
                     },
                     onFilterManagementClick = { lutId ->
                         navController.navigate(Routes.filterManagement(lutId))
+                    },
+                    onCreatePresetClick = {
+                        navController.navigate(Routes.presetEditor(null))
                     }
                 )
             }

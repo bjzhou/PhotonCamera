@@ -192,6 +192,7 @@ fun GalleryEditScreen(
     onBack: () -> Unit,
     onOpenFrameEditor: (String) -> Unit,
     onFilterManagementClick: (String?) -> Unit,
+    onCreatePresetClick: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
@@ -241,6 +242,7 @@ fun GalleryEditScreen(
     var isSaving by remember { mutableStateOf(false) }
     var isLoadingPreview by remember { mutableStateOf(false) }
     var showMoreMenu by remember { mutableStateOf(false) }
+    val defaultPresetName = stringResource(R.string.preset_new_preset_default)
     var showImageHistogram by remember { mutableStateOf(false) }
     val frameScrollState = rememberLazyListState()
     var showBaselineLutEditSheet by remember { mutableStateOf(false) }
@@ -1355,6 +1357,25 @@ fun GalleryEditScreen(
                                         leadingIcon = {
                                             Icon(
                                                 imageVector = AppIcons.ContentCopy,
+                                                contentDescription = null
+                                            )
+                                        }
+                                    )
+                                    DropdownMenuItem(
+                                        text = { Text(stringResource(R.string.save_as_preset)) },
+                                        onClick = {
+                                            showMoreMenu = false
+                                            cameraViewModel.draftPreset =
+                                                viewModel.createPresetFromCurrentEdit(
+                                                    cameraViewModel.prepareCurrentSettingsPresetDraft(
+                                                        defaultPresetName
+                                                    )
+                                                )
+                                            onCreatePresetClick()
+                                        },
+                                        leadingIcon = {
+                                            Icon(
+                                                imageVector = AppIcons.Bookmark,
                                                 contentDescription = null
                                             )
                                         }

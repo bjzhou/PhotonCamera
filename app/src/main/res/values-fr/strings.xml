@@ -936,6 +936,7 @@
     <string name="more_options">Plus d\'options</string>
     <string name="copy_settings">Copier les réglages</string>
     <string name="paste_settings">Coller les réglages</string>
+    <string name="save_as_preset">Enregistrer comme préréglage</string>
     <string name="copy_settings_success">Réglages copiés</string>
     <string name="paste_settings_success">Réglages collés</string>
     <string name="copy_settings_failed">Impossible de copier les réglages</string>

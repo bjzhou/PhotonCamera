@@ -678,6 +678,7 @@
     <string name="more_options">更多操作</string>
     <string name="copy_settings">複製設定</string>
     <string name="paste_settings">貼上設定</string>
+    <string name="save_as_preset">存為預設</string>
     <string name="copy_settings_success">已複製設定</string>
     <string name="paste_settings_success">已貼上設定</string>
     <string name="copy_settings_failed">複製設定失敗</string>

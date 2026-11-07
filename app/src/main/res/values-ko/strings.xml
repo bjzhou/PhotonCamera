@@ -487,4 +487,5 @@
     <string name="fotufilm_value_minutes">%1$s분</string>
     <string name="fotufilm_value_years">%1$s년</string>
     <!-- /Fotufilm controls -->
+    <string name="save_as_preset">프리셋으로 저장</string>
 </resources>

@@ -726,6 +726,7 @@
     <string name="more_options">More options</string>
     <string name="copy_settings">Copy settings</string>
     <string name="paste_settings">Paste settings</string>
+    <string name="save_as_preset">Save as preset</string>
     <string name="copy_settings_success">Settings copied</string>
     <string name="paste_settings_success">Settings pasted</string>
     <string name="copy_settings_failed">Couldn’t copy settings</string>

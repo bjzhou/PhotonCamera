@@ -72,6 +72,11 @@ data class EffectParams(
     }
 }
 
+/** 剥离独立物理效果后的可烘焙色彩配方，与 [toEffectParams] 互补。 */
+fun ColorRecipeParams.withoutIndependentEffects(): ColorRecipeParams {
+    return EffectParams.DEFAULT.applyTo(this)
+}
+
 fun ColorRecipeParams.toEffectParams(): EffectParams {
     return EffectParams(
         vignette = vignette,

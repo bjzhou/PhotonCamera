@@ -51,6 +51,7 @@ import com.hinnka.mycamera.model.LutSelectorMode
 import com.hinnka.mycamera.model.RecipeParam
 import com.hinnka.mycamera.model.SafeImage
 import com.hinnka.mycamera.model.toEffectParams
+import com.hinnka.mycamera.model.withoutIndependentEffects
 import com.hinnka.mycamera.ml.DepthModelManager
 import com.hinnka.mycamera.phantom.PhantomWidgetProvider
 import com.hinnka.mycamera.preview.EyeFocusPreviewFrame
@@ -244,10 +245,6 @@ internal fun resolveCaptureDenoiseStrengths(
     } else {
         CaptureDenoiseStrengths(editableLuma = luma, editableChroma = chroma, bakedLuma = null, bakedChroma = null)
     }
-}
-
-private fun ColorRecipeParams.withoutIndependentEffects(): ColorRecipeParams {
-    return EffectParams.DEFAULT.applyTo(this)
 }
 
 private data class PresetMatchSnapshot(

@@ -700,6 +700,7 @@
     <string name="more_options">その他</string>
     <string name="copy_settings">設定をコピー</string>
     <string name="paste_settings">設定をペースト</string>
+    <string name="save_as_preset">プリセットとして保存</string>
     <string name="copy_settings_success">設定をコピーしました</string>
     <string name="paste_settings_success">設定をペーストしました</string>
     <string name="copy_settings_failed">設定をコピーできませんでした</string>

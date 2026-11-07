@@ -486,4 +486,5 @@
     <string name="fotufilm_value_minutes">%1$s min</string>
     <string name="fotufilm_value_years">%1$s J.</string>
     <!-- /Fotufilm controls -->
+    <string name="save_as_preset">Als Preset speichern</string>
 </resources>
