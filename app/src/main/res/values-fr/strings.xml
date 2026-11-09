@@ -1479,4 +1479,11 @@
     <string name="gallery_ai_scale_note">Inspiré des principes récurrents des recommandations des jurés LensCulture ; il s\'agit d\'une critique IA indépendante, et non d\'une note officielle LensCulture.</string>
     <string name="gallery_bokeh_processing">Application du bokeh…</string>
     <string name="gallery_denoise_processing">Réduction du bruit en cours…</string>
+    <string name="ai_denoise_model_title">Modèle de débruitage IA</string>
+    <string name="ai_denoise_model_description">Le débruitage IA nécessite le modèle SCUNet (environ 47 Mo). Le télécharger maintenant ? Il est stocké de façon privée par l\'application.</string>
+    <string name="ai_denoise_model_downloading">Téléchargement du modèle… %1$d%%</string>
+    <string name="ai_denoise_model_installing">Vérification et installation du modèle…</string>
+    <string name="ai_denoise_model_failed">Le modèle n\'a pas pu être téléchargé ou vérifié. Vérifiez votre connexion et réessayez.</string>
+    <string name="ai_denoise_model_download">Télécharger</string>
+    <string name="ai_denoise_model_retry">Réessayer</string>
 </resources>

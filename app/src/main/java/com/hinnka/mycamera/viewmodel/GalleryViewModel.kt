@@ -501,8 +501,8 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
     var editMirrorHorizontal = MutableStateFlow(false)
         private set
 
-    private val _editAiDenoiseStrength = MutableStateFlow(1.0f)
-    val editAiDenoiseStrength = _editAiDenoiseStrength.asStateFlow()
+    private val _editAiDenoiseEnabled = MutableStateFlow(false)
+    val editAiDenoiseEnabled = _editAiDenoiseEnabled.asStateFlow()
 
     private val _isAiDenoising = MutableStateFlow(false)
     val isAiDenoising = _isAiDenoising.asStateFlow()
@@ -632,11 +632,11 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
         job.start()
     }
 
-    fun setAiDenoiseStrength(value: Float) {
-        _editAiDenoiseStrength.value = value
+    fun setAiDenoiseEnabled(enabled: Boolean) {
+        _editAiDenoiseEnabled.value = enabled
     }
 
-    fun applyDnCNNDenoise(photo: MediaData, strength: Float = 1.0f, onComplete: (Boolean) -> Unit) {
+    fun applyAiDenoise(photo: MediaData, onComplete: (Boolean) -> Unit) {
         if (_isAiDenoising.value) return
         _isAiDenoising.value = true
         _aiDenoiseProgress.value = 0f
@@ -644,41 +644,22 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
         viewModelScope.launch(Dispatchers.IO) {
             val context = getApplication<Application>()
             try {
-                var bitmap = GalleryManager.loadOriginalBitmap(context, photo.id) ?: GalleryManager.loadBitmap(context, photo.uri)
+                val bitmap = GalleryManager.loadOriginalBitmap(context, photo.id) ?: GalleryManager.loadBitmap(context, photo.uri)
                 if (bitmap == null) {
                     _isAiDenoising.value = false
                     withContext(Dispatchers.Main) { onComplete(false) }
                     return@launch
                 }
-                
-                if (!isRawInGallery(photo.id)) {
-                    // 非 RAW 照片，先进行一次色度降噪
-                    val lutProcessor = com.hinnka.mycamera.lut.LutImageProcessor(context)
-                    val chromaDenoised = lutProcessor.applyChromaDenoise(
-                        bitmap,
-                        strength = 0.8f,
-                        sensorIso = (photo.metadata ?: GalleryManager.loadMetadata(context, photo.id))?.iso,
-                    )
-                    lutProcessor.release()
-                    if (chromaDenoised !== bitmap) {
-                        bitmap.recycle()
-                        bitmap = chromaDenoised
+
+                // Runs on this IO thread without suspending: the GPU model is thread-bound.
+                val denoised = try {
+                    com.hinnka.mycamera.ml.AiDenoiser.denoise(context, bitmap) { p ->
+                        _aiDenoiseProgress.value = p
                     }
+                } finally {
+                    bitmap.recycle()
                 }
-                
-                val estimator = com.hinnka.mycamera.ml.DnCNNDenoiseEstimator(context)
-                val denoised = estimator.denoisePatchwise(bitmap, strength = strength) { p ->
-                    _aiDenoiseProgress.value = p
-                }
-                estimator.close()
-                bitmap.recycle()
-                
-                if (denoised == null) {
-                    _isAiDenoising.value = false
-                    withContext(Dispatchers.Main) { onComplete(false) }
-                    return@launch
-                }
-                
+
                 val file = GalleryManager.getAiDenoiseFile(context, photo.id)
                 file.parentFile?.mkdirs()
                 FileOutputStream(file).use { outputStream ->
@@ -706,7 +687,7 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                 val updatedMetadata = GalleryManager.updateMetadata(context, photo.id) { current ->
                     current.copy(
                         hasAiDenoisedBase = true,
-                        aiDenoiseStrength = strength
+                        aiDenoiseStrength = 1.0f
                     )
                 } ?: run {
                     _isAiDenoising.value = false
@@ -746,14 +727,14 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                 _isAiDenoising.value = false
                 withContext(Dispatchers.Main) { onComplete(true) }
             } catch (e: Exception) {
-                PLog.e(TAG, "Failed to apply DnCNN denoise", e)
+                PLog.e(TAG, "Failed to apply AI denoise", e)
                 _isAiDenoising.value = false
                 withContext(Dispatchers.Main) { onComplete(false) }
             }
         }
     }
 
-    fun resetDnCNNDenoise(photo: MediaData, onComplete: (Boolean) -> Unit = {}) {
+    fun resetAiDenoise(photo: MediaData, onComplete: (Boolean) -> Unit = {}) {
         if (_isAiDenoising.value) return
         _isAiDenoising.value = true
 
@@ -1525,7 +1506,7 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
             editStraightenDegrees.value =
                 PostEditGeometry.normalizeStraightenDegrees(m.postStraightenDegrees)
             editMirrorHorizontal.value = m.postMirrorHorizontal
-            _editAiDenoiseStrength.value = if (m.hasAiDenoisedBase) m.aiDenoiseStrength ?: 1.0f else 0.0f
+            _editAiDenoiseEnabled.value = m.hasAiDenoisedBase
             restoreCropEditState(photo, m)
 
             // 加载 LUT 配置
@@ -1540,7 +1521,7 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
             editRotationDegrees.value = 0
             editStraightenDegrees.value = 0f
             editMirrorHorizontal.value = false
-            _editAiDenoiseStrength.value = 0.0f
+            _editAiDenoiseEnabled.value = false
             restoreCropEditState(photo, null)
         }
     }

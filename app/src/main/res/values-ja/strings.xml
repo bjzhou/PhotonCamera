@@ -1318,4 +1318,11 @@
     <string name="fotufilm_value_minutes">%1$s 分</string>
     <string name="fotufilm_value_years">%1$s 年</string>
     <!-- /Fotufilm controls -->
+    <string name="ai_denoise_model_title">AI ノイズ除去モデル</string>
+    <string name="ai_denoise_model_description">AI ノイズ除去には SCUNet ノイズ除去モデル（約 47 MB）が必要です。今すぐダウンロードしますか？モデルはアプリ専用の領域に保存されます。</string>
+    <string name="ai_denoise_model_downloading">モデルをダウンロード中… %1$d%%</string>
+    <string name="ai_denoise_model_installing">モデルを検証してインストール中…</string>
+    <string name="ai_denoise_model_failed">モデルのダウンロードまたは検証に失敗しました。接続を確認して再試行してください。</string>
+    <string name="ai_denoise_model_download">ダウンロード</string>
+    <string name="ai_denoise_model_retry">再試行</string>
 </resources>

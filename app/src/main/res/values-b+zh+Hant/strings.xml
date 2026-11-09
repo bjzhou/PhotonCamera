@@ -1441,4 +1441,11 @@
     <string name="fotufilm_value_minutes">%1$s 分鐘</string>
     <string name="fotufilm_value_years">%1$s 年</string>
     <!-- /Fotufilm controls -->
+    <string name="ai_denoise_model_title">AI 降噪模型</string>
+    <string name="ai_denoise_model_description">AI 降噪需要 SCUNet 降噪模型（約 47 MB），是否現在下載？模型僅儲存在應用程式私有目錄中。</string>
+    <string name="ai_denoise_model_downloading">正在下載模型… %1$d%%</string>
+    <string name="ai_denoise_model_installing">正在驗證並安裝模型…</string>
+    <string name="ai_denoise_model_failed">模型下載或驗證失敗，請檢查網路後重試。</string>
+    <string name="ai_denoise_model_download">下載</string>
+    <string name="ai_denoise_model_retry">重試</string>
 </resources>

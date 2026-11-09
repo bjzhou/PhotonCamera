@@ -22,3 +22,5 @@ __pycache__
 .tmp
 /research/*
 /scripts/lut_training/runs
+/scripts/nafnet_denoise_tflite/out
+/scripts/scunet_denoise_tflite/out

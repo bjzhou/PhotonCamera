@@ -1114,4 +1114,11 @@
     <string name="fotufilm_value_years">%1$s ปี</string>
     <!-- /Fotufilm controls -->
     <string name="save_as_preset">บันทึกเป็นพรีเซ็ต</string>
+    <string name="ai_denoise_model_title">โมเดลลดสัญญาณรบกวน AI</string>
+    <string name="ai_denoise_model_description">การลดสัญญาณรบกวนด้วย AI ต้องใช้โมเดล SCUNet (ประมาณ 47 MB) ดาวน์โหลดตอนนี้หรือไม่? โมเดลจะถูกเก็บไว้เป็นส่วนตัวในแอป</string>
+    <string name="ai_denoise_model_downloading">กำลังดาวน์โหลดโมเดล… %1$d%%</string>
+    <string name="ai_denoise_model_installing">กำลังตรวจสอบและติดตั้งโมเดล…</string>
+    <string name="ai_denoise_model_failed">ไม่สามารถดาวน์โหลดหรือตรวจสอบโมเดลได้ โปรดตรวจสอบการเชื่อมต่อแล้วลองอีกครั้ง</string>
+    <string name="ai_denoise_model_download">ดาวน์โหลด</string>
+    <string name="ai_denoise_model_retry">ลองอีกครั้ง</string>
 </resources>

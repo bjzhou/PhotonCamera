@@ -1521,4 +1521,11 @@
     <string name="fotufilm_value_minutes">%1$s min</string>
     <string name="fotufilm_value_years">%1$s yr</string>
     <!-- /Fotufilm controls -->
+    <string name="ai_denoise_model_title">AI Denoise Model</string>
+    <string name="ai_denoise_model_description">AI denoise needs the SCUNet denoise model (about 47 MB). Download it now? It is stored privately by the app.</string>
+    <string name="ai_denoise_model_downloading">Downloading model… %1$d%%</string>
+    <string name="ai_denoise_model_installing">Verifying and installing model…</string>
+    <string name="ai_denoise_model_failed">The model could not be downloaded or verified. Check your connection and try again.</string>
+    <string name="ai_denoise_model_download">Download</string>
+    <string name="ai_denoise_model_retry">Retry</string>
 </resources>
