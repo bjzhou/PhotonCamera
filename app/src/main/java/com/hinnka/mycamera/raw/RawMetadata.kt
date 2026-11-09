@@ -10,6 +10,7 @@ import android.util.Log
 import android.util.Rational
 import com.hinnka.mycamera.camera.readMetadataOrNull
 import com.hinnka.mycamera.camera.readMetadataOrThrow
+import com.hinnka.mycamera.processor.CalibratedRawNoiseProfile
 import com.hinnka.mycamera.processor.RawNoiseModel
 import com.hinnka.mycamera.processor.RawNoiseProfileSelection
 import com.hinnka.mycamera.utils.PLog
@@ -234,6 +235,36 @@ data class RawMetadata(
                 noiseProfileLayout = RawNoiseProfileLayout.NONE,
             )
         }
+    }
+
+    /**
+     * Keeps a usable source noise model; otherwise evaluates [profile] at this capture's ISO
+     * (its lowest compatible ISO when the source reports none).
+     */
+    fun withFallbackNoiseProfile(profile: CalibratedRawNoiseProfile): RawMetadata {
+        if (hasUsableSourceNoiseProfile()) return this
+        val sensitivity = iso.takeIf { it > 0 } ?: profile.minimumCompatibleSensitivity
+        // The fallback must evaluate from ISO alone; a profile that needs camera gain limits
+        // cannot serve as the fallback.
+        val model = checkNotNull(
+            profile.evaluate(
+                sensitivity = sensitivity,
+                minimumSensitivityIso = minimumSensitivityIso,
+                maximumAnalogSensitivityIso = maxAnalogSensitivity,
+            ),
+        ) {
+            "RAW fallback noise profile ${profile.id} did not evaluate: iso=$sensitivity " +
+                "minIso=$minimumSensitivityIso maxAnalogIso=$maxAnalogSensitivity"
+        }
+        PLog.i(
+            TAG,
+            "RAW source has no usable noise model ($noiseProfileLayout); " +
+                "using fallback profile ${profile.id} at iso=$sensitivity",
+        )
+        return copy(
+            channelNoiseProfile = model.canonicalChannelPairs(cfaPattern),
+            noiseProfileLayout = RawNoiseProfileLayout.CANONICAL_BAYER,
+        )
     }
 
     private fun hasUsableSourceNoiseProfile(): Boolean = when (noiseProfileLayout) {

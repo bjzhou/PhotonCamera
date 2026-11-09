@@ -24,7 +24,6 @@ import com.hinnka.mycamera.camera.AspectRatio
 import com.hinnka.mycamera.camera.CameraState
 import com.hinnka.mycamera.camera.RawBlackBorderCrop
 import com.hinnka.mycamera.data.ContentRepository
-import com.hinnka.mycamera.lut.ChromaDenoiseAlgorithm
 import com.hinnka.mycamera.ml.SharedDepthEstimator
 import com.hinnka.mycamera.processor.GlesGpuCompletion
 import com.hinnka.mycamera.processor.GlesGpuScheduler
@@ -1396,8 +1395,6 @@ class RawDemosaicProcessor {
 
     // Fullscreen passes own their shader programs and lifecycle.
     private val fullscreenQuad = RawFullscreenQuad()
-    private val chromaDenoiseAlgorithm = ChromaDenoiseAlgorithm(fullscreenQuad)
-    private val denoiseProfileAlgorithm = DenoiseProfileAlgorithm()
     private val profileGainTableAlgorithm = DngPhotonProfileGainTableAlgorithm()
     private val filmicHighlightReconstructionAlgorithm =
         DarktableFilmicHighlightReconstructionAlgorithm(fullscreenQuad)
@@ -2577,6 +2574,13 @@ class RawDemosaicProcessor {
             )
             PLog.i(TAG, "MGC tuning SNR restored $mgcTuningSnr")
         }
+        // A source left without a usable noise model (no NoiseProfile and no evaluable selected
+        // profile) takes the app's calibrated fallback profile at its own ISO.
+        actualMetadata = actualMetadata?.withFallbackNoiseProfile(
+            ContentRepository.getInstance(context.applicationContext)
+                .rawNoiseProfileManager
+                .fallbackProfile,
+        )
         val captureProfilePass = sceneExposureRequest != null ||
             legacyAutoExposureRequest != null || captureProfilePreparationRequested
         if (!captureProfilePass) {
@@ -3906,22 +3910,7 @@ class RawDemosaicProcessor {
                 globalOriginY = 0,
                 fullImageWidth = actualWidth,
                 fullImageHeight = actualHeight,
-            ) ?: run {
-                val fallbackChromaTextureId = renderDefaultChromaDenoise(
-                    sourceTextureId = demosaicTextureId,
-                    width = actualWidth,
-                    height = actualHeight,
-                    metadata = actualMetadata,
-                    chromaDenoiseValue = chromaDenoiseValue,
-                )
-                renderDenoiseProfilePass(
-                    sourceTextureId = fallbackChromaTextureId,
-                    width = actualWidth,
-                    height = actualHeight,
-                    metadata = actualMetadata,
-                    denoiseValue = denoiseValue,
-                )
-            }
+            )
             // AdobeCurve keeps BaselineExposure for the DNG SDK exposure ramp. HNCS consumes
             // it through ColorCorrectAll's camera-domain inputEV; other linear engines retain
             // the exact post-matrix 2^EV gain.
@@ -4571,22 +4560,7 @@ class RawDemosaicProcessor {
                     globalOriginY = working.top,
                     fullImageWidth = config.fullWidth,
                     fullImageHeight = config.fullHeight,
-                ) ?: run {
-                    val fallbackChromaTextureId = renderDefaultChromaDenoise(
-                        sourceTextureId = demosaicTextureId,
-                        width = workWidth,
-                        height = workHeight,
-                        metadata = config.metadata,
-                        chromaDenoiseValue = config.chromaDenoiseValue,
-                    )
-                    renderDenoiseProfilePass(
-                        sourceTextureId = fallbackChromaTextureId,
-                        width = workWidth,
-                        height = workHeight,
-                        metadata = config.metadata,
-                        denoiseValue = config.denoiseValue,
-                    )
-                }
+                )
                 if (usesGuidedToneUpsample(config.outputGeometry, config.colorEngine)) {
                     val resolution = config.outputGeometry.mgcFinishResolution
                     check(working.left % resolution.processingPeriod == 0 &&
@@ -5431,48 +5405,6 @@ class RawDemosaicProcessor {
         gfHeight = 0
     }
 
-    private fun renderDefaultChromaDenoise(
-        sourceTextureId: Int,
-        width: Int,
-        height: Int,
-        metadata: RawMetadata,
-        chromaDenoiseValue: Float?,
-    ): Int {
-        val strength = DenoiseStrength.clamp(chromaDenoiseValue)
-        if (strength <= 0f || width * height < 2) return sourceTextureId
-        if (linearOutputFramebufferId == 0 || linearOutputTextureId == 0) {
-            PLog.w(TAG, "RAW chroma denoise target is unavailable")
-            return sourceTextureId
-        }
-
-        setupNLMFramebuffers(width, height, setupLegacyAccumulator = false)
-        val profileGain =
-            (metadata.iso / 100f * metadata.postRawSensitivityBoost).coerceAtLeast(1f)
-        val noise = resolveChromaDenoiseNoiseModel(metadata, profileGain)
-        val output = chromaDenoiseAlgorithm.execute(
-            ChromaDenoiseAlgorithm.Input(
-                sourceTextureId = sourceTextureId,
-                guideFramebufferId = gfFboId[0],
-                guideTextureId = gfTexId[0],
-                outputFramebufferId = linearOutputFramebufferId,
-                outputTextureId = linearOutputTextureId,
-                width = width,
-                height = height,
-                strength = strength,
-                cameraRgbInput = true,
-                noiseModel = ChromaDenoiseAlgorithm.NoiseModel(
-                    redSlope = noise.redSlope,
-                    redOffset = noise.redOffset,
-                    greenSlope = noise.greenSlope,
-                    greenOffset = noise.greenOffset,
-                    blueSlope = noise.blueSlope,
-                    blueOffset = noise.blueOffset,
-                ),
-            ),
-        ) ?: return sourceTextureId
-        return output.textureId
-    }
-
     /**
      * Executes the extracted non-AI MGC chroma pyramid and/or Pecan luma stage.
      *
@@ -5493,7 +5425,7 @@ class RawDemosaicProcessor {
         globalOriginY: Int,
         fullImageWidth: Int,
         fullImageHeight: Int,
-    ): Int? {
+    ): Int {
         val lumaStrength = DenoiseStrength.clamp(denoiseValue)
         val chromaStrength = DenoiseStrength.clamp(chromaDenoiseValue)
         val lumaEnabled = lumaStrength > 0f
@@ -5502,20 +5434,20 @@ class RawDemosaicProcessor {
         if (!enabled || width * height < 2) {
             return sourceTextureId
         }
-        if (!MgcFullResolutionDenoise.ensureInitialized(context)) {
-            PLog.w(TAG, "MGC RunFullResolutionDenoise is not initialized")
-            return null
-        }
-        // withMgcRenderTuning() evaluates the source's own noise model (single-frame Camera2
-        // profile, or a merged DNG's output model) at its measured green signal; a merged
-        // capture restores the SNR its merge produced. Without a noise model there is no SNR.
+        // withMgcRenderTuning() evaluates the source's noise model (its own, or the app's
+        // calibrated fallback profile when it carries none) at its measured green signal; a merged capture restores
+        // the SNR its merge produced. MGC is the only RAW denoiser: without an SNR coordinate
+        // the tuning curve cannot be indexed and the source is rendered undenoised.
         val tuningSnr = metadata.mgcDenoiseTuningSnr ?: run {
             PLog.w(
                 TAG,
                 "MGC USER_ADJUSTMENT has no tuning SNR: layout=${metadata.noiseProfileLayout} " +
                     "frames=${metadata.frameCount}",
             )
-            return null
+            return sourceTextureId
+        }
+        check(MgcFullResolutionDenoise.ensureInitialized(context)) {
+            "MGC RunFullResolutionDenoise is not initialized"
         }
         setupNLMFramebuffers(
             width,
@@ -5550,7 +5482,10 @@ class RawDemosaicProcessor {
                 )
                 nativeMs = (System.nanoTime() - nativeStartNs) / 1_000_000L
             }
-            if (!succeeded) return null
+            check(succeeded) {
+                "MGC USER_ADJUSTMENT denoise failed: size=${width}x$height " +
+                    "origin=($globalOriginX,$globalOriginY)"
+            }
             GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, 0)
             denoiseTransfer.upload(gfTexId[0], width, height)
             renderPassthroughToTexture(
@@ -5584,39 +5519,6 @@ class RawDemosaicProcessor {
             // Deletion waits for the queued upload that sources this buffer.
             denoiseTransfer.releaseBuffers()
         }
-    }
-
-    /**
-     * 渲染 darktable denoiseprofile NLM 降噪。
-     *
-     * 管线: 未白平衡 camera RGB → variance-stabilizing transform → NLM accumulate
-     * → inverse transform → 未白平衡 camera RGB (gfFboId[1])。
-     */
-    private fun renderDenoiseProfilePass(
-        sourceTextureId: Int,
-        width: Int,
-        height: Int,
-        metadata: RawMetadata,
-        denoiseValue: Float?,
-    ): Int {
-        val strength = DenoiseStrength.clamp(denoiseValue)
-        if (strength <= 0f || width * height < 2) return sourceTextureId
-        val profileGain =
-            (metadata.iso / 100f * metadata.postRawSensitivityBoost).coerceAtLeast(1f)
-        val (noiseSlope, noiseOffset) =
-            resolveDenoiseProfileNoiseModel(metadata, profileGain)
-        val wb = demosaicCalculationWbGains(metadata)
-        return denoiseProfileAlgorithm.execute(
-            DenoiseProfileAlgorithm.Input(
-                sourceTextureId = sourceTextureId,
-                width = width,
-                height = height,
-                strength = strength,
-                noiseSlope = noiseSlope,
-                noiseOffset = noiseOffset,
-                adaptiveWhiteBalance = floatArrayOf(wb[0], 1f, wb[3]),
-            ),
-        )?.textureId ?: sourceTextureId
     }
 
     private fun renderPassthroughToTexture(
@@ -7937,24 +7839,10 @@ class RawDemosaicProcessor {
         // Photon does not carry MGC's unapplied gain; do not substitute display EV.
         val signal = measuredSignal ?: 0.18f
         val signalElapsedMs = (System.nanoTime() - signalStartNs) / 1_000_000L
-        val noiseModel = when (noiseProfileLayout) {
-            RawNoiseProfileLayout.CAMERA2_CFA ->
-                RawNoiseModel.fromCamera2NoiseProfile(channelNoiseProfile)
-            RawNoiseProfileLayout.CANONICAL_BAYER -> {
-                val shot = FloatArray(4) { channel ->
-                    channelNoiseProfile.getOrElse(channel * 2) { 0f }
-                }
-                val read = FloatArray(4) { channel ->
-                    channelNoiseProfile.getOrElse(channel * 2 + 1) { 0f }
-                }
-                RawNoiseModel.fromCanonicalBayerChannels(shot, read)
-            }
-            RawNoiseProfileLayout.DNG_RGB ->
-                RawNoiseModel.fromDngNoiseProfile(channelNoiseProfile)
-            RawNoiseProfileLayout.NONE -> RawNoiseModel.EMPTY
-        }
-        val shot = noiseModel.normalizedShotNoiseForShader(cfaPattern)
-        val read = noiseModel.normalizedReadNoiseForShader(cfaPattern)
+        // The same model MGC denoise consumes.
+        val noiseModel = MgcFullResolutionDenoise.resolveCanonicalBayerNoise(this)
+        val shot = noiseModel?.shot ?: FloatArray(4)
+        val read = noiseModel?.read ?: FloatArray(4)
         val greenShot = 0.5f * (shot[1] + shot[2])
         val greenRead = 0.5f * (read[1] + read[2])
         val variance = greenShot * signal + greenRead
@@ -7971,6 +7859,7 @@ class RawDemosaicProcessor {
             TAG,
                 "MGC RAW render tuning signal=$signal snr=$snr " +
                     "greenShot=$greenShot greenRead=$greenRead " +
+                    "noiseModel=${if (noiseModel == null) "NONE" else noiseProfileLayout.name} " +
                     "singleFrameDenoise=$needsSingleFrameDenoiseSnr " +
                     "sharpen=$needsSharpenSnr " +
                     "signalSource=${if (measuredSignal != null) "NATIVE_OMP" else "MGC_MISSING_MEAN"} " +
@@ -9424,7 +9313,6 @@ class RawDemosaicProcessor {
         raisrTransfer.release()
         outputPass.release()
         hdrReferencePass.release()
-        chromaDenoiseAlgorithm.release()
         filmicHighlightReconstructionAlgorithm.release()
 
         demosaicNoisePropagationCalibrator.release()
@@ -9439,7 +9327,6 @@ class RawDemosaicProcessor {
         linearUintToFloatPass.release()
         linearFloatToUintPass.release()
         linearRgbExpandPass.release()
-        denoiseProfileAlgorithm.release()
         releaseDenoiseProfileFramebuffers()
 
         if (exportedStackTextureIds.isNotEmpty()) {

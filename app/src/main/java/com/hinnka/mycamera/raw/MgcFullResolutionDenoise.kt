@@ -255,9 +255,12 @@ internal object MgcFullResolutionDenoise {
                 return false
             }
         } else {
-            val resolvedNoise = resolveUserAdjustmentCameraRgbNoise(metadata)
-            if (resolvedNoise == null) {
-                PLog.w(TAG, "MGC denoise skipped: RAW noise profile is unavailable")
+            val resolvedNoise = resolveUserAdjustmentCameraRgbNoise(metadata) ?: run {
+                PLog.e(
+                    TAG,
+                    "MGC denoise rejected missing RAW noise model: " +
+                        "layout=${metadata.noiseProfileLayout}",
+                )
                 return false
             }
             rgbShot = resolvedNoise.shot
@@ -431,29 +434,49 @@ internal object MgcFullResolutionDenoise {
             values.size == 128 && values.all { it.isFinite() && it >= 0f }
         } == true
 
-    internal fun resolveUserAdjustmentCameraRgbNoise(
-        metadata: RawMetadata,
-    ): NormalizedCameraRgbNoise? {
+    /** Canonical (R, G1, G2, B) normalized Bayer noise used by the MGC render tuning. */
+    internal data class CanonicalBayerNoise(
+        val shot: FloatArray,
+        val read: FloatArray,
+    )
+
+    /**
+     * The RAW's noise model in canonical Bayer order, or null when it has no usable one.
+     * RawMetadata.withFallbackNoiseProfile() supplies the app's calibrated fallback profile
+     * before rendering, so a render source always carries a model.
+     */
+    internal fun resolveCanonicalBayerNoise(metadata: RawMetadata): CanonicalBayerNoise? {
         val rawNoise = when (metadata.noiseProfileLayout) {
             RawNoiseProfileLayout.CAMERA2_CFA ->
                 RawNoiseModel.fromCamera2NoiseProfile(metadata.channelNoiseProfile)
             RawNoiseProfileLayout.DNG_RGB ->
                 RawNoiseModel.fromDngNoiseProfile(metadata.channelNoiseProfile)
-            RawNoiseProfileLayout.CANONICAL_BAYER -> {
-                if (metadata.channelNoiseProfile.size < 8) return null
-                RawNoiseModel.fromCanonicalBayerChannels(
-                    shotNoise = FloatArray(4) { metadata.channelNoiseProfile[it * 2] },
-                    readNoise = FloatArray(4) { metadata.channelNoiseProfile[it * 2 + 1] },
-                )
-            }
+            RawNoiseProfileLayout.CANONICAL_BAYER ->
+                if (metadata.channelNoiseProfile.size < 8) {
+                    RawNoiseModel.EMPTY
+                } else {
+                    RawNoiseModel.fromCanonicalBayerChannels(
+                        shotNoise = FloatArray(4) { metadata.channelNoiseProfile[it * 2] },
+                        readNoise = FloatArray(4) { metadata.channelNoiseProfile[it * 2 + 1] },
+                    )
+                }
             RawNoiseProfileLayout.NONE -> RawNoiseModel.EMPTY
         }
-        val bayerShot = rawNoise.normalizedShotNoiseForShader(metadata.cfaPattern)
-        val bayerRead = rawNoise.normalizedReadNoiseForShader(metadata.cfaPattern)
-        if (bayerShot.none { it > 0f } && bayerRead.none { it > 0f }) return null
+        val shot = rawNoise.normalizedShotNoiseForShader(metadata.cfaPattern)
+        val read = rawNoise.normalizedReadNoiseForShader(metadata.cfaPattern)
+        val usable = shot.all { it.isFinite() && it >= 0f } &&
+            read.all { it.isFinite() && it >= 0f } &&
+            (shot.any { it > 0f } || read.any { it > 0f })
+        return if (usable) CanonicalBayerNoise(shot = shot, read = read) else null
+    }
+
+    internal fun resolveUserAdjustmentCameraRgbNoise(
+        metadata: RawMetadata,
+    ): NormalizedCameraRgbNoise? {
+        val bayer = resolveCanonicalBayerNoise(metadata) ?: return null
         return NormalizedCameraRgbNoise(
-            read = RawNoiseModel.bayerNoiseModelToRgb(bayerRead),
-            shot = RawNoiseModel.bayerNoiseModelToRgb(bayerShot),
+            read = RawNoiseModel.bayerNoiseModelToRgb(bayer.read),
+            shot = RawNoiseModel.bayerNoiseModelToRgb(bayer.shot),
         )
     }
 

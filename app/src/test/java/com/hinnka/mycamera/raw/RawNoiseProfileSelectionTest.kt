@@ -253,32 +253,6 @@ class RawNoiseProfileSelectionTest {
     }
 
     @Test
-    fun fiftyMegapixelNlmAccumulatorIsSplitIntoBoundedStripes() {
-        val width = 6144
-        val height = 8192
-        val maxSsboBytes = 128L * 1024L * 1024L
-
-        val capacityRows = DenoiseProfileStripePlanner.capacityRows(
-            imageWidth = width,
-            imageHeight = height,
-            maxShaderStorageBlockBytes = maxSsboBytes,
-        )
-        val stripes = DenoiseProfileStripePlanner.plan(height, capacityRows)
-
-        assertEquals(256, capacityRows)
-        assertEquals(32, stripes.size)
-        assertEquals(
-            24L * 1024L * 1024L,
-            DenoiseProfileStripePlanner.requiredBytes(width, capacityRows),
-        )
-        assertEquals(0, stripes.first().rowOffset)
-        assertEquals(height, stripes.last().rowOffset + stripes.last().rowCount)
-        stripes.zipWithNext().forEach { (left, right) ->
-            assertEquals(left.rowOffset + left.rowCount, right.rowOffset)
-        }
-    }
-
-    @Test
     fun nlmStripeShaderKeepsSamplingInFullImageCoordinates() {
         val shader = DenoiseProfileShaders.FUSED_ACCU + DenoiseProfileShaders.FINISH_V2
 

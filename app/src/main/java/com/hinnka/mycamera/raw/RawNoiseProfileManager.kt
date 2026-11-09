@@ -48,6 +48,10 @@ class RawNoiseProfileManager(context: Context) {
         }
     }
 
+    /** Calibrated profile used for a RAW whose source carries no usable noise model. */
+    val fallbackProfile: CalibratedRawNoiseProfile
+        get() = systemCamera2Selection.fallbackProfile
+
     fun getAvailableProfiles(): List<RawNoiseProfileInfo> =
         (BUILT_IN_PROFILES + customImportManager.getCustomRawNoiseProfiles())
             .distinctBy(RawNoiseProfileInfo::id)
