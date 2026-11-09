@@ -359,6 +359,7 @@ add_library(my-native-lib SHARED
     dcp_parser.cpp
     mgc_denoise_static/mgc_halide_runtime.cpp
     mgc_denoise_static/mgc_denoise_static.cpp
+    mgc_denoise_static/mgc_full_resolution_denoise.cpp
     mgc_denoise_static/mgc_full_resolution_denoise_jni.cpp
     mgc_denoise_static/mgc_spatial_strength_jni.cpp
     raw_float_texture_transfer_jni.cpp

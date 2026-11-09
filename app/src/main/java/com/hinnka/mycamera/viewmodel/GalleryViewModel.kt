@@ -653,8 +653,12 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                 
                 if (!isRawInGallery(photo.id)) {
                     // 非 RAW 照片，先进行一次色度降噪
-                    val lutProcessor = com.hinnka.mycamera.lut.LutImageProcessor()
-                    val chromaDenoised = lutProcessor.applyChromaDenoise(bitmap, strength = 0.8f)
+                    val lutProcessor = com.hinnka.mycamera.lut.LutImageProcessor(context)
+                    val chromaDenoised = lutProcessor.applyChromaDenoise(
+                        bitmap,
+                        strength = 0.8f,
+                        sensorIso = (photo.metadata ?: GalleryManager.loadMetadata(context, photo.id))?.iso,
+                    )
                     lutProcessor.release()
                     if (chromaDenoised !== bitmap) {
                         bitmap.recycle()
@@ -3477,6 +3481,7 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                 val source = photonDenoiseSource(context, photo.id, metadata) ?: return@launch
                 val built = contentRepository.photoProcessor.updatePhotonDenoiseBase(
                     context, photo.id, source, noiseReduction, chromaNoiseReduction,
+                    sensorIso = metadata.iso,
                     onBuild = { _isPhotonDenoising.value = true },
                 )
                 val strengths = noiseReduction to chromaNoiseReduction
@@ -3681,7 +3686,9 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                     val source = photonDenoiseSource(context, photo.id, finalMetadata)
                     if (strengths != null && source != null) {
                         contentRepository.photoProcessor.loadPhotonDenoiseBase(
-                            context, photo.id, source, strengths.first, strengths.second, maxEdge,
+                            context, photo.id, source, strengths.first, strengths.second,
+                            sensorIso = finalMetadata.iso,
+                            maxEdge = maxEdge,
                         )
                     } else {
                         null

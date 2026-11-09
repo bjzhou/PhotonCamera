@@ -415,6 +415,186 @@ internal object MgcFullResolutionDenoise {
         return true
     }
 
+    /**
+     * Denoises linear RGBA16F produced from an ISP-rendered bitmap (white balance 1, 1, 1) with
+     * the [MgcBitmapNoiseModel] calibration for its ISO. Tunings follow the USER_ADJUSTMENT pass; there is no CFA
+     * (no MeasureMoire) and no lens shading. [spatialStrengthQ8] is the bitmap detail map over the
+     * whole image ((full + 3) / 4 Q8 noise scale), or null. The low-frequency chroma branch runs
+     * separately over the whole image ([lowFrequencyChromaBitmap]).
+     */
+    fun denoiseLinearBitmap(
+        rgba16f: ByteBuffer,
+        width: Int,
+        height: Int,
+        globalOriginX: Int,
+        globalOriginY: Int,
+        fullWidth: Int,
+        fullHeight: Int,
+        noiseModel: PreparedYuvNoiseModel,
+        spatialStrengthQ8: ShortArray?,
+        tuningSnr: Float,
+        lumaStrengthScale: Float,
+        chromaStrengthScale: Float,
+    ): Boolean {
+        val finiteLumaScale = DenoiseStrength.clamp(lumaStrengthScale)
+        val finiteChromaScale = DenoiseStrength.clamp(chromaStrengthScale)
+        val lumaEnabled = finiteLumaScale > 0f
+        val chromaEnabled = finiteChromaScale > 0f
+        if (!initialized || !rgba16f.isDirect || width <= 0 || height <= 0 ||
+            (!lumaEnabled && !chromaEnabled)
+        ) {
+            return false
+        }
+        val model = noiseModel
+        check(validPreparedYuvNoise(model) && validCorrelation(model.lumaCorrelation) &&
+            validCorrelation(model.chromaCorrelation)) { "Malformed bitmap MGC noise model" }
+        val strengthWidth = (fullWidth + 3) / 4
+        val strengthHeight = (fullHeight + 3) / 4
+        check(spatialStrengthQ8 == null || spatialStrengthQ8.size == strengthWidth * strengthHeight) {
+            "Bitmap strength map does not cover ${fullWidth}x$fullHeight"
+        }
+        val coreTuning = PhotonCoreImagingTuning
+        val lumaTuning = bitmapLumaTuning(tuningSnr, finiteLumaScale)
+        val chromaTuning = bitmapChromaTuning(tuningSnr, finiteChromaScale)
+        rgba16f.clear()
+        val result = nativeDenoiseRgba16f(
+            rgbaBuffer = rgba16f,
+            width = width,
+            height = height,
+            globalOriginX = globalOriginX,
+            globalOriginY = globalOriginY,
+            fullWidth = fullWidth,
+            fullHeight = fullHeight,
+            inputIsBayer = false,
+            cfaPattern = 0,
+            measureMoireEnabled = false,
+            applyLensShadingInBayerAot = false,
+            lensShading = null,
+            lensWidth = 0,
+            lensHeight = 0,
+            // The prepared YUV model replaces the analytic RGB model in the native bridge.
+            normalizedRgbShot = FloatArray(3),
+            normalizedRgbRead = FloatArray(3),
+            normalizedRgbWhiteBalance = floatArrayOf(1f, 1f, 1f),
+            preparedNormalizedYuvRead = model.normalizedRead,
+            preparedNormalizedLumaShot = model.normalizedLumaShot,
+            preparedNormalizedLumaQuadratic = model.normalizedLumaQuadratic,
+            preparedNormalizedChromaShot = model.normalizedChromaShot,
+            preparedNormalizedChromaQuadratic = model.normalizedChromaQuadratic,
+            lumaCorrelation = model.lumaCorrelation,
+            chromaCorrelation = model.chromaCorrelation,
+            denoiseResponseOffset = coreTuning.denoise.frequencyResponse.responseOffset,
+            denoiseResponseCosineOffset = coreTuning.denoise.frequencyResponse.cosineOffset,
+            spatialStrengthQ8 = spatialStrengthQ8,
+            spatialStrengthWidth = if (spatialStrengthQ8 != null) strengthWidth else 0,
+            spatialStrengthHeight = if (spatialStrengthQ8 != null) strengthHeight else 0,
+            lumaEnabled = lumaEnabled,
+            chromaEnabled = chromaEnabled,
+            lumaStrength = lumaTuning.strength,
+            lumaOutlierDistance = lumaTuning.outlierDistance,
+            lumaRevertFactor = lumaTuning.revertFactor,
+            chromaStrength = chromaTuning.strength,
+            chromaOutlierThreshold = chromaTuning.outlierDistance,
+            diagnosticsEnabled = RawStackRuntimeDebug.mgcFullResolutionDenoiseDiagnosticsEnabled,
+            lowFrequencyLog2Downsample = 0,
+            chromaMedianFilterType = coreTuning.denoise.chromaMedianFilterType,
+        )
+        rgba16f.position(0)
+        if (result != 0) {
+            PLog.e(
+                TAG,
+                "MGC bitmap denoise kernel failed: result=0x${result.toString(16)} " +
+                    "size=${width}x$height origin=($globalOriginX,$globalOriginY)",
+            )
+            return false
+        }
+        PLog.d(
+            TAG,
+            "MGC bitmap denoise complete: size=${width}x$height " +
+                "origin=($globalOriginX,$globalOriginY) full=${fullWidth}x$fullHeight " +
+                "snr=$tuningSnr luma=$lumaEnabled($finiteLumaScale) " +
+                "chroma=$chromaEnabled($finiteChromaScale) " +
+                "lumaStrength=${lumaTuning.strength.contentToString()} " +
+                "chromaStrength=${chromaTuning.strength.contentToString()}",
+        )
+        return true
+    }
+
+    private fun bitmapLumaTuning(tuningSnr: Float, scale: Float): Tuning {
+        val coreTuning = PhotonCoreImagingTuning
+        return applyCoreDenoiseScales(
+            tuning = interpolateTuning(tuningSnr, lumaTuningPoints),
+            globalStrengthScale = scale,
+            strengthLevelScales = coreTuning.denoise.lumaStrengthScale.toFloatArray(),
+            revertLevelScales = coreTuning.denoise.detailReconstructionScale.toFloatArray(),
+            outlierLevelScales = coreTuning.denoise.outlierRejectionScale.toFloatArray(),
+        )
+    }
+
+    private fun bitmapChromaTuning(tuningSnr: Float, scale: Float): Tuning =
+        applyCoreDenoiseScales(
+            tuning = interpolateTuning(tuningSnr, chromaTuningPoints),
+            globalStrengthScale = scale,
+            strengthLevelScales = PhotonCoreImagingTuning.denoise.chromaStrengthScale.toFloatArray(),
+            revertLevelScales = FloatArray(5) { 1f },
+            outlierLevelScales = FloatArray(5) { 1f },
+        )
+
+    /**
+     * GCam's low-frequency chroma branch for a tiled bitmap denoise: [rgba16f] holds the whole
+     * denoised linear image box-downsampled by 2^[log2Downsample] (lowWidth x lowHeight =
+     * ceil(full / 2^L)) and is replaced by the linear RGB correction to upsample bilinearly and
+     * add at full resolution. Uses the same model, chroma tuning and strength map as the tiles.
+     */
+    fun lowFrequencyChromaBitmap(
+        rgba16f: ByteBuffer,
+        lowWidth: Int,
+        lowHeight: Int,
+        fullWidth: Int,
+        fullHeight: Int,
+        log2Downsample: Int,
+        noiseModel: PreparedYuvNoiseModel,
+        spatialStrengthQ8: ShortArray?,
+        tuningSnr: Float,
+        chromaStrengthScale: Float,
+    ): Boolean {
+        val chromaScale = DenoiseStrength.clamp(chromaStrengthScale)
+        if (!initialized || !rgba16f.isDirect || chromaScale <= 0f) return false
+        val chromaTuning = bitmapChromaTuning(tuningSnr, chromaScale)
+        val coreTuning = PhotonCoreImagingTuning
+        rgba16f.clear()
+        val result = nativeLowFrequencyChromaCorrection(
+            rgbaBuffer = rgba16f,
+            lowWidth = lowWidth,
+            lowHeight = lowHeight,
+            fullWidth = fullWidth,
+            fullHeight = fullHeight,
+            log2Downsample = log2Downsample,
+            preparedNormalizedYuvRead = noiseModel.normalizedRead,
+            preparedNormalizedChromaShot = noiseModel.normalizedChromaShot,
+            preparedNormalizedChromaQuadratic = noiseModel.normalizedChromaQuadratic,
+            chromaCorrelation = noiseModel.chromaCorrelation,
+            denoiseResponseOffset = coreTuning.denoise.frequencyResponse.responseOffset,
+            denoiseResponseCosineOffset = coreTuning.denoise.frequencyResponse.cosineOffset,
+            spatialStrengthQ8 = spatialStrengthQ8,
+            spatialStrengthWidth = if (spatialStrengthQ8 != null) (fullWidth + 3) / 4 else 0,
+            spatialStrengthHeight = if (spatialStrengthQ8 != null) (fullHeight + 3) / 4 else 0,
+            chromaStrength = chromaTuning.strength,
+            chromaOutlierThreshold = chromaTuning.outlierDistance,
+            chromaMedianFilterType = coreTuning.denoise.chromaMedianFilterType,
+        )
+        rgba16f.position(0)
+        if (result != 0) {
+            PLog.e(
+                TAG,
+                "MGC bitmap low-frequency chroma failed: result=0x${result.toString(16)} " +
+                    "low=${lowWidth}x$lowHeight full=${fullWidth}x$fullHeight",
+            )
+            return false
+        }
+        return true
+    }
+
     private fun validPreparedYuvNoise(model: PreparedYuvNoiseModel): Boolean =
         validRgbNoise(model.normalizedRead) &&
             model.normalizedLumaShot.isFinite() && model.normalizedLumaShot >= 0f &&
@@ -768,6 +948,27 @@ internal object MgcFullResolutionDenoise {
         }
         return result.sortedBy(TuningPoint::snr)
     }
+
+    private external fun nativeLowFrequencyChromaCorrection(
+        rgbaBuffer: ByteBuffer,
+        lowWidth: Int,
+        lowHeight: Int,
+        fullWidth: Int,
+        fullHeight: Int,
+        log2Downsample: Int,
+        preparedNormalizedYuvRead: FloatArray,
+        preparedNormalizedChromaShot: Float,
+        preparedNormalizedChromaQuadratic: Float,
+        chromaCorrelation: FloatArray,
+        denoiseResponseOffset: Float,
+        denoiseResponseCosineOffset: Float,
+        spatialStrengthQ8: ShortArray?,
+        spatialStrengthWidth: Int,
+        spatialStrengthHeight: Int,
+        chromaStrength: FloatArray,
+        chromaOutlierThreshold: FloatArray,
+        chromaMedianFilterType: Int,
+    ): Int
 
     private external fun nativeDenoiseRgba16f(
         rgbaBuffer: ByteBuffer,
