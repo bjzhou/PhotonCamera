@@ -508,6 +508,9 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
     private val _editAiDenoiseEnabled = MutableStateFlow(false)
     val editAiDenoiseEnabled = _editAiDenoiseEnabled.asStateFlow()
 
+    /** Whether the photo being edited has a saved AI denoised base. */
+    private var aiDenoiseApplied = false
+
     private val _isAiDenoising = MutableStateFlow(false)
     val isAiDenoising = _isAiDenoising.asStateFlow()
 
@@ -640,6 +643,11 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
         _editAiDenoiseEnabled.value = enabled
     }
 
+    /** Puts the switch back to whether a denoised base is saved (after a cancel or failure). */
+    fun revertAiDenoiseEnabled() {
+        _editAiDenoiseEnabled.value = aiDenoiseApplied
+    }
+
     fun applyAiDenoise(photo: MediaData, onComplete: (Boolean) -> Unit) {
         if (_isAiDenoising.value) return
         _isAiDenoising.value = true
@@ -648,7 +656,13 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
         viewModelScope.launch(Dispatchers.IO) {
             val context = getApplication<Application>()
             try {
-                val bitmap = GalleryManager.loadOriginalBitmap(context, photo.id) ?: GalleryManager.loadBitmap(context, photo.uri)
+                // Color noise is reduced before AI denoise (FFDNet keeps large color blotches);
+                // luma noise reduction, if any, runs on the AI output (see buildPhotonDenoiseBase).
+                val inputMetadata = GalleryManager.loadMetadata(context, photo.id)
+                    ?: currentMediaMetadata ?: photo.metadata ?: MediaMetadata()
+                val bitmap = contentRepository.photoProcessor.renderAiDenoiseInput(
+                    context, photo.id, inputMetadata, editChromaNoiseReduction.value
+                ) { GalleryManager.loadBitmap(context, photo.uri) }
                 if (bitmap == null) {
                     _isAiDenoising.value = false
                     withContext(Dispatchers.Main) { onComplete(false) }
@@ -708,6 +722,7 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                     _latestPhoto.value = _latestPhoto.value?.copy(metadata = updatedMetadata)
                 }
                 
+                buildPhotonDenoiseBase(context, photo.id, updatedMetadata)
                 photoRefreshKeys[photo.id] = System.currentTimeMillis()
                 invalidatePreviewCache(photo.id)
                 
@@ -729,6 +744,7 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                 )
 
                 _isAiDenoising.value = false
+                aiDenoiseApplied = true
                 withContext(Dispatchers.Main) { onComplete(true) }
             } catch (e: Exception) {
                 PLog.e(TAG, "Failed to apply AI denoise", e)
@@ -765,6 +781,7 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                     GalleryManager.getBokehFile(context, photo.id).takeIf { it.exists() }?.delete()
                 }
 
+                if (!isRawInGallery(photo.id)) buildPhotonDenoiseBase(context, photo.id, updatedMetadata)
                 GalleryManager.deleteDetailHdrFile(context, photo.id)
                 if (updatedMetadata.manualHdrEffectEnabled) {
                     GalleryManager.queueDetailHdrCacheBuild(
@@ -785,6 +802,7 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                 invalidatePreviewCache(photo.id)
                 photoRefreshKeys[photo.id] = System.currentTimeMillis()
                 _isAiDenoising.value = false
+                aiDenoiseApplied = false
                 withContext(Dispatchers.Main) { onComplete(true) }
             } catch (e: Exception) {
                 PLog.e(TAG, "Failed to reset AI denoise", e)
@@ -1510,7 +1528,8 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
             editStraightenDegrees.value =
                 PostEditGeometry.normalizeStraightenDegrees(m.postStraightenDegrees)
             editMirrorHorizontal.value = m.postMirrorHorizontal
-            _editAiDenoiseEnabled.value = m.hasAiDenoisedBase
+            aiDenoiseApplied = m.hasAiDenoisedBase
+            _editAiDenoiseEnabled.value = aiDenoiseApplied
             restoreCropEditState(photo, m)
 
             // 加载 LUT 配置
@@ -1525,6 +1544,7 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
             editRotationDegrees.value = 0
             editStraightenDegrees.value = 0f
             editMirrorHorizontal.value = false
+            aiDenoiseApplied = false
             _editAiDenoiseEnabled.value = false
             restoreCropEditState(photo, null)
         }
@@ -3502,23 +3522,19 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
      * 入口：只在编辑页降噪滑块松手时调用。RAW 照片的降噪在 RAW 开发中烘焙，不走这里。
      */
     fun refreshPhotonDenoiseBase(photo: MediaData) {
-        if (photo.isVideo || isRawInGallery(photo.id)) return
-        val noiseReduction = editNoiseReduction.value
-        val chromaNoiseReduction = editChromaNoiseReduction.value
+        if (photo.isVideo) return
+        val metadataNow = currentMediaMetadata ?: photo.metadata ?: MediaMetadata()
+        // RAW denoise is baked in RAW development, except on an AI denoised base (a bitmap).
+        if (isRawInGallery(photo.id) && !metadataNow.hasAiDenoisedBase) return
         photonDenoiseBaseJob?.cancel()
         // LAZY 启动保证 photonDenoiseBaseJob 已赋值，被新任务取消的旧任务不会清掉新任务的处理中状态
         val job = viewModelScope.launch(Dispatchers.IO, start = CoroutineStart.LAZY) {
             val context = getApplication<Application>()
             try {
                 val metadata = currentMediaMetadata ?: photo.metadata ?: MediaMetadata()
-                val source = photonDenoiseSource(context, photo.id, metadata) ?: return@launch
-                val built = contentRepository.photoProcessor.updatePhotonDenoiseBase(
-                    context, photo.id, source, noiseReduction, chromaNoiseReduction,
-                    sensorIso = metadata.iso,
-                    onBuild = { _isPhotonDenoising.value = true },
-                )
-                val strengths = noiseReduction to chromaNoiseReduction
-                val strengthsChanged = photonDenoiseEditStrengths.put(photo.id, strengths) != strengths
+                val (built, strengthsChanged) = buildPhotonDenoiseBase(
+                    context, photo.id, metadata, onBuild = { _isPhotonDenoising.value = true }
+                ) ?: return@launch
                 if (built || strengthsChanged) {
                     invalidatePreviewCache(photo.id)
                     photoRefreshKeys[photo.id] = System.currentTimeMillis()
@@ -3534,6 +3550,34 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
         photonDenoiseBaseJob = job
         job.start()
     }
+
+    /**
+     * Builds the Photon denoise base of [photoId]'s current base image at the edit strengths and
+     * records those strengths for the edit preview. With an AI denoised base only luma noise
+     * reduction runs here: color noise was reduced before AI denoise. Returns (built, strengths
+     * changed), or null when there is no source.
+     */
+    private suspend fun buildPhotonDenoiseBase(
+        context: Context,
+        photoId: String,
+        metadata: MediaMetadata,
+        onBuild: () -> Unit = {},
+    ): Pair<Boolean, Boolean>? {
+        val noiseReduction = editNoiseReduction.value
+        val chromaNoiseReduction = editChromaNoiseReduction.value
+        val source = photonDenoiseSource(context, photoId, metadata) ?: return null
+        val built = contentRepository.photoProcessor.updatePhotonDenoiseBase(
+            context, photoId, source, noiseReduction,
+            if (metadata.hasAiDenoisedBase) 0f else chromaNoiseReduction,
+            sensorIso = metadata.iso,
+            onBuild = onBuild,
+        )
+        val strengths = noiseReduction to chromaNoiseReduction
+        return built to (photonDenoiseEditStrengths.put(photoId, strengths) != strengths)
+    }
+
+    /** True when the photo being edited has an AI denoised base. */
+    fun hasAppliedAiDenoise(): Boolean = aiDenoiseApplied
 
     fun invalidatePreviewCache(photoId: String) {
         val snapshot = previewBitmapCache.snapshot()
@@ -3713,13 +3757,17 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
 
                 // 非 RAW 照片的降噪只来自降噪基底（编辑页滑块松手时生成，同 RAW 烘焙的降噪），预览只读取、
                 // 从不跑降噪；没有匹配的基底就不降噪。
-                val photonDenoiseBase = if (bitmap == null && !showOrigin && !isRawPhoto) {
+                val photonDenoiseBase = if (
+                    bitmap == null && !showOrigin && (!isRawPhoto || finalMetadata.hasAiDenoisedBase)
+                ) {
                     // 编辑中按最后一次松手（或进入编辑）时确认的强度读取，拖动中的滑块值不参与。
                     val strengths = if (useGlobalEdit) photonDenoiseEditStrengths[photo.id] else finalNR to finalCNR
                     val source = photonDenoiseSource(context, photo.id, finalMetadata)
                     if (strengths != null && source != null) {
+                        // AI 降噪底图的色噪已在 AI 之前处理，这里只做亮度降噪。
                         contentRepository.photoProcessor.loadPhotonDenoiseBase(
-                            context, photo.id, source, strengths.first, strengths.second,
+                            context, photo.id, source, strengths.first,
+                            if (finalMetadata.hasAiDenoisedBase) 0f else strengths.second,
                             sensorIso = finalMetadata.iso,
                             maxEdge = maxEdge,
                         )

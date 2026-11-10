@@ -25,3 +25,4 @@ __pycache__
 /scripts/nafnet_denoise_tflite/out
 /scripts/scunet_denoise_tflite/out
 /scripts/colorfm_tflite/out
+/scripts/ffdnet_denoise_tflite/out

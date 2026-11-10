@@ -284,7 +284,10 @@ class PhotoProcessor(
         if (source != null && metadata.hasAiDenoisedBase) {
             val aiFile = GalleryManager.getAiDenoiseFile(context, photoId)
             if (aiFile.exists()) {
-                val bitmap = BitmapFactory.decodeFile(aiFile.absolutePath)
+                // Luma noise reduction after AI denoise, as in [processBitmapSource].
+                val bitmap = loadPhotonDenoiseBase(
+                    context, photoId, aiFile, resolveNoiseReduction(metadata, 0f), 0f, metadata.iso
+                ) ?: BitmapFactory.decodeFile(aiFile.absolutePath)
                 if (bitmap != null) {
                     val finalSharpening = metadata.sharpening ?: (if (metadata.isImported) 0f else sharpening)
 
@@ -690,7 +693,8 @@ class PhotoProcessor(
             photoId = photoId,
             source = if (bokehBaked) bokehFile else source,
             noiseReduction = resolveNoiseReduction(metadata, 0f),
-            chromaNoiseReduction = resolveChromaNoiseReduction(metadata, 0f),
+            // With an AI denoised base, color noise was reduced before AI denoise; only luma remains.
+            chromaNoiseReduction = if (metadata.hasAiDenoisedBase) 0f else resolveChromaNoiseReduction(metadata, 0f),
             sensorIso = metadata.iso,
         )
         return processBitmap(
@@ -776,6 +780,94 @@ class PhotoProcessor(
         )
     }
 
+    /** RAW development of [dngPath] to the base image (before bokeh, LUTs, geometry and frame). */
+    private suspend fun developDng(
+        context: Context,
+        dngPath: String,
+        metadata: MediaMetadata,
+        sharpening: Float,
+        noiseReduction: Float,
+        chromaNoiseReduction: Float,
+        onRawMetadata: ((RawMetadata) -> Unit)? = null,
+    ): Bitmap? {
+        val cropRegion = metadata.cropRegion
+        return RawDemosaicProcessor.getInstance().process(
+            context,
+            dngPath,
+            resolveRawAspectRatio(metadata),
+            cropRegion,
+            metadata.rotation,
+            metadata.exposureBias ?: 0f,
+            rawExposureCompensation = metadata.rawExposureCompensation ?: 0f,
+            rawHighlightsAdjustment = metadata.rawHighlightsAdjustment ?: 0f,
+            rawShadowsAdjustment = metadata.rawShadowsAdjustment ?: 0f,
+            rawBlackPointCorrection = metadata.rawBlackPointCorrection ?: 0f,
+            rawWhitePointCorrection = metadata.rawWhitePointCorrection ?: 0f,
+            applyLensShadingCorrection = resolveRawLensShadingCorrectionEnabled(metadata),
+            mgcTuningSnr = RawMgcTuningSnr.read(metadata.customProperties),
+            rawBlackLevelMode = metadata.rawBlackLevelMode,
+            rawCustomBlackLevel = metadata.rawCustomBlackLevel,
+            rawWhiteLevelMode = metadata.rawWhiteLevelMode,
+            rawCustomWhiteLevel = metadata.rawCustomWhiteLevel,
+            sharpeningValue = sharpening,
+            denoiseValue = noiseReduction,
+            chromaDenoiseValue = chromaNoiseReduction,
+            rawDcpId = metadata.rawDcpId,
+            rawEmbeddedDngProfileId = metadata.rawEmbeddedDngProfileId,
+            rawNoiseProfileId = resolveRawNoiseProfileId(metadata),
+            rawHncsProfileId = metadata.rawHncsProfileId,
+            rawHncsRenderIntent = metadata.rawHncsRenderIntent,
+            rawHncsFilmCurveMode = metadata.rawHncsFilmCurveMode,
+            rawRenderingEngine = metadata.rawRenderingEngine,
+            rawToneMappingParameters = metadata.rawToneMappingParameters,
+            rawCfaCorrectionMode = metadata.rawCfaCorrectionMode,
+            rawBlackBorderCrop = metadata.rawBlackBorderCrop,
+            rawOutputScale = RawOutputScaling.read(metadata.customProperties),
+            rawOutputUpscaleMode = metadata.rawOutputUpscaleMode,
+            rawPhysicalOutputSize = RawDigitalZoomResampling.readPhysicalSize(metadata.customProperties),
+            spectralFilmStock = metadata.spectralFilmStock,
+            spectralFilmPrint = metadata.spectralFilmPrint,
+            spectralFilmTuning = SpectralFilmTuning(
+                cDensityGain = metadata.spectralFilmCDensityGain,
+                mDensityGain = metadata.spectralFilmMDensityGain,
+                yDensityGain = metadata.spectralFilmYDensityGain
+            ),
+            fotufilmDocument = FotufilmDocumentStorage.decode(metadata.fotufilmDocument, "photo metadata"),
+            onMetadata = onRawMetadata
+        )
+    }
+
+    /**
+     * The input of AI denoise for [photoId]: the base image with only color noise reduction
+     * ([chromaNoiseReduction]) applied, no luma noise reduction and no sharpening. FFDNet is trained
+     * on white noise and keeps large color blotches as image content, so they are removed first.
+     * RAW photos are developed with the current RAW settings; other photos use the original image
+     * ([loadFallback] when the photo has no original file).
+     */
+    suspend fun renderAiDenoiseInput(
+        context: Context,
+        photoId: String,
+        metadata: MediaMetadata,
+        chromaNoiseReduction: Float,
+        loadFallback: () -> Bitmap?,
+    ): Bitmap? = withContext(Dispatchers.IO) {
+        val chroma = DenoiseStrength.clamp(chromaNoiseReduction)
+        val dngFile = GalleryManager.getDngFile(context, photoId)
+        if (dngFile.exists()) {
+            return@withContext developDng(context, dngFile.absolutePath, metadata, 0f, 0f, chroma)
+        }
+        val original = GalleryManager.loadOriginalBitmap(context, photoId) ?: loadFallback() ?: return@withContext null
+        if (chroma <= 0f) return@withContext original
+        val denoised = try {
+            lutImageProcessor.applyBitmapDenoise(original, 0f, chroma, metadata.iso)
+        } catch (e: Throwable) {
+            original.recycle()
+            throw e
+        }
+        if (denoised !== original) original.recycle()
+        denoised
+    }
+
     /**
      * @param dngPath dng 文件路径
      * @param metadata 照片元数据（包含编辑配置和拍摄信息）
@@ -804,51 +896,9 @@ class PhotoProcessor(
 
         // 1. 应用 LUT
         val colorCorrection = resolveColorCorrection(metadata)
-        val cropRegion = metadata.cropRegion
 
-        val bitmap = RawDemosaicProcessor.getInstance().process(
-            context,
-            dngPath,
-            resolveRawAspectRatio(metadata),
-            cropRegion,
-            metadata.rotation,
-            metadata.exposureBias ?: 0f,
-            rawExposureCompensation = metadata.rawExposureCompensation ?: 0f,
-            rawHighlightsAdjustment = metadata.rawHighlightsAdjustment ?: 0f,
-            rawShadowsAdjustment = metadata.rawShadowsAdjustment ?: 0f,
-            rawBlackPointCorrection = metadata.rawBlackPointCorrection ?: 0f,
-            rawWhitePointCorrection = metadata.rawWhitePointCorrection ?: 0f,
-            applyLensShadingCorrection = resolveRawLensShadingCorrectionEnabled(metadata),
-            mgcTuningSnr = RawMgcTuningSnr.read(metadata.customProperties),
-            rawBlackLevelMode = metadata.rawBlackLevelMode,
-            rawCustomBlackLevel = metadata.rawCustomBlackLevel,
-            rawWhiteLevelMode = metadata.rawWhiteLevelMode,
-            rawCustomWhiteLevel = metadata.rawCustomWhiteLevel,
-            sharpeningValue = finalSharpening,
-            denoiseValue = finalNoiseReduction,
-            chromaDenoiseValue = finalChromaNoiseReduction,
-            rawDcpId = metadata.rawDcpId,
-            rawEmbeddedDngProfileId = metadata.rawEmbeddedDngProfileId,
-            rawNoiseProfileId = resolveRawNoiseProfileId(metadata),
-            rawHncsProfileId = metadata.rawHncsProfileId,
-            rawHncsRenderIntent = metadata.rawHncsRenderIntent,
-            rawHncsFilmCurveMode = metadata.rawHncsFilmCurveMode,
-            rawRenderingEngine = metadata.rawRenderingEngine,
-            rawToneMappingParameters = metadata.rawToneMappingParameters,
-            rawCfaCorrectionMode = metadata.rawCfaCorrectionMode,
-            rawBlackBorderCrop = metadata.rawBlackBorderCrop,
-            rawOutputScale = RawOutputScaling.read(metadata.customProperties),
-            rawOutputUpscaleMode = metadata.rawOutputUpscaleMode,
-            rawPhysicalOutputSize = RawDigitalZoomResampling.readPhysicalSize(metadata.customProperties),
-            spectralFilmStock = metadata.spectralFilmStock,
-            spectralFilmPrint = metadata.spectralFilmPrint,
-            spectralFilmTuning = SpectralFilmTuning(
-                cDensityGain = metadata.spectralFilmCDensityGain,
-                mDensityGain = metadata.spectralFilmMDensityGain,
-                yDensityGain = metadata.spectralFilmYDensityGain
-            ),
-            fotufilmDocument = FotufilmDocumentStorage.decode(metadata.fotufilmDocument, "photo metadata"),
-            onMetadata = onRawMetadata
+        val bitmap = developDng(
+            context, dngPath, metadata, finalSharpening, finalNoiseReduction, finalChromaNoiseReduction, onRawMetadata
         )
 
         result = bitmap?.let {

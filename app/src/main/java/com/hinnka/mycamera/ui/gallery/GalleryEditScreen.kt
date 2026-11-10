@@ -631,7 +631,7 @@ fun GalleryEditScreen(
     val aiDenoiseModelState by remember(context.applicationContext) {
         AiDenoiseModelManager.observe(context)
     }.collectAsState()
-    // AI denoise was switched on while its model is missing; applied once the model is installed.
+    // AI denoise was requested while its model is missing; applied once the model is installed.
     var pendingAiDenoise by remember { mutableStateOf(false) }
     val showAiDenoiseFailure = {
         Toast.makeText(context, context.getString(R.string.ai_denoise_failed), Toast.LENGTH_SHORT).show()
@@ -639,7 +639,7 @@ fun GalleryEditScreen(
     val startAiDenoise = {
         viewModel.applyAiDenoise(photo = currentEditSourcePhoto) { success ->
             if (!success) {
-                viewModel.setAiDenoiseEnabled(false)
+                viewModel.revertAiDenoiseEnabled()
                 showAiDenoiseFailure()
             }
         }
@@ -1788,7 +1788,7 @@ fun GalleryEditScreen(
                                                 } else {
                                                     viewModel.resetAiDenoise(photo = currentEditSourcePhoto) { success ->
                                                         if (!success) {
-                                                            viewModel.setAiDenoiseEnabled(true)
+                                                            viewModel.revertAiDenoiseEnabled()
                                                             showAiDenoiseFailure()
                                                         }
                                                     }
@@ -1848,7 +1848,16 @@ fun GalleryEditScreen(
                                         resetValue = 0f,
                                         onValueChange = { viewModel.setNoiseReduction(it) },
                                         onValueChangeFinished = {
-                                            if (isRaw) {
+                                            if (viewModel.hasAppliedAiDenoise()) {
+                                                // Luma noise reduction runs on the AI output.
+                                                if (isRaw) {
+                                                    viewModel.persistCurrentRawEditMetadata(currentEditSourcePhoto) { success ->
+                                                        if (success) viewModel.refreshPhotonDenoiseBase(currentEditSourcePhoto)
+                                                    }
+                                                } else {
+                                                    viewModel.refreshPhotonDenoiseBase(currentEditSourcePhoto)
+                                                }
+                                            } else if (isRaw) {
                                                 viewModel.persistCurrentRawEditMetadata(currentEditSourcePhoto) { success ->
                                                     if (success) requestRawPreviewRefresh()
                                                 }
@@ -1864,7 +1873,16 @@ fun GalleryEditScreen(
                                         resetValue = 0f,
                                         onValueChange = { viewModel.setChromaNoiseReduction(it) },
                                         onValueChangeFinished = {
-                                            if (isRaw) {
+                                            if (viewModel.hasAppliedAiDenoise()) {
+                                                // Color noise is reduced before AI denoise: run AI denoise again.
+                                                if (isRaw) {
+                                                    viewModel.persistCurrentRawEditMetadata(currentEditSourcePhoto) { success ->
+                                                        if (success) startAiDenoise()
+                                                    }
+                                                } else {
+                                                    startAiDenoise()
+                                                }
+                                            } else if (isRaw) {
                                                 viewModel.persistCurrentRawEditMetadata(currentEditSourcePhoto) { success ->
                                                     if (success) requestRawPreviewRefresh()
                                                 }
@@ -2192,7 +2210,7 @@ fun GalleryEditScreen(
             onDownload = { AiDenoiseModelManager.download(context, aiDenoiseModelSource) },
             onDismiss = {
                 pendingAiDenoise = false
-                viewModel.setAiDenoiseEnabled(false)
+                viewModel.revertAiDenoiseEnabled()
             }
         )
     }
@@ -2750,3 +2768,4 @@ private fun AiColorMatchRow(
         }
     }
 }
+
