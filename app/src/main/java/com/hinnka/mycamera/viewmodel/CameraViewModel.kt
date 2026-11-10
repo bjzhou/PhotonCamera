@@ -44,7 +44,6 @@ import com.hinnka.mycamera.lut.LutConfig
 import com.hinnka.mycamera.lut.LutConverter
 import com.hinnka.mycamera.lut.LutInfo
 import com.hinnka.mycamera.lut.creator.LutGenerator
-import com.hinnka.mycamera.lut.creator.OpenAIApiClient
 import com.hinnka.mycamera.model.CameraPreset
 import com.hinnka.mycamera.model.ColorRecipeParams
 import com.hinnka.mycamera.model.LutSelectorMode
@@ -1546,11 +1545,6 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         .stateIn(viewModelScope, SharingStarted.Eagerly, com.hinnka.mycamera.data.WidgetTheme.FOLLOW_SYSTEM)
 
     // 动态获取可用的 AI 模型列表 (UI 层按需触发刷新)
-    private val _availableOpenAIModels = MutableStateFlow<List<String>>(emptyList())
-    val availableOpenAIModels = _availableOpenAIModels.asStateFlow()
-
-    private val _isFetchingAIModels = MutableStateFlow(false)
-    val isFetchingAIModels = _isFetchingAIModels.asStateFlow()
 
     /** 在 ViewModel 生命周期内订阅设置中的一个字段（含当前值），用于把设置同步到副作用组件。 */
     private fun <T> syncPreference(select: (UserPreferences) -> T, apply: (T) -> Unit) {
@@ -4156,45 +4150,6 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             locationManager.startUpdates()
         } else {
             locationManager.stopUpdates()
-        }
-    }
-
-    fun setUseBuiltInAiService(use: Boolean) {
-        if (use && !isPurchased.value) {
-            showPaymentDialog = true
-            return
-        }
-        userPreferencesRepository.updateAsync { useBuiltInAiService = use }
-    }
-
-    /**
-     * 查询可用的 AI 模型列表
-     */
-    fun fetchAvailableAIModels() {
-        if (_isFetchingAIModels.value) return
-
-        viewModelScope.launch {
-            _isFetchingAIModels.value = true
-
-            try {
-                val context = getApplication<Application>()
-                val client = OpenAIApiClient()
-                client.initialize(context)
-                val result = client.getAvailableModels()
-                result.onSuccess { models ->
-                    _availableOpenAIModels.value = models
-                    // 如果当前选择的模型为空且有可用模型，自动选择第一个
-                    if (userPreferencesRepository.current.openAIModel.isNullOrBlank() && models.isNotEmpty()) {
-                        userPreferencesRepository.updateAsync { openAIModel = models.first() }
-                    }
-                }.onFailure { e ->
-                    PLog.e(TAG, "Failed to fetch AI models", e)
-                }
-            } catch (e: Exception) {
-                PLog.e(TAG, "Error initializing OpenAIApiClient for model fetch", e)
-            } finally {
-                _isFetchingAIModels.value = false
-            }
         }
     }
 

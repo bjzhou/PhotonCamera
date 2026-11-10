@@ -45,16 +45,6 @@ jobs:
       - name: Grant execute permission for gradlew
         run: chmod +x gradlew
 
-      - name: Create local.properties
-        env:
-          BUILT_IN_API_KEY: ${{ secrets.BUILT_IN_API_KEY }}
-          BUILT_IN_API_KEY_GOOGLE: ${{ secrets.BUILT_IN_API_KEY_GOOGLE }}
-        run: |
-          {
-            printf 'BUILT_IN_API_KEY=%s\n' "$BUILT_IN_API_KEY"
-            printf 'BUILT_IN_API_KEY_GOOGLE=%s\n' "$BUILT_IN_API_KEY_GOOGLE"
-          } > local.properties
-
       - name: Decode Keystore
         env:
           RELEASE_KEYSTORE: ${{ secrets.RELEASE_KEYSTORE }}

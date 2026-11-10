@@ -26,7 +26,7 @@ private val Context.dataStore: DataStore<Preferences> by preferencesDataStore(
     name = "user_preferences",
     produceMigrations = { context ->
         listOf(
-            OpenAiApiKeyEncryptionMigration(),
+            RemovedAiServicePreferencesMigration(),
             BuiltInDeviceConfigurationMigration.create(context),
         )
     },

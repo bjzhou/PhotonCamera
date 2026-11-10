@@ -97,6 +97,13 @@
             </LinearLayout>
 
             <TextView
+                android:id="@+id/gallery_photo_score_badge"
+                style="@style/GallerySmallBadge"
+                android:layout_marginStart="0dp"
+                android:layout_marginBottom="0dp"
+                android:visibility="gone" />
+
+            <TextView
                 android:id="@+id/gallery_photo_raw_badge"
                 style="@style/GallerySmallBadge"
                 android:layout_marginStart="4dp"

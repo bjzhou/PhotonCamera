@@ -146,8 +146,6 @@ class UserPreferences internal constructor(
     var ultraHdrGainMapEnabled by bool("auto_enable_hdr_for_hdr_capture", false)
     var phantomMode by bool("phantom_mode", false)
     var widgetTheme by enum("widget_theme", WidgetTheme.FOLLOW_SYSTEM)
-    var openAIBaseUrl by nullableString("openai_base_url")
-    var openAIModel by nullableString("openai_model")
     var referencePhotoUrl by nullableString("reference_photo_url")
     var rawSpectralFilmStock by nullableString("raw_spectral_film_stock")
     var rawSpectralFilmPrint by nullableString("raw_spectral_film_print")
@@ -190,11 +188,11 @@ class UserPreferences internal constructor(
     var phantomPipPreview by bool("phantom_pip_preview", false)
     var mirrorFrontCamera by bool("mirror_front_camera", true)
     var saveLocation by bool("save_location", false)
-    var useBuiltInAiService by bool("use_built_in_ai_service", false)
     var phantomSaveAsNew by bool("phantom_save_as_new", false)
     var defaultVirtualAperture by float("default_virtual_aperture", 0f)  // 默认虚化光圈，0表示关闭
     var useHdrScreenMode by bool("use_hdr_screen_mode", true)
     var deleteExported by bool("delete_exported", true)
+    var showAestheticScores by bool("show_aesthetic_scores", false)
     var enableLogicalMultiCameraDiscovery by bool("enable_logical_multi_camera_discovery", false)  // 是否自动探测逻辑多摄物理镜头绑定
 
     // ---------------------------------------------------------------------------------------
@@ -554,14 +552,6 @@ class UserPreferences internal constructor(
         p[K.PHANTOM_PIP_CROP_RIGHT] = v.right
         p[K.PHANTOM_PIP_CROP_BOTTOM] = v.bottom
     }
-    /** 加密存储；写入空白值删除。 */
-    var openAIApiKey: String? by stored({ p ->
-        p[ENCRYPTED_OPEN_AI_API_KEY_PREFERENCE]?.let { encrypted ->
-            runCatching { openAiApiKeyCipher.decrypt(encrypted) }.getOrNull()
-        }
-    }) { p, v ->
-        p.put(ENCRYPTED_OPEN_AI_API_KEY_PREFERENCE, v?.takeIf { it.isNotBlank() }?.let(openAiApiKeyCipher::encrypt))
-    }
     /** 自定义焦段/倍率，正数为 35mm 等效焦段，负数为精确倍率。 */
     var customFocalLengths: List<Float> by stored({ p ->
         p[K.CUSTOM_FOCAL_LENGTHS]?.split(",")?.filter { it.isNotEmpty() }
@@ -661,8 +651,6 @@ class UserPreferences internal constructor(
         }
     }
 }
-
-internal val openAiApiKeyCipher = OpenAiApiKeyCipher()
 
 // ------------------------------------------------------------------------------------------------
 // 字段委托

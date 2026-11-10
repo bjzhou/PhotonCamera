@@ -85,6 +85,10 @@ import androidx.recyclerview.widget.DiffUtil
 import android.os.Parcelable
 import kotlin.math.abs
 import com.hinnka.mycamera.ui.icons.AppIcons
+import com.hinnka.mycamera.ml.AestheticModelManager
+import com.hinnka.mycamera.ml.HfModelSource
+import com.hinnka.mycamera.ml.HfModelState
+import com.hinnka.mycamera.ui.components.HfModelDownloadDialog
 
 /**
  * 相册浏览界面
@@ -123,6 +127,21 @@ fun GalleryScreen(
     val isBatchOperationRunning = isExporting || isPastingSettings
     val scope = rememberCoroutineScope()
     var shouldRenderGrid by rememberSaveable { mutableStateOf(false) }
+
+    var showAestheticScores by rememberPreference(UserPreferences::showAestheticScores)
+    val aestheticModelState by remember(context.applicationContext) {
+        AestheticModelManager.observe(context)
+    }.collectAsState()
+    // Scores were switched on while the model is missing; they are shown once it is installed.
+    var pendingShowAestheticScores by remember { mutableStateOf(false) }
+    LaunchedEffect(aestheticModelState, pendingShowAestheticScores) {
+        if (aestheticModelState is HfModelState.Ready && pendingShowAestheticScores) {
+            pendingShowAestheticScores = false
+            showAestheticScores = true
+        }
+    }
+    val aestheticScores by viewModel.aestheticScores.collectAsState()
+    val isAestheticScoreVisible = showAestheticScores && aestheticModelState is HfModelState.Ready
 
     BackHandler(enabled = isSelectionMode) {
         if (!isBatchOperationRunning) {
@@ -293,6 +312,19 @@ fun GalleryScreen(
                                 )
                             }
                         } else {
+                            IconButton(onClick = {
+                                when {
+                                    showAestheticScores -> showAestheticScores = false
+                                    AestheticModelManager.isInstalled(context) -> showAestheticScores = true
+                                    else -> pendingShowAestheticScores = true
+                                }
+                            }) {
+                                Icon(
+                                    imageVector = AppIcons.AutoAwesome,
+                                    contentDescription = stringResource(R.string.gallery_aesthetic_score),
+                                    tint = if (isAestheticScoreVisible) AccentColor else Color.White
+                                )
+                            }
                             IconButton(onClick = {
                                 launcher.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageAndVideo))
                             }) {
@@ -613,6 +645,7 @@ fun GalleryScreen(
                     processingPhotos = processingPhotos,
                     isSelectionMode = isSelectionMode,
                     isSelectionEnabled = !isBatchOperationRunning,
+                    aestheticScores = if (isAestheticScoreVisible) aestheticScores else null,
                     isLoadingMore = (selectedTab == GalleryTab.SYSTEM && isSystemLoadingMore) ||
                             (selectedTab == GalleryTab.PHOTON && isPhotonLoadingMore),
                     onPhotoClick = onPhotoClick,
@@ -624,6 +657,19 @@ fun GalleryScreen(
     }
 
     var deleteExportedPref by rememberPreference(UserPreferences::deleteExported)
+
+    if (pendingShowAestheticScores) {
+        var aestheticModelSource by remember { mutableStateOf(HfModelSource.preferred(context)) }
+        HfModelDownloadDialog(
+            title = stringResource(R.string.aesthetic_model_title),
+            description = stringResource(R.string.aesthetic_model_description),
+            state = aestheticModelState,
+            source = aestheticModelSource,
+            onSourceChange = { aestheticModelSource = it },
+            onDownload = { AestheticModelManager.download(context, aestheticModelSource) },
+            onDismiss = { pendingShowAestheticScores = false }
+        )
+    }
 
     // 删除确认对话框
     if (showDeleteDialog) {
@@ -749,6 +795,7 @@ private fun GalleryRecyclerGrid(
     processingPhotos: Map<String, ProcessingPhoto>,
     isSelectionMode: Boolean,
     isSelectionEnabled: Boolean,
+    aestheticScores: Map<String, Float>?,
     isLoadingMore: Boolean,
     onPhotoClick: (GalleryTab, Int) -> Unit,
     onLoadMore: () -> Unit,
@@ -856,6 +903,7 @@ private fun GalleryRecyclerGrid(
                     processingPhotos = processingPhotos,
                     isSelectionMode = isSelectionMode,
                     isSelectionEnabled = isSelectionEnabled,
+                    aestheticScores = aestheticScores,
                     isLoadingMore = isLoadingMore,
                     isLandscape = OrientationObserver.isUiLandscape,
                     rotationDegrees = OrientationObserver.uiRotationDegrees,
@@ -1091,6 +1139,7 @@ private class GalleryRecyclerAdapter : RecyclerView.Adapter<RecyclerView.ViewHol
     private var processingPhotos: Map<String, ProcessingPhoto> = emptyMap()
     private var isSelectionMode: Boolean = false
     private var isSelectionEnabled: Boolean = true
+    private var aestheticScores: Map<String, Float>? = null
     private var isLoadingMore: Boolean = false
     private var isLandscape: Boolean = false
     private var rotationDegrees: Float = 0f
@@ -1109,6 +1158,7 @@ private class GalleryRecyclerAdapter : RecyclerView.Adapter<RecyclerView.ViewHol
         processingPhotos: Map<String, ProcessingPhoto>,
         isSelectionMode: Boolean,
         isSelectionEnabled: Boolean,
+        aestheticScores: Map<String, Float>?,
         isLoadingMore: Boolean,
         isLandscape: Boolean,
         rotationDegrees: Float,
@@ -1121,6 +1171,7 @@ private class GalleryRecyclerAdapter : RecyclerView.Adapter<RecyclerView.ViewHol
         val oldProcessingPhotos = this.processingPhotos
         val oldIsSelectionMode = this.isSelectionMode
         val oldIsSelectionEnabled = this.isSelectionEnabled
+        val oldAestheticScores = this.aestheticScores
         val oldIsLandscape = this.isLandscape
         val oldRotationDegrees = this.rotationDegrees
 
@@ -1131,6 +1182,7 @@ private class GalleryRecyclerAdapter : RecyclerView.Adapter<RecyclerView.ViewHol
         this.processingPhotos = processingPhotos
         this.isSelectionMode = isSelectionMode
         this.isSelectionEnabled = isSelectionEnabled
+        this.aestheticScores = aestheticScores
         this.isLoadingMore = isLoadingMore
         this.isLandscape = isLandscape
         this.rotationDegrees = rotationDegrees
@@ -1174,8 +1226,11 @@ private class GalleryRecyclerAdapter : RecyclerView.Adapter<RecyclerView.ViewHol
                         val id = oldEntry.photo.id
                         val wasSelected = id in oldSelectedPhotoIds
                         val isSelected = id in selectedPhotoIds
+                        val scoreKey = viewModel.aestheticScoreKey(newEntry.photo)
                         wasSelected == isSelected && oldEntry.photo == newEntry.photo &&
-                            oldProcessingPhotos[id] == processingPhotos[id]
+                            oldProcessingPhotos[id] == processingPhotos[id] &&
+                            (oldAestheticScores == null) == (aestheticScores == null) &&
+                            oldAestheticScores?.get(scoreKey) == aestheticScores?.get(scoreKey)
                     }
 
                     else -> false
@@ -1254,6 +1309,7 @@ private class GalleryRecyclerAdapter : RecyclerView.Adapter<RecyclerView.ViewHol
                     viewModel = model,
                     isSelected = photo.id in selectedPhotoIds,
                     isSelectionMode = isSelectionMode,
+                    aestheticScores = aestheticScores,
                     isLandscape = isLandscape,
                     rotationDegrees = rotationDegrees,
                     scope = scope,
@@ -1318,6 +1374,8 @@ private class GalleryRecyclerAdapter : RecyclerView.Adapter<RecyclerView.ViewHol
     ) : RecyclerView.ViewHolder(view) {
         private var job: Job? = null
         private var processingPhotoId: String? = null
+        // The photo queued for aesthetic scoring by this cell, with the view model that queued it.
+        private var scoringRequest: Pair<MediaData, GalleryViewModel>? = null
 
         fun bind(
             photo: MediaData,
@@ -1325,6 +1383,7 @@ private class GalleryRecyclerAdapter : RecyclerView.Adapter<RecyclerView.ViewHol
             viewModel: GalleryViewModel,
             isSelected: Boolean,
             isSelectionMode: Boolean,
+            aestheticScores: Map<String, Float>?,
             isLandscape: Boolean,
             rotationDegrees: Float,
             scope: CoroutineScope,
@@ -1332,6 +1391,7 @@ private class GalleryRecyclerAdapter : RecyclerView.Adapter<RecyclerView.ViewHol
             onLongClick: () -> Unit
         ) {
             job?.cancel()
+            cancelScoring()
             if (processingPhoto == null && processingPhotoId == photo.id) {
                 viewModel.invalidatePreviewCache(photo.id)
             }
@@ -1348,6 +1408,14 @@ private class GalleryRecyclerAdapter : RecyclerView.Adapter<RecyclerView.ViewHol
                 onLongClick = onLongClick
             )
             view.bindProcessingPreview(processingPhoto)
+            val isScored = aestheticScores != null && photo.isImage && processingPhoto == null
+            view.bindAestheticScore(
+                if (isScored) aestheticScores?.get(viewModel.aestheticScoreKey(photo)) else null
+            )
+            if (isScored) {
+                viewModel.requestAestheticScore(photo)
+                scoringRequest = photo to viewModel
+            }
             if (processingPhoto == null) {
                 job = scope.launch {
                     val bitmap = viewModel.getGridThumbnailBitmap(photo)
@@ -1356,9 +1424,15 @@ private class GalleryRecyclerAdapter : RecyclerView.Adapter<RecyclerView.ViewHol
             }
         }
 
+        private fun cancelScoring() {
+            scoringRequest?.let { (photo, viewModel) -> viewModel.cancelAestheticScore(photo) }
+            scoringRequest = null
+        }
+
         fun recycle() {
             job?.cancel()
             job = null
+            cancelScoring()
             processingPhotoId = null
             view.clearThumbnail()
         }
@@ -1390,6 +1464,7 @@ private class GalleryPhotoItemView(context: Context) : FrameLayout(context) {
     private val rawBadge: TextView
     private val importedBadge: TextView
     private val relatedBadge: View
+    private val scoreBadge: TextView
     private var aspectRatio: Float = 1f
     private var boundPhotoId: String? = null
     private val processingShimmer = ProcessingPhotoShimmerView(context)
@@ -1413,6 +1488,7 @@ private class GalleryPhotoItemView(context: Context) : FrameLayout(context) {
         rawBadge = findViewById(R.id.gallery_photo_raw_badge)
         importedBadge = findViewById(R.id.gallery_photo_imported_badge)
         relatedBadge = findViewById(R.id.gallery_photo_related_badge)
+        scoreBadge = findViewById(R.id.gallery_photo_score_badge)
         contentLayer.addView(processingShimmer, FrameLayout.LayoutParams(
             ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT
         ))
@@ -1482,6 +1558,18 @@ private class GalleryPhotoItemView(context: Context) : FrameLayout(context) {
             requestLayout()
         }
         imageView.setImageBitmap(bitmap)
+    }
+
+    /** Shows [score] tinted by its tier; hidden when null. */
+    fun bindAestheticScore(score: Float?) {
+        if (score == null) {
+            scoreBadge.visibility = GONE
+            return
+        }
+        scoreBadge.text = formatAestheticScore(score)
+        scoreBadge.setTextColor(AestheticTier.of(score).argb)
+        scoreBadge.contentDescription = context.getString(R.string.gallery_aesthetic_score) + " " + scoreBadge.text
+        scoreBadge.visibility = VISIBLE
     }
 
     fun bindProcessingPreview(processingPhoto: ProcessingPhoto?) {

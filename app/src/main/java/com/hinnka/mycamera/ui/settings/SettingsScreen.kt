@@ -144,7 +144,6 @@ import com.hinnka.mycamera.frame.FrameInfo
 import com.hinnka.mycamera.gallery.PhotoSavePath
 import com.hinnka.mycamera.gallery.HeicExportEncoder
 import com.hinnka.mycamera.gallery.Jpeg444ExportEncoder
-import com.hinnka.mycamera.lut.creator.OpenAIApiClient
 import com.hinnka.mycamera.ml.DepthModelDownloadState
 import com.hinnka.mycamera.ml.DepthModelManager
 import com.hinnka.mycamera.ml.HfModelSource
@@ -196,7 +195,6 @@ private enum class SettingsPage {
     PHANTOM,
     INTERFACE,
     CONTENT_MANAGEMENT,
-    AI_SERVICE,
     SYSTEM_CONTROL,
     DATA_MAINTENANCE,
     HELP_ABOUT
@@ -398,11 +396,6 @@ fun SettingsScreen(
     val videoLutId by preferenceValue { it.videoLutId }
     var videoLensLockEnabled by rememberPreference(UserPreferences::videoLensLockEnabled)
     var videoWhiteBalanceLockEnabled by rememberPreference(UserPreferences::videoWhiteBalanceLockEnabled)
-    val openAIApiKey by preferenceValue { it.openAIApiKey }
-    val openAIUrl by preferenceValue { it.openAIBaseUrl }
-    val openAIModel by preferenceValue { it.openAIModel }
-    val availableOpenAIModels by viewModel.availableOpenAIModels.collectAsState()
-    val isFetchingAIModels by viewModel.isFetchingAIModels.collectAsState()
     var phantomSaveAsNew by rememberPreference(UserPreferences::phantomSaveAsNew)
     val phantomFrameId by preferenceValue { it.phantomFrameId }
     val defaultVirtualAperture by preferenceValue { it.defaultVirtualAperture }
@@ -795,8 +788,6 @@ fun SettingsScreen(
 
     // 日志查看器弹窗状态
     var showLogViewerDialog by remember { mutableStateOf(false) }
-    var showCustomAIModelDialog by remember { mutableStateOf(false) }
-    var customAIModelValue by remember { mutableStateOf("") }
     var showGhostPermissionDialog by remember { mutableStateOf(false) }
     var isGhostPermissionFlowActive by remember { mutableStateOf(false) }
     var isCheckingUpdate by remember { mutableStateOf(false) }
@@ -1024,7 +1015,6 @@ fun SettingsScreen(
         SettingsPage.PHANTOM -> stringResource(R.string.phantom)
         SettingsPage.INTERFACE -> stringResource(R.string.settings_section_interface)
         SettingsPage.CONTENT_MANAGEMENT -> stringResource(R.string.settings_section_management)
-        SettingsPage.AI_SERVICE -> stringResource(R.string.ai_service)
         SettingsPage.SYSTEM_CONTROL -> stringResource(R.string.settings_section_system_control)
         SettingsPage.DATA_MAINTENANCE -> stringResource(R.string.settings_section_data_maintenance)
         SettingsPage.HELP_ABOUT -> stringResource(R.string.settings_section_help_about)
@@ -2711,58 +2701,6 @@ fun SettingsScreen(
                     }
                 }
 
-                SettingsPage.AI_SERVICE -> {
-                    // AI 服务设置
-                    SettingsSection(
-                        title = stringResource(R.string.ai_service),
-                        showTitle = false
-                    ) {
-                        TextInputSettingItem(
-                            title = stringResource(R.string.settings_openai_api_key),
-                            description = stringResource(R.string.settings_openai_api_key_desc),
-                            value = openAIApiKey ?: "",
-                            onValueChange = { preferencesRepository.updateAsync { this.openAIApiKey = it } },
-                            isSecret = true,
-                        )
-
-                        HorizontalDivider(
-                            color = Color.White.copy(alpha = 0.1f),
-                            modifier = Modifier.padding(vertical = 8.dp)
-                        )
-
-                        TextInputSettingItem(
-                            title = stringResource(R.string.settings_openai_base_url),
-                            description = stringResource(R.string.settings_openai_base_url_desc),
-                            value = openAIUrl ?: OpenAIApiClient.DEFAULT_API_URL,
-                            onValueChange = { preferencesRepository.updateAsync { this.openAIBaseUrl = it } }
-                        )
-
-                        HorizontalDivider(
-                            color = Color.White.copy(alpha = 0.1f),
-                            modifier = Modifier.padding(vertical = 8.dp)
-                        )
-
-                        val customModelLabel = stringResource(R.string.settings_ai_model_custom)
-                        DropdownSettingItem(
-                            title = stringResource(R.string.settings_ai_model),
-                            description = stringResource(R.string.settings_ai_model_desc),
-                            value = openAIModel ?: OpenAIApiClient.DEFAULT_MODEL,
-                            options = availableOpenAIModels + customModelLabel,
-                            isLoading = isFetchingAIModels,
-                            enabled = !openAIApiKey.isNullOrBlank(),
-                            onExpanded = { viewModel.fetchAvailableAIModels() },
-                            onOptionSelected = {
-                                if (it == customModelLabel) {
-                                    customAIModelValue = openAIModel ?: ""
-                                    showCustomAIModelDialog = true
-                                } else {
-                                    preferencesRepository.updateAsync { this.openAIModel = it }
-                                }
-                            }
-                        )
-                    }
-                }
-
                 SettingsPage.SYSTEM_CONTROL -> {
                     // 系统与控制
                     SettingsSection(
@@ -3099,52 +3037,6 @@ fun SettingsScreen(
         )
     }
 
-    if (showCustomAIModelDialog) {
-        AlertDialog(
-            onDismissRequest = { showCustomAIModelDialog = false },
-            title = { Text(text = stringResource(R.string.settings_ai_model_custom_dialog_title)) },
-            text = {
-                Column {
-                    Text(
-                        text = stringResource(R.string.settings_ai_model_custom_dialog_desc),
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = Color.White.copy(alpha = 0.7f)
-                    )
-                    Spacer(modifier = Modifier.height(16.dp))
-                    androidx.compose.material3.OutlinedTextField(
-                        value = customAIModelValue,
-                        onValueChange = { customAIModelValue = it },
-                        modifier = Modifier.fillMaxWidth(),
-                        singleLine = true,
-                        colors = androidx.compose.material3.OutlinedTextFieldDefaults.colors(
-                            focusedTextColor = Color.White,
-                            unfocusedTextColor = Color.White,
-                            focusedBorderColor = AccentColor,
-                            unfocusedBorderColor = Color.White.copy(alpha = 0.2f)
-                        )
-                    )
-                }
-            },
-            confirmButton = {
-                TextButton(
-                    onClick = {
-                        if (customAIModelValue.isNotBlank()) {
-                            preferencesRepository.updateAsync { this.openAIModel = customAIModelValue.trim() }
-                        }
-                        showCustomAIModelDialog = false
-                    }
-                ) {
-                    Text(stringResource(R.string.confirm))
-                }
-            },
-            dismissButton = {
-                TextButton(onClick = { showCustomAIModelDialog = false }) {
-                    Text(stringResource(R.string.cancel))
-                }
-            }
-        )
-    }
-
     if (showAddIszLensDialog) {
         AddIszLensDialog(
             availableCameras = state.availableCameras,
@@ -3339,18 +3231,6 @@ private fun SettingsCategoryOverview(
                 stringResource(R.string.settings_preset_management)
             ).joinToString(" · "),
             onClick = { onPageSelected(SettingsPage.CONTENT_MANAGEMENT) }
-        )
-
-        SettingsCategoryDivider()
-
-        NavigationSettingItem(
-            title = stringResource(R.string.ai_service),
-            description = listOf(
-                stringResource(R.string.settings_openai_api_key),
-                stringResource(R.string.settings_openai_base_url),
-                stringResource(R.string.settings_ai_model)
-            ).joinToString(" · "),
-            onClick = { onPageSelected(SettingsPage.AI_SERVICE) }
         )
 
         SettingsCategoryDivider()

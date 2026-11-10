@@ -1,21 +1,9 @@
-import java.util.Properties
-
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.android)
     alias(libs.plugins.kotlin.compose)
     alias(libs.plugins.ksp)
 }
-
-val localProperties = Properties().apply {
-    val localPropertiesFile = rootProject.file("local.properties")
-    if (localPropertiesFile.exists()) {
-        localPropertiesFile.inputStream().use { load(it) }
-    }
-}
-
-fun String.toBuildConfigString(): String =
-    "\"${replace("\\", "\\\\").replace("\"", "\\\"")}\""
 
 android {
     namespace = "com.hinnka.mycamera"
@@ -42,17 +30,6 @@ android {
                 targets += "my-native-lib"
             }
         }
-
-        buildConfigField(
-            "String",
-            "BUILT_IN_API_URL",
-            "https://camera-api.hinnka.me/v1".toBuildConfigString()
-        )
-        buildConfigField(
-            "String",
-            "BUILT_IN_API_KEY",
-            localProperties.getProperty("BUILT_IN_API_KEY_GOOGLE", "").toBuildConfigString()
-        )
     }
 
     signingConfigs {
