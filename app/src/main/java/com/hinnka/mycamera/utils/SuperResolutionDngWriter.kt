@@ -1348,13 +1348,15 @@ object SuperResolutionDngWriter {
         }
         val centerH = (dngCx / geometry.sourceWidth).toDouble().coerceIn(0.0, 1.0)
         val centerV = (dngCy / geometry.sourceHeight).toDouble().coerceIn(0.0, 1.0)
-        val parameters = FloatArray(8) { index ->
-            when {
-                index < 6 -> coefficients[index].toFloat()
-                index == 6 -> centerH.toFloat()
-                else -> centerV.toFloat()
-            }
-        }
+        val parameters = DngWarpRectilinear.recordFromSinglePlane(
+            FloatArray(DngWarpRectilinear.SINGLE_PLANE_SIZE) { index ->
+                when {
+                    index < 6 -> coefficients[index].toFloat()
+                    index == 6 -> centerH.toFloat()
+                    else -> centerV.toFloat()
+                }
+            },
+        )
         val cropRight = (geometry.defaultCropLeft + geometry.defaultCropWidth).roundToInt()
         val cropBottom = (geometry.defaultCropTop + geometry.defaultCropHeight).roundToInt()
         if (!DngWarpRectilinear.hasSourceCoverage(

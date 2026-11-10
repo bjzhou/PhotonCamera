@@ -31,6 +31,8 @@
 #include "math_utils.h"
 #include "fixed_raw_calibration.h"
 #include "srgb_color_matrix_policy.h"
+#include "dng_warp_rectilinear.h"
+#include "sony_lens_correction.h"
 
 #ifndef LOG_TAG
 #define LOG_TAG "native-lib"
@@ -2346,6 +2348,7 @@ struct ExifData {
   int subjectLocation[4] = {0, 0, 0, 0};
   int subjectLocationLen = 0;
   int rotation = 0;
+  SonyLensCorrectionTags sonyLensCorrection;
 };
 
 static int sget2(unsigned int ord, LibRaw_abstract_datastream *stream) {
@@ -2674,13 +2677,27 @@ static void parseDngOpcodeList(const std::vector<unsigned char> &data,
     } else if (opcodeStage == 3 && id == 1 && payloadSize >= 68) {
       const unsigned char *payload = data.data() + offset;
       const uint32_t planes = dngOpcodeReadU32(payload);
-      if (planes == 1 && payloadSize == 68) {
-        std::vector<float> warp(8);
+      const uint32_t expectedPayload =
+          4u + planes * kDngWarpRectilinearPlaneCoefficients * 8u + 16u;
+      if ((planes == 1 || planes == kDngWarpRectilinearPlanes) &&
+          payloadSize == expectedPayload) {
+        std::vector<float> warp(kDngWarpRectilinearRecordFloats);
         bool valid = true;
-        for (int i = 0; i < 8; ++i) {
-          const double value = dngOpcodeReadDouble(payload + 4 + i * 8);
+        for (int plane = 0; plane < kDngWarpRectilinearPlanes; ++plane) {
+          // DNG SDK: planes beyond the opcode's plane count reuse its last plane.
+          const uint32_t sourcePlane = std::min<uint32_t>(plane, planes - 1);
+          for (int i = 0; i < kDngWarpRectilinearPlaneCoefficients; ++i) {
+            const double value = dngOpcodeReadDouble(
+                payload + 4 + (sourcePlane * kDngWarpRectilinearPlaneCoefficients + i) * 8);
+            valid = valid && std::isfinite(value);
+            warp[plane * kDngWarpRectilinearPlaneCoefficients + i] = static_cast<float>(value);
+          }
+        }
+        for (int i = 0; i < 2; ++i) {
+          const double value = dngOpcodeReadDouble(
+              payload + 4 + planes * kDngWarpRectilinearPlaneCoefficients * 8 + i * 8);
           valid = valid && std::isfinite(value);
-          warp[i] = static_cast<float>(value);
+          warp[kDngWarpRectilinearCenterOffset + i] = static_cast<float>(value);
         }
         if (valid) {
           info.warpRectilinear.insert(info.warpRectilinear.end(), warp.begin(), warp.end());
@@ -3031,6 +3048,24 @@ static void exif_callback(void *datap, int tag, int type, int len,
       if (count > 0)
         ed->hasNoiseProfile = true;
     }
+  } else if ((actual_tag == kSonyLensCorrectionTagDistortion ||
+              actual_tag == kSonyLensCorrectionTagChromaticAberration ||
+              actual_tag == kSonyLensCorrectionTagVignetting) &&
+             (tag >> 20) != 0 && type == 8 && len > 0 && len <= 64) {
+    // Sony ARW lens correction arrays live in plain TIFF IFDs (SubIFD / SR2SubIFD); the
+    // (ifd + 1) << 20 marker excludes Panasonic and CR3 callbacks that reuse low tag numbers.
+    std::vector<int16_t> *target =
+        actual_tag == kSonyLensCorrectionTagDistortion
+            ? &ed->sonyLensCorrection.distortion
+            : (actual_tag == kSonyLensCorrectionTagChromaticAberration
+                   ? &ed->sonyLensCorrection.chromaticAberration
+                   : &ed->sonyLensCorrection.vignetting);
+    if (target->empty()) {
+      target->resize(len);
+      for (int i = 0; i < len; i++) {
+        (*target)[i] = static_cast<int16_t>(sget2(ord, stream));
+      }
+    }
   } else if (actual_tag == 0x9214 ||
              actual_tag == 0xA214) { // SubjectLocation / SubjectArea
     if (len > 0) {
@@ -3305,6 +3340,39 @@ Java_com_hinnka_mycamera_raw_RawDemosaicProcessor_processDngNative(
     exportedLscArray = buildDngLensShadingArray(
         env, RawProcessor, cfaPattern, left, top, exportedLscWidth,
         exportedLscHeight, exportedLscGrid);
+  }
+  if (!isDngInput &&
+      RawProcessor.imgdata.idata.maker_index == LIBRAW_CAMERAMAKER_Sony) {
+    SonyLensCorrection sonyCorrection;
+    if (decodeSonyLensCorrection(ed.sonyLensCorrection, sonyCorrection)) {
+      std::vector<float> sonyWarp;
+      if (buildSonyWarpRectilinear(sonyCorrection, width, height, sonyWarp)) {
+        dngRawTagInfo.warpRectilinear.insert(dngRawTagInfo.warpRectilinear.end(),
+                                             sonyWarp.begin(), sonyWarp.end());
+        dngRawTagInfo.warpRectilinearFlags.push_back(0);
+      }
+      // Vignetting is a CFA-domain gain like DNG GainMap; LinearRaw/sRAW pixels have no
+      // per-site shading stage in the pipeline.
+      if (!useLinearRawRgb && exportedLscArray == nullptr) {
+        std::vector<float> sonyGainMap;
+        if (buildSonyVignettingGainMap(sonyCorrection, width, height, sonyGainMap,
+                                       exportedLscWidth, exportedLscHeight,
+                                       exportedLscGrid)) {
+          exportedLscArray = env->NewFloatArray(static_cast<jsize>(sonyGainMap.size()));
+          if (exportedLscArray) {
+            env->SetFloatArrayRegion(exportedLscArray, 0,
+                                     static_cast<jsize>(sonyGainMap.size()),
+                                     sonyGainMap.data());
+          }
+        }
+      }
+    } else {
+      LOGI("Sony lens correction: no usable embedded parameters "
+           "(dist=%zu ca=%zu vig=%zu)",
+           ed.sonyLensCorrection.distortion.size(),
+           ed.sonyLensCorrection.chromaticAberration.size(),
+           ed.sonyLensCorrection.vignetting.size());
+    }
   }
   jfloatArray exportedLscGridArray = nullptr;
   if (exportedLscArray) {
@@ -3830,9 +3898,9 @@ Java_com_hinnka_mycamera_raw_RawDemosaicProcessor_processDngNative(
   jfloatArray warpRectilinearArray = nullptr;
   jintArray warpRectilinearFlagsArray = nullptr;
   if (!dngRawTagInfo.warpRectilinear.empty() &&
-      dngRawTagInfo.warpRectilinear.size() % 8 == 0 &&
+      dngRawTagInfo.warpRectilinear.size() % kDngWarpRectilinearRecordFloats == 0 &&
       dngRawTagInfo.warpRectilinearFlags.size() ==
-          dngRawTagInfo.warpRectilinear.size() / 8) {
+          dngRawTagInfo.warpRectilinear.size() / kDngWarpRectilinearRecordFloats) {
     warpRectilinearArray = env->NewFloatArray(dngRawTagInfo.warpRectilinear.size());
     env->SetFloatArrayRegion(warpRectilinearArray, 0,
                              dngRawTagInfo.warpRectilinear.size(),

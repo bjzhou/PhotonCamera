@@ -332,6 +332,7 @@ add_library(my-native-lib SHARED
     fotufilm/fotufilm_jni.cpp
     native_runtime.cpp
     native-lib.cpp
+    sony_lens_correction.cpp
     spektrafilm/spectral_data.cpp
     spektrafilm/spectral_filming.cpp
     spektrafilm/spectral_gamut.cpp

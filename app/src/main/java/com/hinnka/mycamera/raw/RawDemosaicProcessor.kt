@@ -2440,7 +2440,7 @@ class RawDemosaicProcessor {
                 "RAW_CROP_TRACE stage=DNG_READ raw=${dngRawData.width}x${dngRawData.height} " +
                     "activeArray=${dngRawData.activeArray?.contentToString()} " +
                     "defaultCrop=${dngRawData.defaultCrop?.contentToString()} " +
-                    "warpCount=${dngRawData.warpRectilinear?.size?.div(8) ?: 0} " +
+                    "warpCount=${dngRawData.warpRectilinear?.size?.div(DngWarpRectilinear.RECORD_SIZE) ?: 0} " +
                     "warpFlags=${dngRawData.warpRectilinearFlags?.contentToString()}"
             )
             embeddedDngJpegPreview = dngRawData.embeddedPreview
@@ -3302,8 +3302,9 @@ class RawDemosaicProcessor {
                     }
                     ?.let { warps ->
                     var appliedWarpCount = 0
-                    for (offset in warps.indices step 8) {
-                        val parameters = warps.copyOfRange(offset, offset + 8)
+                    for (offset in warps.indices step DngWarpRectilinear.RECORD_SIZE) {
+                        val parameters =
+                            warps.copyOfRange(offset, offset + DngWarpRectilinear.RECORD_SIZE)
                         // dng_opcode_BaseWarpRectilinear::IsNOP skips an identity radial
                         // transform with zero tangential terms. Preserve that Stage 3 behavior.
                         if (isNoOpWarpRectilinear(parameters)) {
@@ -3327,7 +3328,7 @@ class RawDemosaicProcessor {
                         linearOutputFramebufferId = tempFbo
                         appliedWarpCount++
                     }
-                    PLog.d(TAG, "Applied $appliedWarpCount/${warps.size / 8} DNG WarpRectilinear opcode(s) before color conversion")
+                    PLog.d(TAG, "Applied $appliedWarpCount/${warps.size / DngWarpRectilinear.RECORD_SIZE} DNG WarpRectilinear opcode(s) before color conversion")
                 }
             }
 
@@ -5559,10 +5560,8 @@ class RawDemosaicProcessor {
         ) != null
     }
 
-    private fun isNoOpWarpRectilinear(parameters: FloatArray): Boolean {
-        if (parameters.size != 8) return false
-        return parameters[0] == 1f && (1..5).all { index -> parameters[index] == 0f }
-    }
+    private fun isNoOpWarpRectilinear(parameters: FloatArray): Boolean =
+        DngWarpRectilinear.isNoOp(parameters)
 
     private fun filterApplicableWarpRectilinear(
         warps: FloatArray?,
@@ -5572,11 +5571,11 @@ class RawDemosaicProcessor {
         outputSourceBounds: Rect,
     ): FloatArray? {
         if (warps == null || warps.isEmpty()) return null
-        if (warps.size % 8 != 0) {
+        if (warps.size % DngWarpRectilinear.RECORD_SIZE != 0) {
             PLog.w(TAG, "Ignoring malformed DNG WarpRectilinear array size=${warps.size}")
             return null
         }
-        val opcodeCount = warps.size / 8
+        val opcodeCount = warps.size / DngWarpRectilinear.RECORD_SIZE
         if (flags != null && flags.size != opcodeCount) {
             PLog.w(
                 TAG,
@@ -5586,8 +5585,8 @@ class RawDemosaicProcessor {
 
         val applicable = ArrayList<Float>(warps.size)
         for (opcodeIndex in 0 until opcodeCount) {
-            val offset = opcodeIndex * 8
-            val parameters = warps.copyOfRange(offset, offset + 8)
+            val offset = opcodeIndex * DngWarpRectilinear.RECORD_SIZE
+            val parameters = warps.copyOfRange(offset, offset + DngWarpRectilinear.RECORD_SIZE)
             if (isNoOpWarpRectilinear(parameters)) {
                 PLog.d(TAG, "Skipping no-op DNG WarpRectilinear")
                 continue

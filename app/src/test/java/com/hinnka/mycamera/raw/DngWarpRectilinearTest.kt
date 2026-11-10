@@ -6,7 +6,7 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class DngWarpRectilinearTest {
-    private val malformedPhotonSample = floatArrayOf(
+    private val malformedPhotonSample = DngWarpRectilinear.recordFromSinglePlane(floatArrayOf(
         1f,
         0.016676925f,
         0.001357187f,
@@ -15,7 +15,7 @@ class DngWarpRectilinearTest {
         0f,
         0.5009297f,
         0.5010741f,
-    )
+    ))
 
     @Test
     fun optionalWarpThatMapsDefaultCropOutsideRawIsSkipped() {
@@ -38,7 +38,11 @@ class DngWarpRectilinearTest {
 
     @Test
     fun normalizedRadialOffsetKeepsFullDefaultCropInsideSource() {
-        val normalized = malformedPhotonSample.copyOf().also { it[0] = 0.984f }
+        val normalized = malformedPhotonSample.copyOf().also { record ->
+            for (plane in 0 until DngWarpRectilinear.PLANES) {
+                record[plane * DngWarpRectilinear.PLANE_COEFFICIENTS] = 0.984f
+            }
+        }
 
         assertTrue(
             DngWarpRectilinear.hasSourceCoverage(

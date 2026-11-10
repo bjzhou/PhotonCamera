@@ -2,7 +2,11 @@ package com.hinnka.mycamera.raw
 
 import android.opengl.GLES30
 
-/** Applies one DNG WarpRectilinear opcode with the DNG bicubic sampling contract. */
+/**
+ * Applies one DNG WarpRectilinear record ([DngWarpRectilinear.RECORD_SIZE] floats) with the DNG
+ * bicubic sampling contract. Each RGB plane is resampled with its own geometry, which is how
+ * lateral chromatic aberration is corrected; alpha follows the reference (green) plane.
+ */
 internal class RawWarpRectilinearPass(
     private val quad: RawFullscreenQuad,
 ) {
@@ -38,22 +42,34 @@ internal class RawWarpRectilinearPass(
             input.width.toFloat(),
             input.height.toFloat(),
         )
-        GLES30.glUniform4f(
+        val radial = FloatArray(DngWarpRectilinear.PLANES * 4)
+        val tangential = FloatArray(DngWarpRectilinear.PLANES * 2)
+        for (plane in 0 until DngWarpRectilinear.PLANES) {
+            val offset = plane * DngWarpRectilinear.PLANE_COEFFICIENTS
+            for (index in 0 until 4) radial[plane * 4 + index] = input.parameters[offset + index]
+            tangential[plane * 2] = input.parameters[offset + 4]
+            tangential[plane * 2 + 1] = input.parameters[offset + 5]
+        }
+        GLES30.glUniform4fv(
             GLES30.glGetUniformLocation(activeProgram, "uRadial"),
-            input.parameters[0],
-            input.parameters[1],
-            input.parameters[2],
-            input.parameters[3],
+            DngWarpRectilinear.PLANES,
+            radial,
+            0,
         )
-        GLES30.glUniform2f(
+        GLES30.glUniform2fv(
             GLES30.glGetUniformLocation(activeProgram, "uTangential"),
-            input.parameters[4],
-            input.parameters[5],
+            DngWarpRectilinear.PLANES,
+            tangential,
+            0,
         )
         GLES30.glUniform2f(
             GLES30.glGetUniformLocation(activeProgram, "uCenter"),
-            input.parameters[6],
-            input.parameters[7],
+            input.parameters[DngWarpRectilinear.CENTER_OFFSET],
+            input.parameters[DngWarpRectilinear.CENTER_OFFSET + 1],
+        )
+        GLES30.glUniform1i(
+            GLES30.glGetUniformLocation(activeProgram, "uSharedGeometry"),
+            if (DngWarpRectilinear.planesShareGeometry(input.parameters)) 1 else 0,
         )
         quad.draw(activeProgram)
         GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, 0)
@@ -75,7 +91,7 @@ internal class RawWarpRectilinearPass(
     }
 
     companion object {
-        private const val PARAMETER_COUNT = 8
+        private const val PARAMETER_COUNT = DngWarpRectilinear.RECORD_SIZE
 
         val FRAGMENT_SHADER = """
             #version 300 es
@@ -87,9 +103,10 @@ internal class RawWarpRectilinearPass(
 
             uniform sampler2D uSourceTexture;
             uniform vec2 uImageSize;
-            uniform vec4 uRadial;
-            uniform vec2 uTangential;
+            uniform vec4 uRadial[3];
+            uniform vec2 uTangential[3];
             uniform vec2 uCenter;
+            uniform int uSharedGeometry;
 
             float bicubicWeight(float x) {
                 const float A = -0.75;
@@ -118,24 +135,35 @@ internal class RawWarpRectilinearPass(
                 return total / max(totalWeight, 1e-8);
             }
 
-            void main() {
-                vec2 centerPx = uCenter * uImageSize;
-                vec2 dstPx = gl_FragCoord.xy - vec2(0.5);
-                vec2 diff = dstPx - centerPx;
-                vec2 farthest = max(centerPx, uImageSize - centerPx);
-                float normRadius = max(length(farthest), 1.0);
-                vec2 normalized = diff / normRadius;
+            vec2 sourcePixelForPlane(int plane, vec2 centerPx, float normRadius, vec2 normalized) {
+                vec4 radial = uRadial[plane];
+                vec2 tangential = uTangential[plane];
                 float r2 = min(dot(normalized, normalized), 1.0);
-                float ratio = uRadial.x + uRadial.y * r2 +
-                    uRadial.z * r2 * r2 + uRadial.w * r2 * r2 * r2;
+                float ratio = radial.x + radial.y * r2 +
+                    radial.z * r2 * r2 + radial.w * r2 * r2 * r2;
                 float dh = normalized.x;
                 float dv = normalized.y;
                 vec2 tangent = vec2(
-                    uTangential.y * (r2 + 2.0 * dh * dh) + 2.0 * uTangential.x * dh * dv,
-                    uTangential.x * (r2 + 2.0 * dv * dv) + 2.0 * uTangential.y * dh * dv
+                    tangential.y * (r2 + 2.0 * dh * dh) + 2.0 * tangential.x * dh * dv,
+                    tangential.x * (r2 + 2.0 * dv * dv) + 2.0 * tangential.y * dh * dv
                 );
-                vec2 srcPx = centerPx + normRadius * (normalized * ratio + tangent);
-                fragColor = sampleDngBicubic(srcPx);
+                return centerPx + normRadius * (normalized * ratio + tangent);
+            }
+
+            void main() {
+                vec2 centerPx = uCenter * uImageSize;
+                vec2 dstPx = gl_FragCoord.xy - vec2(0.5);
+                vec2 farthest = max(centerPx, uImageSize - centerPx);
+                float normRadius = max(length(farthest), 1.0);
+                vec2 normalized = (dstPx - centerPx) / normRadius;
+                vec4 green = sampleDngBicubic(sourcePixelForPlane(1, centerPx, normRadius, normalized));
+                if (uSharedGeometry != 0) {
+                    fragColor = green;
+                    return;
+                }
+                float red = sampleDngBicubic(sourcePixelForPlane(0, centerPx, normRadius, normalized)).r;
+                float blue = sampleDngBicubic(sourcePixelForPlane(2, centerPx, normRadius, normalized)).b;
+                fragColor = vec4(red, green.g, blue, green.a);
             }
         """.trimIndent()
     }

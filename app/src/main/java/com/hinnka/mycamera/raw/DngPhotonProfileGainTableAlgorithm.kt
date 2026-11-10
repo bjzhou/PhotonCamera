@@ -1522,12 +1522,15 @@ internal class DngPhotonProfileGainTableAlgorithm {
         val interpreter = ensureHdrNetInterpreter(input.context) ?: return null
         val activeWarpParameters = ArrayList<Float>()
         input.warpRectilinear
-            ?.takeIf { it.isNotEmpty() && it.size % 8 == 0 }
+            ?.takeIf { it.isNotEmpty() && it.size % DngWarpRectilinear.RECORD_SIZE == 0 }
             ?.let { warps ->
-                for (offset in warps.indices step 8) {
-                    val parameters = warps.copyOfRange(offset, offset + 8)
+                for (offset in warps.indices step DngWarpRectilinear.RECORD_SIZE) {
+                    val parameters =
+                        warps.copyOfRange(offset, offset + DngWarpRectilinear.RECORD_SIZE)
                     if (input.isNoOpWarp(parameters)) continue
-                    parameters.forEach(activeWarpParameters::add)
+                    // Statistics sample one value per position: use the reference plane.
+                    DngWarpRectilinear.referencePlaneParameters(parameters)
+                        .forEach(activeWarpParameters::add)
                 }
             }
         val inputFloatCount = DngPhotonProfileGainTableGenerator.HDRNET_INPUT_WIDTH *
@@ -1621,7 +1624,7 @@ internal class DngPhotonProfileGainTableAlgorithm {
             )
             GLES31.glUniform1i(
                 GLES31.glGetUniformLocation(hdrNetInputProgram, "uWarpCount"),
-                activeWarpParameters.size / 8,
+                activeWarpParameters.size / DngWarpRectilinear.SINGLE_PLANE_SIZE,
             )
             val dehazeTuning = PhotonCoreImagingTuning.dehaze.normalized()
             val modelInputBuffer = ByteBuffer.allocateDirect(inputByteCount)
@@ -1860,12 +1863,15 @@ internal class DngPhotonProfileGainTableAlgorithm {
         if (gridWidth <= 0 || gridHeight <= 0) return null
         val activeWarpParameters = ArrayList<Float>()
         warpRectilinear
-            ?.takeIf { it.isNotEmpty() && it.size % 8 == 0 }
+            ?.takeIf { it.isNotEmpty() && it.size % DngWarpRectilinear.RECORD_SIZE == 0 }
             ?.let { warps ->
-                for (offset in warps.indices step 8) {
-                    val parameters = warps.copyOfRange(offset, offset + 8)
+                for (offset in warps.indices step DngWarpRectilinear.RECORD_SIZE) {
+                    val parameters =
+                        warps.copyOfRange(offset, offset + DngWarpRectilinear.RECORD_SIZE)
                     if (input.isNoOpWarp(parameters)) continue
-                    parameters.forEach { activeWarpParameters += it }
+                    // Statistics sample one value per position: use the reference plane.
+                    DngWarpRectilinear.referencePlaneParameters(parameters)
+                        .forEach { activeWarpParameters += it }
                 }
         }
 
@@ -1997,7 +2003,7 @@ internal class DngPhotonProfileGainTableAlgorithm {
             )
             GLES31.glUniform1i(
                 GLES31.glGetUniformLocation(cellSamplesProgram, "uWarpCount"),
-                activeWarpParameters.size / 8,
+                activeWarpParameters.size / DngWarpRectilinear.SINGLE_PLANE_SIZE,
             )
             val safeColorCorrectionMatrix = colorCorrectionMatrix.takeIf { matrix ->
                 matrix.size >= 9 && matrix.take(9).all { it.isFinite() }

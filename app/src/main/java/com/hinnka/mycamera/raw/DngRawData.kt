@@ -22,7 +22,7 @@ import java.nio.ByteBuffer
  * @param whitePointXy DNG SDK/LibRaw 相机矩阵与当前 CameraNeutral 解出的白点 xy
  * @param rotation 旋转角度 (0, 90, 180, 270)
  * @param shadowScale DNG ShadowScale，用于 Adobe DefaultBlackRender Auto 的暗部黑点计算
- * @param lensShadingMap Lens Shading Map (LSC) 增益表，null表示无LSC数据
+ * @param lensShadingMap Lens Shading Map (LSC) 增益表（DNG GainMap 或 Sony ARW 内嵌暗角校正），null表示无LSC数据
  * @param lensShadingMapWidth LSC 表宽度
  * @param lensShadingMapHeight LSC 表高度
  * @param lensShadingMapGrid DNG GainMap 参数
@@ -61,7 +61,11 @@ data class DngRawData @Keep constructor(
     val activeArray: IntArray?, // [left, top, right, bottom]
     val defaultCrop: IntArray?, // [left, top, right, bottom] relative to rawData
     val noiseProfile: FloatArray?, // NoiseProfile [S1, O1, S2, O2, ...]
-    val warpRectilinear: FloatArray?, // repeated [k0, k1, k2, k3, t0, t1, centerH, centerV]
+    /**
+     * Repeated DngWarpRectilinear.RECORD_SIZE records: per R/G/B plane [kr0..kr3, kt0, kt1],
+     * then [centerH, centerV]. Sources: DNG OpcodeList3 or Sony ARW embedded lens correction.
+     */
+    val warpRectilinear: FloatArray?,
     val warpRectilinearFlags: IntArray?, // one DNG opcode flags value per warp
     val embeddedPreview: Bitmap? = null,
     /** Embedded source calibration only; null when neither ColorMatrix nor ForwardMatrix is present. */
