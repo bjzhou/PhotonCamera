@@ -9,6 +9,7 @@ import androidx.datastore.preferences.core.floatPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import com.hinnka.mycamera.data.CustomImportManager
+import com.hinnka.mycamera.gallery.GalleryManager
 import com.hinnka.mycamera.mgc.PhotonLookContract
 import com.hinnka.mycamera.model.LegacyColorRecipeMigration
 import com.hinnka.mycamera.model.ColorRecipeParams
@@ -244,11 +245,29 @@ class LutManager(private val context: Context) {
      * @param id LUT ID
      * @return LUT 配置，如果加载失败返回 null
      */
+    private fun loadPhotoColorMatch(id: String, ref: PhotoColorMatch.Ref): LutConfig? {
+        val file = GalleryManager.getAiColorMatchFile(context, ref.photoId, ref.version)
+        if (!file.isFile) {
+            PLog.w(TAG, "AI color match LUT is missing: ${file.absolutePath}")
+            return null
+        }
+        return try {
+            file.inputStream().use { LutParser.parse(it, "") }.takeIf { it.isValid() }?.also { lutCache.put(id, it) }
+        } catch (e: Exception) {
+            PLog.e(TAG, "Failed to load AI color match LUT: $id", e)
+            null
+        }
+    }
+
     fun loadLut(id: String): LutConfig? {
         // 先从缓存查找
         lutCache.get(id)?.let {
             //PLog.d(TAG, "LUT loaded from cache: $id")
             return it
+        }
+
+        PhotoColorMatch.parse(id)?.let { ref ->
+            return loadPhotoColorMatch(id, ref)
         }
 
         // 查找 LUT 信息

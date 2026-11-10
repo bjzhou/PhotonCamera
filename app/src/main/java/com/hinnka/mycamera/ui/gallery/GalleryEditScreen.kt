@@ -1,5 +1,9 @@
 package com.hinnka.mycamera.ui.gallery
 
+import com.hinnka.mycamera.lut.PhotoColorMatch
+import android.net.Uri
+import androidx.activity.result.PickVisualMediaRequest
+import com.hinnka.mycamera.ml.ColorFmModelManager
 import com.hinnka.mycamera.ui.prefs.preferenceValue
 import android.annotation.SuppressLint
 import android.app.Activity
@@ -74,7 +78,7 @@ import com.hinnka.mycamera.ml.DepthModelDownloadState
 import com.hinnka.mycamera.ml.DepthModelManager
 import com.hinnka.mycamera.ml.HfModelSource
 import com.hinnka.mycamera.ml.AiDenoiseModelManager
-import com.hinnka.mycamera.ml.AiDenoiseModelState
+import com.hinnka.mycamera.ml.HfModelState
 import com.hinnka.mycamera.raw.SpectralFilmSelection
 import com.hinnka.mycamera.raw.SpectralFilmTuning
 import com.hinnka.mycamera.raw.DngEmbeddedProfile
@@ -209,6 +213,16 @@ fun GalleryEditScreen(
         contract = ActivityResultContracts.OpenDocument()
     ) { uri ->
         uri?.let { DepthModelManager.importModel(context, it) }
+    }
+    val colorFmModelState by remember(context.applicationContext) {
+        ColorFmModelManager.observe(context)
+    }.collectAsState()
+    val isAiColorMatching by viewModel.isAiColorMatching.collectAsState()
+    var pendingColorMatchReference by remember { mutableStateOf<Uri?>(null) }
+    val colorMatchReferenceLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.PickVisualMedia()
+    ) { uri ->
+        pendingColorMatchReference = uri
     }
 
     LaunchedEffect(depthModelState, pendingVirtualAperture) {
@@ -631,7 +645,7 @@ fun GalleryEditScreen(
         }
     }
     LaunchedEffect(aiDenoiseModelState, pendingAiDenoise) {
-        if (aiDenoiseModelState is AiDenoiseModelState.Ready && pendingAiDenoise) {
+        if (aiDenoiseModelState is HfModelState.Ready && pendingAiDenoise) {
             pendingAiDenoise = false
             startAiDenoise()
         }
@@ -1565,6 +1579,19 @@ fun GalleryEditScreen(
                                                 categoryOrder = categoryOrder,
                                                 modifier = Modifier.fillMaxWidth()
                                             )
+                                            if (!currentPhoto.isVideo) {
+                                                Spacer(modifier = Modifier.height(8.dp))
+                                                AiColorMatchRow(
+                                                    active = PhotoColorMatch.isId(editLutId),
+                                                    enabled = !isAiColorMatching,
+                                                    onPickReference = {
+                                                        colorMatchReferenceLauncher.launch(
+                                                            PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
+                                                        )
+                                                    },
+                                                    onRemove = { viewModel.setEditLut(null) },
+                                                )
+                                            }
 
                                             Spacer(modifier = Modifier.height(8.dp))
                                             LutIntensitySlider(
@@ -2115,9 +2142,50 @@ fun GalleryEditScreen(
         )
     }
 
+    // AI color match: download the model first if needed, then run once it is Ready.
+    LaunchedEffect(pendingColorMatchReference, colorFmModelState) {
+        val reference = pendingColorMatchReference ?: return@LaunchedEffect
+        if (colorFmModelState !is HfModelState.Ready) return@LaunchedEffect
+        pendingColorMatchReference = null
+        val photo = editSourcePhoto ?: return@LaunchedEffect
+        viewModel.applyAiColorMatch(photo, reference) { success ->
+            if (!success) {
+                Toast.makeText(context, R.string.ai_color_match_failed, Toast.LENGTH_SHORT).show()
+            }
+        }
+    }
+    if (pendingColorMatchReference != null && colorFmModelState !is HfModelState.Ready) {
+        var colorFmModelSource by remember { mutableStateOf(HfModelSource.preferred(context)) }
+        HfModelDownloadDialog(
+            title = stringResource(R.string.ai_color_match_model_title),
+            description = stringResource(R.string.ai_color_match_model_description),
+            state = colorFmModelState,
+            source = colorFmModelSource,
+            onSourceChange = { colorFmModelSource = it },
+            onDownload = { ColorFmModelManager.download(context, colorFmModelSource) },
+            onDismiss = { pendingColorMatchReference = null }
+        )
+    }
+    if (isAiColorMatching) {
+        AlertDialog(
+            onDismissRequest = {},
+            title = { Text(stringResource(R.string.ai_color_match_action)) },
+            text = {
+                Column {
+                    LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Text(stringResource(R.string.ai_color_match_progress))
+                }
+            },
+            confirmButton = {}
+        )
+    }
+
     if (pendingAiDenoise) {
         var aiDenoiseModelSource by remember { mutableStateOf(HfModelSource.preferred(context)) }
-        AiDenoiseModelDownloadDialog(
+        HfModelDownloadDialog(
+            title = stringResource(R.string.ai_denoise_model_title),
+            description = stringResource(R.string.ai_denoise_model_description),
             state = aiDenoiseModelState,
             source = aiDenoiseModelSource,
             onSourceChange = { aiDenoiseModelSource = it },
@@ -2638,5 +2706,47 @@ private fun VideoEditPlayer(
         )
     } else {
         Spacer(modifier = modifier.fillMaxSize())
+    }
+}
+
+/**
+ * AI color match for the photo being edited. The match is this photo's own filter (not in the
+ * filter library): when [active] it can be re-run with another reference or removed.
+ */
+@Composable
+private fun AiColorMatchRow(
+    active: Boolean,
+    enabled: Boolean,
+    onPickReference: () -> Unit,
+    onRemove: () -> Unit,
+) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(12.dp))
+            .background(Color.White.copy(alpha = if (active) 0.12f else 0.06f))
+            .padding(horizontal = 12.dp, vertical = 10.dp)
+    ) {
+        Text(
+            text = stringResource(if (active) R.string.ai_color_match_active else R.string.ai_color_match_action),
+            color = if (active) AccentColor else Color.White,
+            style = MaterialTheme.typography.titleSmall
+        )
+        Text(
+            text = stringResource(R.string.ai_color_match_hint),
+            color = Color.White.copy(alpha = 0.6f),
+            style = MaterialTheme.typography.bodySmall
+        )
+        Spacer(modifier = Modifier.height(8.dp))
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            OutlinedButton(onClick = onPickReference, enabled = enabled) {
+                Text(stringResource(if (active) R.string.ai_color_match_change else R.string.ai_color_match_pick))
+            }
+            if (active) {
+                TextButton(onClick = onRemove, enabled = enabled) {
+                    Text(stringResource(R.string.ai_color_match_remove), color = Color.White)
+                }
+            }
+        }
     }
 }

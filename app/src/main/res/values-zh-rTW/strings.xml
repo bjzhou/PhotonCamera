@@ -1443,11 +1443,21 @@
     <!-- /Fotufilm controls -->
     <string name="ai_denoise_model_title">AI 降噪模型</string>
     <string name="ai_denoise_model_description">AI 降噪需要 SCUNet 降噪模型（約 47 MB），是否現在下載？模型僅儲存在應用程式私有目錄中。</string>
-    <string name="ai_denoise_model_downloading">正在下載模型… %1$d%%</string>
-    <string name="ai_denoise_model_installing">正在驗證並安裝模型…</string>
-    <string name="ai_denoise_model_failed">模型下載或驗證失敗，請檢查網路後重試。</string>
-    <string name="ai_denoise_model_download">下載</string>
-    <string name="ai_denoise_model_retry">重試</string>
+    <string name="hf_model_downloading">正在下載模型… %1$d%%</string>
+    <string name="hf_model_installing">正在驗證並安裝模型…</string>
+    <string name="hf_model_failed">模型下載或驗證失敗，請檢查網路後重試。</string>
+    <string name="hf_model_download">下載</string>
+    <string name="hf_model_retry">重試</string>
     <string name="model_download_source">下載來源</string>
     <string name="model_download_source_mirror">HF 鏡像站（hf-mirror.com）</string>
+    <string name="ai_color_match_action">AI 仿色</string>
+    <string name="ai_color_match_active">AI 仿色（僅此張照片）</string>
+    <string name="ai_color_match_hint">參考一張圖片的色調為此張照片調色，結果只用於這張照片，不會加入濾鏡庫。</string>
+    <string name="ai_color_match_pick">選擇參考圖</string>
+    <string name="ai_color_match_change">更換參考圖</string>
+    <string name="ai_color_match_remove">移除</string>
+    <string name="ai_color_match_progress">正在仿色…</string>
+    <string name="ai_color_match_failed">AI 仿色失敗，請換一張參考圖再試。</string>
+    <string name="ai_color_match_model_title">AI 仿色模型</string>
+    <string name="ai_color_match_model_description">AI 仿色需要 ColorFM 模型（約 62 MB）。現在下載嗎？模型將儲存在 App 的私人目錄中。模型權重僅限非商業用途（CC BY-NC 4.0）。</string>
 </resources>

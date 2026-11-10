@@ -1523,12 +1523,22 @@
     <!-- /Fotufilm controls -->
     <string name="ai_denoise_model_title">AI Denoise Model</string>
     <string name="ai_denoise_model_description">AI denoise needs the SCUNet denoise model (about 47 MB). Download it now? It is stored privately by the app.</string>
-    <string name="ai_denoise_model_downloading">Downloading model… %1$d%%</string>
-    <string name="ai_denoise_model_installing">Verifying and installing model…</string>
-    <string name="ai_denoise_model_failed">The model could not be downloaded or verified. Check your connection and try again.</string>
-    <string name="ai_denoise_model_download">Download</string>
-    <string name="ai_denoise_model_retry">Retry</string>
+    <string name="hf_model_downloading">Downloading model… %1$d%%</string>
+    <string name="hf_model_installing">Verifying and installing model…</string>
+    <string name="hf_model_failed">The model could not be downloaded or verified. Check your connection and try again.</string>
+    <string name="hf_model_download">Download</string>
+    <string name="hf_model_retry">Retry</string>
     <string name="model_download_source">Download source</string>
     <string name="model_download_source_hugging_face" translatable="false">Hugging Face</string>
     <string name="model_download_source_mirror">HF Mirror (hf-mirror.com)</string>
+    <string name="ai_color_match_action">AI color match</string>
+    <string name="ai_color_match_active">AI color match · this photo only</string>
+    <string name="ai_color_match_hint">Matches this photo\'s colors to a reference image. The result applies to this photo only and is not added to the filter library.</string>
+    <string name="ai_color_match_pick">Choose reference</string>
+    <string name="ai_color_match_change">Change reference</string>
+    <string name="ai_color_match_remove">Remove</string>
+    <string name="ai_color_match_progress">Matching colors…</string>
+    <string name="ai_color_match_failed">AI color match failed. Try another reference image.</string>
+    <string name="ai_color_match_model_title">AI Color Match Model</string>
+    <string name="ai_color_match_model_description">AI color match needs the ColorFM model (about 62 MB). Download it now? It is stored privately by the app. The model weights are licensed for non-commercial use only (CC BY-NC 4.0).</string>
 </resources>

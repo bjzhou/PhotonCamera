@@ -1320,11 +1320,21 @@
     <!-- /Fotufilm controls -->
     <string name="ai_denoise_model_title">AI ノイズ除去モデル</string>
     <string name="ai_denoise_model_description">AI ノイズ除去には SCUNet ノイズ除去モデル（約 47 MB）が必要です。今すぐダウンロードしますか？モデルはアプリ専用の領域に保存されます。</string>
-    <string name="ai_denoise_model_downloading">モデルをダウンロード中… %1$d%%</string>
-    <string name="ai_denoise_model_installing">モデルを検証してインストール中…</string>
-    <string name="ai_denoise_model_failed">モデルのダウンロードまたは検証に失敗しました。接続を確認して再試行してください。</string>
-    <string name="ai_denoise_model_download">ダウンロード</string>
-    <string name="ai_denoise_model_retry">再試行</string>
+    <string name="hf_model_downloading">モデルをダウンロード中… %1$d%%</string>
+    <string name="hf_model_installing">モデルを検証してインストール中…</string>
+    <string name="hf_model_failed">モデルのダウンロードまたは検証に失敗しました。接続を確認して再試行してください。</string>
+    <string name="hf_model_download">ダウンロード</string>
+    <string name="hf_model_retry">再試行</string>
     <string name="model_download_source">ダウンロード元</string>
     <string name="model_download_source_mirror">HF ミラー（hf-mirror.com）</string>
+    <string name="ai_color_match_action">AI カラーマッチ</string>
+    <string name="ai_color_match_active">AI カラーマッチ（この写真のみ）</string>
+    <string name="ai_color_match_hint">参照画像の色調にこの写真を合わせます。結果はこの写真だけに適用され、フィルターライブラリには追加されません。</string>
+    <string name="ai_color_match_pick">参照画像を選択</string>
+    <string name="ai_color_match_change">参照画像を変更</string>
+    <string name="ai_color_match_remove">削除</string>
+    <string name="ai_color_match_progress">カラーマッチ中…</string>
+    <string name="ai_color_match_failed">AI カラーマッチに失敗しました。別の参照画像でお試しください。</string>
+    <string name="ai_color_match_model_title">AI カラーマッチモデル</string>
+    <string name="ai_color_match_model_description">AI カラーマッチには ColorFM モデル（約 62 MB）が必要です。今すぐダウンロードしますか？モデルはアプリ内の非公開領域に保存されます。モデルの重みは非商用利用に限られます（CC BY-NC 4.0）。</string>
 </resources>

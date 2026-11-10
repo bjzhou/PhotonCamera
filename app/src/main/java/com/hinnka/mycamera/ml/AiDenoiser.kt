@@ -122,7 +122,7 @@ object AiDenoiser {
                 cacheName = "scunet_color_25_fp16",
                 modelAssetName = file.name,
                 modelSizeBytes = file.length().toInt(),
-                modelFingerprint = AiDenoiseModelManager.MODEL_SHA256,
+                modelFingerprint = AiDenoiseModelManager.sha256,
             )
             // FP16 is safe: LayerNorm is pre-scaled so its variance stays within FP16 range.
             val gpu = LiteRtGpuModel.fromFile(

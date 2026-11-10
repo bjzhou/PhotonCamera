@@ -1116,11 +1116,21 @@
     <string name="save_as_preset">บันทึกเป็นพรีเซ็ต</string>
     <string name="ai_denoise_model_title">โมเดลลดสัญญาณรบกวน AI</string>
     <string name="ai_denoise_model_description">การลดสัญญาณรบกวนด้วย AI ต้องใช้โมเดล SCUNet (ประมาณ 47 MB) ดาวน์โหลดตอนนี้หรือไม่? โมเดลจะถูกเก็บไว้เป็นส่วนตัวในแอป</string>
-    <string name="ai_denoise_model_downloading">กำลังดาวน์โหลดโมเดล… %1$d%%</string>
-    <string name="ai_denoise_model_installing">กำลังตรวจสอบและติดตั้งโมเดล…</string>
-    <string name="ai_denoise_model_failed">ไม่สามารถดาวน์โหลดหรือตรวจสอบโมเดลได้ โปรดตรวจสอบการเชื่อมต่อแล้วลองอีกครั้ง</string>
-    <string name="ai_denoise_model_download">ดาวน์โหลด</string>
-    <string name="ai_denoise_model_retry">ลองอีกครั้ง</string>
+    <string name="hf_model_downloading">กำลังดาวน์โหลดโมเดล… %1$d%%</string>
+    <string name="hf_model_installing">กำลังตรวจสอบและติดตั้งโมเดล…</string>
+    <string name="hf_model_failed">ไม่สามารถดาวน์โหลดหรือตรวจสอบโมเดลได้ โปรดตรวจสอบการเชื่อมต่อแล้วลองอีกครั้ง</string>
+    <string name="hf_model_download">ดาวน์โหลด</string>
+    <string name="hf_model_retry">ลองอีกครั้ง</string>
     <string name="model_download_source">แหล่งดาวน์โหลด</string>
     <string name="model_download_source_mirror">มิเรอร์ HF (hf-mirror.com)</string>
+    <string name="ai_color_match_action">จับคู่สีด้วย AI</string>
+    <string name="ai_color_match_active">จับคู่สีด้วย AI · เฉพาะภาพนี้</string>
+    <string name="ai_color_match_hint">ปรับสีภาพนี้ให้เข้ากับภาพอ้างอิง ผลลัพธ์ใช้กับภาพนี้เท่านั้นและไม่ถูกเพิ่มลงในคลังฟิลเตอร์</string>
+    <string name="ai_color_match_pick">เลือกภาพอ้างอิง</string>
+    <string name="ai_color_match_change">เปลี่ยนภาพอ้างอิง</string>
+    <string name="ai_color_match_remove">ลบ</string>
+    <string name="ai_color_match_progress">กำลังจับคู่สี…</string>
+    <string name="ai_color_match_failed">จับคู่สีด้วย AI ไม่สำเร็จ ลองใช้ภาพอ้างอิงอื่น</string>
+    <string name="ai_color_match_model_title">โมเดลจับคู่สีด้วย AI</string>
+    <string name="ai_color_match_model_description">การจับคู่สีด้วย AI ต้องใช้โมเดล ColorFM (ประมาณ 62 MB) ดาวน์โหลดตอนนี้ไหม? โมเดลจะถูกเก็บไว้เป็นส่วนตัวในแอป น้ำหนักโมเดลอนุญาตเฉพาะการใช้งานที่ไม่ใช่เชิงพาณิชย์ (CC BY-NC 4.0)</string>
 </resources>

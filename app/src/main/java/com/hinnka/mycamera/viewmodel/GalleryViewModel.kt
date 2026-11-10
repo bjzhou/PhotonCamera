@@ -1,5 +1,6 @@
 package com.hinnka.mycamera.viewmodel
 
+import com.hinnka.mycamera.lut.PhotoColorMatch
 import android.app.Application
 import android.content.Context
 import android.content.Intent
@@ -112,6 +113,9 @@ private data class CopiedEditSettings(
 class GalleryViewModel(application: Application) : AndroidViewModel(application) {
 
     companion object {
+        /** Long edge the content and reference are decoded at before the 256 x 256 resize. */
+        private const val AI_COLOR_MATCH_MAX_EDGE = 2048
+
         private const val TAG = "GalleryViewModel"
         private const val FULL_QUALITY_PREVIEW_MAX_EDGE = 4096
         private const val HDR_DETAIL_MAX_BITMAP_BYTES = 80L * 1024L * 1024L
@@ -2437,6 +2441,54 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
     /**
      * 设置 LUT
      */
+    private val _isAiColorMatching = MutableStateFlow(false)
+    val isAiColorMatching = _isAiColorMatching.asStateFlow()
+
+    /**
+     * Matches the photo's colors to [referenceUri] with [com.hinnka.mycamera.ml.AiColorMatcher] and
+     * selects the result as this photo's filter. The LUT belongs to the photo only
+     * ([PhotoColorMatch]); it is stored in the photo's directory, not in the filter library.
+     */
+    fun applyAiColorMatch(photo: MediaData, referenceUri: Uri, onComplete: (Boolean) -> Unit) {
+        if (_isAiColorMatching.value) return
+        _isAiColorMatching.value = true
+        viewModelScope.launch {
+            val lutId = withContext(Dispatchers.IO) {
+                val context = getApplication<Application>()
+                var content: Bitmap? = null
+                var reference: Bitmap? = null
+                try {
+                    content = GalleryManager.loadOriginalBitmap(context, photo.id, AI_COLOR_MATCH_MAX_EDGE)
+                        ?: GalleryManager.loadBitmap(context, photo.uri, AI_COLOR_MATCH_MAX_EDGE)
+                        ?: error("Failed to load photo ${photo.id}")
+                    reference = GalleryManager.loadBitmap(context, referenceUri, AI_COLOR_MATCH_MAX_EDGE)
+                        ?: error("Failed to load reference image")
+                    val cube = com.hinnka.mycamera.ml.AiColorMatcher.createCube(context, content, reference, "AI color match")
+                    val version = System.currentTimeMillis()
+                    val file = GalleryManager.getAiColorMatchFile(context, photo.id, version)
+                    val converted = FileOutputStream(file).use { output ->
+                        com.hinnka.mycamera.lut.LutConverter.convertCubeToplut(cube.byteInputStream(), output)
+                    }
+                    check(converted) { "Failed to convert AI color match LUT" }
+                    // Keep the match the saved metadata still refers to until the edit is saved.
+                    val savedVersion = PhotoColorMatch.parse(GalleryManager.loadMetadata(context, photo.id)?.lutId)
+                        ?.takeIf { it.photoId == photo.id }?.version
+                    GalleryManager.deleteAiColorMatchFiles(context, photo.id, setOfNotNull(version, savedVersion))
+                    PhotoColorMatch.lutId(photo.id, version)
+                } catch (e: Exception) {
+                    PLog.e(TAG, "AI color match failed", e)
+                    null
+                } finally {
+                    content?.recycle()
+                    reference?.recycle()
+                }
+            }
+            _isAiColorMatching.value = false
+            if (lutId != null) setEditLut(lutId)
+            onComplete(lutId != null)
+        }
+    }
+
     fun setEditLut(lutId: String?) {
         if (lutId != null && getCurrentPhoto()?.isVideo == true &&
             (editVideoSourceProfile == null || selectableEditLuts.none { it.id == lutId })
@@ -2552,7 +2604,7 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
         val sourceIsRaw = getCurrentPhoto()?.let(::isRawMedia) == true
         copiedEditSettings = CopiedEditSettings(
             metadata = MediaMetadata(
-                lutId = editLutId.value,
+                lutId = PhotoColorMatch.transferable(editLutId.value),
                 colorRecipeParams = (editPhotoRecipeParams.value ?: editLutRecipeParams.value)
                     .deepCopy(),
                 sharpening = editSharpening.value.takeUnless { sourceIsRaw },
@@ -2587,7 +2639,7 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
         val sourceIsRaw = sourcePhoto?.let(::isRawMedia) == true
         val effectiveRecipe = editPhotoRecipeParams.value ?: editLutRecipeParams.value
         val lookPreset = base.copy(
-            lutId = CameraPreset.normalizeLutId(editLutId.value),
+            lutId = CameraPreset.normalizeLutId(PhotoColorMatch.transferable(editLutId.value)),
             colorRecipe = effectiveRecipe.withoutIndependentEffects(),
             effects = effectiveRecipe.toEffectParams(),
             frameId = editFrameId.value,
@@ -2709,7 +2761,7 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
 
                 copiedEditSettings = CopiedEditSettings(
                     metadata = MediaMetadata(
-                        lutId = metadata.lutId,
+                        lutId = PhotoColorMatch.transferable(metadata.lutId),
                         colorRecipeParams = effectiveRecipe?.deepCopy(),
                         sharpening = metadata.sharpening.takeUnless { sourceIsRaw },
                         noiseReduction = metadata.noiseReduction.takeUnless { sourceIsRaw },

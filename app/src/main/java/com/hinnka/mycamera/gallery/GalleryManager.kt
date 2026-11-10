@@ -476,6 +476,22 @@ object GalleryManager {
         return File(context.getExternalFilesDir(Environment.DIRECTORY_PICTURES), PHOTOS_DIR)
     }
 
+    /** A photo's AI color match LUT (.plut), see [com.hinnka.mycamera.lut.PhotoColorMatch]. */
+    fun getAiColorMatchFile(context: Context, photoId: String, version: Long): File =
+        File(getPhotoDir(context, photoId, create = true), "$AI_COLOR_MATCH_FILE_PREFIX$version.plut")
+
+    /** Deletes the photo's AI color match LUTs except [keepVersions]. */
+    fun deleteAiColorMatchFiles(context: Context, photoId: String, keepVersions: Set<Long>) {
+        getPhotoDir(context, photoId).listFiles()?.forEach { file ->
+            val version = file.name.removePrefix(AI_COLOR_MATCH_FILE_PREFIX).removeSuffix(".plut").toLongOrNull()
+            if (file.name.startsWith(AI_COLOR_MATCH_FILE_PREFIX) && version != null && version !in keepVersions) {
+                if (!file.delete()) PLog.w(TAG, "Cannot delete AI color match LUT: ${file.absolutePath}")
+            }
+        }
+    }
+
+    private const val AI_COLOR_MATCH_FILE_PREFIX = "ai_color_match_"
+
     private fun getPhotoDir(context: Context, photoId: String, create: Boolean = false): File {
         val dir = File(getPhotosBaseDir(context), photoId)
         if (create && !dir.exists()) {

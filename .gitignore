@@ -24,3 +24,4 @@ __pycache__
 /scripts/lut_training/runs
 /scripts/nafnet_denoise_tflite/out
 /scripts/scunet_denoise_tflite/out
+/scripts/colorfm_tflite/out

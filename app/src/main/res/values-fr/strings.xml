@@ -1481,11 +1481,21 @@
     <string name="gallery_denoise_processing">Réduction du bruit en cours…</string>
     <string name="ai_denoise_model_title">Modèle de débruitage IA</string>
     <string name="ai_denoise_model_description">Le débruitage IA nécessite le modèle SCUNet (environ 47 Mo). Le télécharger maintenant ? Il est stocké de façon privée par l\'application.</string>
-    <string name="ai_denoise_model_downloading">Téléchargement du modèle… %1$d%%</string>
-    <string name="ai_denoise_model_installing">Vérification et installation du modèle…</string>
-    <string name="ai_denoise_model_failed">Le modèle n\'a pas pu être téléchargé ou vérifié. Vérifiez votre connexion et réessayez.</string>
-    <string name="ai_denoise_model_download">Télécharger</string>
-    <string name="ai_denoise_model_retry">Réessayer</string>
+    <string name="hf_model_downloading">Téléchargement du modèle… %1$d%%</string>
+    <string name="hf_model_installing">Vérification et installation du modèle…</string>
+    <string name="hf_model_failed">Le modèle n\'a pas pu être téléchargé ou vérifié. Vérifiez votre connexion et réessayez.</string>
+    <string name="hf_model_download">Télécharger</string>
+    <string name="hf_model_retry">Réessayer</string>
     <string name="model_download_source">Source de téléchargement</string>
     <string name="model_download_source_mirror">Miroir HF (hf-mirror.com)</string>
+    <string name="ai_color_match_action">Correspondance des couleurs IA</string>
+    <string name="ai_color_match_active">Correspondance IA · cette photo uniquement</string>
+    <string name="ai_color_match_hint">Adapte les couleurs de cette photo à une image de référence. Le résultat s\'applique uniquement à cette photo et n\'est pas ajouté à la bibliothèque de filtres.</string>
+    <string name="ai_color_match_pick">Choisir une référence</string>
+    <string name="ai_color_match_change">Changer de référence</string>
+    <string name="ai_color_match_remove">Retirer</string>
+    <string name="ai_color_match_progress">Correspondance des couleurs…</string>
+    <string name="ai_color_match_failed">Échec de la correspondance des couleurs IA. Essayez une autre image de référence.</string>
+    <string name="ai_color_match_model_title">Modèle de correspondance des couleurs IA</string>
+    <string name="ai_color_match_model_description">La correspondance des couleurs IA nécessite le modèle ColorFM (environ 62 Mo). Le télécharger maintenant ? Il est stocké en privé par l\'application. Les poids du modèle sont réservés à un usage non commercial (CC BY-NC 4.0).</string>
 </resources>

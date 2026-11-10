@@ -15,37 +15,36 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import com.hinnka.mycamera.R
 import com.hinnka.mycamera.ml.HfModelSource
-import com.hinnka.mycamera.ml.AiDenoiseModelState
+import com.hinnka.mycamera.ml.HfModelState
 import kotlin.math.roundToInt
 
-/** Asks to download the AI denoise model; the caller continues once [state] becomes Ready. */
+/** Asks to download a Hugging Face hosted model; the caller continues once [state] becomes Ready. */
 @Composable
-fun AiDenoiseModelDownloadDialog(
-    state: AiDenoiseModelState,
+fun HfModelDownloadDialog(
+    title: String,
+    description: String,
+    state: HfModelState,
     source: HfModelSource,
     onSourceChange: (HfModelSource) -> Unit,
     onDownload: () -> Unit,
     onDismiss: () -> Unit
 ) {
-    val downloading = state as? AiDenoiseModelState.Downloading
+    val downloading = state as? HfModelState.Downloading
     AlertDialog(
         onDismissRequest = onDismiss,
         title = {
             Text(
-                text = stringResource(R.string.ai_denoise_model_title),
+                text = title,
                 style = MaterialTheme.typography.titleLarge
             )
         },
         text = {
             Column {
                 Text(
-                    text = stringResource(
-                        if (state == AiDenoiseModelState.Failed) R.string.ai_denoise_model_failed
-                        else R.string.ai_denoise_model_description
-                    ),
+                    text = if (state == HfModelState.Failed) stringResource(R.string.hf_model_failed) else description,
                     style = MaterialTheme.typography.bodyMedium
                 )
-                if (state == AiDenoiseModelState.Missing || state == AiDenoiseModelState.Failed) {
+                if (state == HfModelState.Missing || state == HfModelState.Failed) {
                     Spacer(modifier = Modifier.height(16.dp))
                     HfModelSourcePicker(source = source, onSourceChange = onSourceChange)
                 }
@@ -60,10 +59,10 @@ fun AiDenoiseModelDownloadDialog(
                     Spacer(modifier = Modifier.height(8.dp))
                     Text(
                         text = if (downloading.isInstalling) {
-                            stringResource(R.string.ai_denoise_model_installing)
+                            stringResource(R.string.hf_model_installing)
                         } else {
                             stringResource(
-                                R.string.ai_denoise_model_downloading,
+                                R.string.hf_model_downloading,
                                 ((progress ?: 0f) * 100f).roundToInt()
                             )
                         },
@@ -74,13 +73,13 @@ fun AiDenoiseModelDownloadDialog(
         },
         confirmButton = {
             when (state) {
-                AiDenoiseModelState.Missing -> TextButton(onClick = onDownload) {
-                    Text(stringResource(R.string.ai_denoise_model_download))
+                HfModelState.Missing -> TextButton(onClick = onDownload) {
+                    Text(stringResource(R.string.hf_model_download))
                 }
-                AiDenoiseModelState.Failed -> TextButton(onClick = onDownload) {
-                    Text(stringResource(R.string.ai_denoise_model_retry))
+                HfModelState.Failed -> TextButton(onClick = onDownload) {
+                    Text(stringResource(R.string.hf_model_retry))
                 }
-                is AiDenoiseModelState.Downloading, AiDenoiseModelState.Ready -> Unit
+                is HfModelState.Downloading, HfModelState.Ready -> Unit
             }
         },
         dismissButton = {
