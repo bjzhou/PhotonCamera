@@ -741,19 +741,12 @@
     <string name="settings_widget_theme_dark">มืด</string>
 
     <!-- LUT Creator & UI -->
-    <string name="lut_creator_title">AI กำลังทำสี</string>
-    <string name="lut_creator_desc">เลือกสไตล์สีการวิเคราะห์ภาพและสร้าง LUT ของคุณเอง</string>
-    <string name="lut_creator_premium_required_title">จำเป็นต้องสมัครสมาชิก</string>
-    <string name="lut_creator_premium_required_desc">เมื่อไม่ได้กำหนดค่าคีย์ OpenAI API ของคุณเองในการตั้งค่า ฟังก์ชันการสร้าง LUT จำเป็นต้องซื้อการเป็นสมาชิกก่อนจึงจะสามารถใช้งานได้</string>
-    <string name="lut_creator_tab_ai">การวิเคราะห์เอไอ</string>
-    <string name="lut_creator_tab_local">การวิเคราะห์ในท้องถิ่น</string>
-    <string name="lut_creator_use_ai">AI จะสร้างเวอร์ชันข้อความของสูตร LUT ตามการเรนเดอร์ที่เลือก</string>
-    <string name="lut_creator_custom_ai_instructions">คำพร้อมท์ AI ที่กำหนดเอง (ไม่บังคับ)</string>
-    <string name="lut_creator_custom_ai_hint">ตัวอย่างเช่น: ทำให้ภาพมีบรรยากาศมากขึ้นและเพิ่มคอนทราสต์ให้ลึกซึ้งยิ่งขึ้น</string>
+    <string name="lut_creator_title">เลียนแบบสี</string>
+    <string name="lut_creator_desc">จับคู่ภาพต้นฉบับกับภาพที่แต่งสีแล้ว เพื่อเลียนแบบโทนสีและสร้าง LUT ของคุณเอง</string>
+    <string name="lut_creator_tab_local">คู่ภาพต้นฉบับ / ภาพแต่งสี</string>
     <string name="lut_creator_select_images">เลือกรูปภาพ</string>
-    <string name="lut_creator_ai_mode_desc">อัปโหลดการเรนเดอร์ แล้ว AI จะอนุมานเวอร์ชันข้อความของสูตร LUT โดยตรง โดยไม่ต้องเรียกใช้ความสามารถในการแก้ไขรูปภาพ</string>
-    <string name="lut_creator_local_mode_desc">อัปโหลดรูปภาพหลายชุด โดยแต่ละชุดประกอบด้วยรูปภาพต้นฉบับและรูปภาพเอฟเฟกต์ และรูปภาพเหล่านั้นควรอยู่ในฉากเดียวกันที่สุดเท่าที่จะเป็นไปได้</string>
-    <string name="lut_creator_local_pairs_hint">การวิเคราะห์เฉพาะที่รองรับการจับคู่รูปภาพ/เอฟเฟกต์ต้นฉบับหลายชุด ยิ่งองค์ประกอบภาพ ค่าแสง และฉากมีความสอดคล้องกันมากเท่าใด จุดควบคุมที่รวมกันก็จะยิ่งมีความเสถียรมากขึ้นเท่านั้น</string>
+    <string name="lut_creator_local_mode_desc">เพิ่มคู่ภาพหนึ่งคู่หรือมากกว่า แต่ละคู่ประกอบด้วยภาพต้นฉบับและภาพที่แต่งสีแล้วของฉากเดียวกัน</string>
+    <string name="lut_creator_local_pairs_hint">ยิ่งมีคู่ภาพมากและองค์ประกอบภาพกับค่าแสงใกล้เคียงกัน LUT ที่ได้ก็จะยิ่งแม่นยำ</string>
     <string name="lut_creator_select_source_image">เลือกภาพต้นฉบับ</string>
     <string name="lut_creator_select_effect_image">เลือกการเรนเดอร์</string>
     <string name="lut_creator_reset_local_selection">ล้างเนื้อหาที่เลือก</string>
@@ -764,10 +757,9 @@
     <string name="lut_creator_local_pairs_count">เพิ่มรูปภาพกลุ่ม %1$d แล้ว</string>
     <string name="lut_creator_local_pending_target">ขณะนี้ยังมีการเรนเดอร์อีก 1 ชุดที่ยังขาดอยู่</string>
     <string name="lut_creator_local_ready_status">คุณสามารถเพิ่มกลุ่มรูปภาพต่อไปหรือเริ่มการวิเคราะห์ได้โดยตรง</string>
-    <string name="lut_creator_start_local_analysis">เริ่มการวิเคราะห์ในพื้นที่</string>
+    <string name="lut_creator_start_local_analysis">เริ่มวิเคราะห์</string>
     <string name="lut_creator_analyzing">กำลังวิเคราะห์สไตล์ภาพ...</string>
     <string name="lut_creator_analysis_complete">วิเคราะห์เสร็จแล้ว!</string>
-    <string name="lut_creator_ai_restored_preview">ดูตัวอย่างภาพต้นฉบับที่กู้คืนโดย AI</string>
     <string name="lut_creator_lut_name_hint">ชื่อเริ่มต้นของ LUT</string>
     <string name="lut_creator_generate_save">สร้างและบันทึก</string>
     <string name="lut_creator_generating">กำลังสร้างข้อมูล 3D LUT...</string>

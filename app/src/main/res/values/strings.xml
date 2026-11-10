@@ -1049,18 +1049,11 @@
 
     <!-- LUT Creator & UI -->
     <string name="lut_creator_title">LUT Creator</string>
-    <string name="lut_creator_desc">Select images to analyze style and generate a custom LUT.</string>
-    <string name="lut_creator_premium_required_title">Premium required</string>
-    <string name="lut_creator_premium_required_desc">LUT Creator requires Premium unless you have configured your own OpenAI API key in Settings.</string>
-    <string name="lut_creator_tab_ai">AI Analysis</string>
-    <string name="lut_creator_tab_local">Local Analysis</string>
-    <string name="lut_creator_use_ai">AI will generate a text LUT recipe from the selected styled image.</string>
-    <string name="lut_creator_custom_ai_instructions">Custom AI Instructions (Optional)</string>
-    <string name="lut_creator_custom_ai_hint">e.g., make it moodier, enhance reds</string>
+    <string name="lut_creator_desc">Pair originals with styled images to recreate a color style as a custom LUT.</string>
+    <string name="lut_creator_tab_local">Original / Styled Pairs</string>
     <string name="lut_creator_select_images">Select Images</string>
-    <string name="lut_creator_ai_mode_desc">Upload one styled image. AI will infer a text LUT recipe directly, without using image editing.</string>
-    <string name="lut_creator_local_mode_desc">Upload multiple image pairs. Each pair should include an original image and a styled image of the same scene.</string>
-    <string name="lut_creator_local_pairs_hint">For local analysis, add multiple original/styled pairs. The closer the framing and exposure match, the better the merged control points will be.</string>
+    <string name="lut_creator_local_mode_desc">Add one or more image pairs. Each pair is an original and a color-graded version of the same scene.</string>
+    <string name="lut_creator_local_pairs_hint">More pairs with closely matching framing and exposure give a more accurate LUT.</string>
     <string name="lut_creator_select_source_image">Select Original Image</string>
     <string name="lut_creator_select_effect_image">Select Styled Image</string>
     <string name="lut_creator_reset_local_selection">Clear Selection</string>
@@ -1071,10 +1064,9 @@
     <string name="lut_creator_local_pairs_count">%1$d image pair(s) added</string>
     <string name="lut_creator_local_pending_target">1 pair is still waiting for its styled image</string>
     <string name="lut_creator_local_ready_status">You can add more pairs or start analysis now</string>
-    <string name="lut_creator_start_local_analysis">Analyze Local Pairs</string>
+    <string name="lut_creator_start_local_analysis">Start Analysis</string>
     <string name="lut_creator_analyzing">Analyzing image style...</string>
     <string name="lut_creator_analysis_complete">Analysis Complete!</string>
-    <string name="lut_creator_ai_restored_preview">AI restored original preview</string>
     <string name="lut_creator_lut_name_hint">LUT Name</string>
     <string name="lut_creator_generate_save">Generate &amp; Save</string>
     <string name="lut_creator_generating">Generating 3D Interpolated LUT...</string>
@@ -1125,7 +1117,7 @@
     <string name="settings_default_virtual_aperture_description">Automatically enable virtual aperture with the selected f-stop value for new photos.</string>
     <string name="virtual_aperture_depth_model_description">Uses the installed compatible depth model. Download the default model or import another compatible TFLite model on first use.</string>
     <string name="gallery_large_aperture_blur_title">Wide-Aperture Blur</string>
-    <string name="gallery_large_aperture_blur_description">Uses the installed compatible depth model to estimate scene depth and simulate a shallow depth of field, background blur, and soft bokeh highlights. Tap the image to change the focus point. Lower f-numbers produce stronger blur. Download the default model or import another compatible TFLite model on first use.</string>
+    <string name="gallery_large_aperture_blur_description">Simulates the shallow depth of field and background blur of a wide aperture</string>
     <string name="gallery_bokeh_style_title">Bokeh style</string>
     <string name="gallery_bokeh_processing">Applying bokeh…</string>
     <string name="gallery_denoise_processing">Applying noise reduction…</string>

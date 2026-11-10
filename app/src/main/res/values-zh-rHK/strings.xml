@@ -1015,19 +1015,12 @@
     <string name="settings_widget_theme_dark">深色</string>
 
     <!-- LUT Creator & UI -->
-    <string name="lut_creator_title">AI 仿色</string>
-    <string name="lut_creator_desc">選擇圖片分析色彩風格，并生成專屬 LUT。</string>
-    <string name="lut_creator_premium_required_title">需要會員</string>
-    <string name="lut_creator_premium_required_desc">未在設定中配置自己的 OpenAI API Key 時，LUT 創建功能需要購買會員后才能使用。</string>
-    <string name="lut_creator_tab_ai">AI 分析</string>
-    <string name="lut_creator_tab_local">本地分析</string>
-    <string name="lut_creator_use_ai">AI 會根據所選效果圖生成文字版 LUT 配方。</string>
-    <string name="lut_creator_custom_ai_instructions">自訂 AI 提示詞（選填）</string>
-    <string name="lut_creator_custom_ai_hint">例如：讓畫面更有氛圍感，加深對比度</string>
+    <string name="lut_creator_title">仿色</string>
+    <string name="lut_creator_desc">用原圖和效果圖配對，複刻色彩風格並生成專屬 LUT。</string>
+    <string name="lut_creator_tab_local">原圖 / 效果圖配對</string>
     <string name="lut_creator_select_images">選擇圖片</string>
-    <string name="lut_creator_ai_mode_desc">上傳一張效果圖，AI 會直接推斷文字版 LUT 配方，不再調用圖片編輯能力。</string>
-    <string name="lut_creator_local_mode_desc">上傳多組圖片，每組包含一張原圖和一張效果圖，且應盡量是完全相同的場景。</string>
-    <string name="lut_creator_local_pairs_hint">本地分析支援多組原圖/效果圖配對。構圖、曝光和場景越一致，合并后的控制點越穩定。</string>
+    <string name="lut_creator_local_mode_desc">添加一組或多組圖片，每組包含同一場景的一張原圖和一張調色後的效果圖。</string>
+    <string name="lut_creator_local_pairs_hint">配對越多，構圖和曝光越一致，生成的 LUT 越準確。</string>
     <string name="lut_creator_select_source_image">選擇原圖</string>
     <string name="lut_creator_select_effect_image">選擇效果圖</string>
     <string name="lut_creator_reset_local_selection">清空已選內容</string>
@@ -1038,10 +1031,9 @@
     <string name="lut_creator_local_pairs_count">已添加 %1$d 組圖片</string>
     <string name="lut_creator_local_pending_target">當前有 1 組還差效果圖</string>
     <string name="lut_creator_local_ready_status">可以繼續添加圖片組，或直接開始分析</string>
-    <string name="lut_creator_start_local_analysis">開始本地分析</string>
+    <string name="lut_creator_start_local_analysis">開始分析</string>
     <string name="lut_creator_analyzing">正在分析圖片風格…</string>
     <string name="lut_creator_analysis_complete">分析完成！</string>
-    <string name="lut_creator_ai_restored_preview">AI 還原的原圖預覽</string>
     <string name="lut_creator_lut_name_hint">LUT 預設名稱</string>
     <string name="lut_creator_generate_save">生成并儲存</string>
     <string name="lut_creator_generating">正在生成 3D LUT 資料…</string>
@@ -1092,7 +1084,7 @@
     <string name="settings_default_virtual_aperture_description">開啟后，拍攝及匯入相片將自動應用所選光圈值的虛化效果。</string>
     <string name="virtual_aperture_depth_model_description">使用目前已安裝的兼容深度模型。首次使用時可下載預設模型，或匯入其他兼容的 TFLite 模型。</string>
     <string name="gallery_large_aperture_blur_title">大光圈虛化</string>
-    <string name="gallery_large_aperture_blur_description">使用目前已安裝的兼容深度模型估計畫面深度，模擬大光圈的淺景深、背景虛化和柔和散景光斑。輕點畫面可改變對焦位置；光圈值越小，虛化越強。首次使用時可下載預設模型，或匯入其他兼容的 TFLite 模型。</string>
+    <string name="gallery_large_aperture_blur_description">模擬大光圈的淺景深背景虛化效果</string>
     <string name="edit_panel_title">編輯面板</string>
     <string name="edit_panel_expand">展開編輯面板</string>
     <string name="edit_panel_minimize">最小化編輯面板</string>

@@ -1,8 +1,5 @@
 package com.hinnka.mycamera.lut.creator
 
-import android.app.Activity
-import android.content.Context
-import android.content.ContextWrapper
 import android.net.Uri
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -22,21 +19,13 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.ui.graphics.asImageBitmap
-import androidx.compose.ui.platform.LocalContext
 import com.hinnka.mycamera.R
-import com.hinnka.mycamera.ui.components.PaymentDialog
 import com.hinnka.mycamera.ui.icons.AppIcons
 
 private data class LocalImagePairDraft(
     val sourceUri: Uri,
     val targetUri: Uri
 )
-
-private enum class LutCreatorMode {
-    AI,
-    LOCAL
-}
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -46,27 +35,10 @@ fun LutCreatorScreen(
     onSuccess: (String) -> Unit
 ) {
     val uiState by viewModel.uiState.collectAsState()
-    val context = LocalContext.current
-    val isPurchased by viewModel.isPurchased.collectAsState()
-    val openAIKey by viewModel.openAIApiKey.collectAsState()
-    val canUseLutCreator = isPurchased || !openAIKey.isNullOrBlank()
-    var lutName by remember { mutableStateOf("My AI LUT") }
-    var customPrompt by remember { mutableStateOf("") }
-    var selectedMode by remember { mutableStateOf(LutCreatorMode.AI) }
+    var lutName by remember { mutableStateOf("My LUT") }
     var pendingSourceUri by remember { mutableStateOf<Uri?>(null) }
     var localPairs by remember { mutableStateOf(listOf<LocalImagePairDraft>()) }
     val idleScrollState = rememberScrollState()
-
-    val aiImageLauncher = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.GetContent()
-    ) { uri: Uri? ->
-        uri ?: return@rememberLauncherForActivityResult
-        if (!canUseLutCreator) {
-            viewModel.showPaymentDialog = true
-            return@rememberLauncherForActivityResult
-        }
-        viewModel.analyzeAiImage(uri, customPrompt)
-    }
 
     val localSourceLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.GetContent()
@@ -114,194 +86,130 @@ fun LutCreatorScreen(
                         verticalArrangement = Arrangement.Top,
                         horizontalAlignment = Alignment.Start
                     ) {
-                        if (!canUseLutCreator) {
-                            LutCreatorPremiumRequiredCard(
-                                onPurchase = { viewModel.showPaymentDialog = true }
-                            )
-                            Spacer(modifier = Modifier.height(24.dp))
-                            return@Column
-                        }
-
-                        PrimaryTabRow(
-                            selectedTabIndex = selectedMode.ordinal,
-                            containerColor = Color.Transparent,
-                            contentColor = Color(0xFFE5A324)
-                        ) {
-                            Tab(
-                                selected = selectedMode == LutCreatorMode.AI,
-                                onClick = { selectedMode = LutCreatorMode.AI },
-                                text = { Text(stringResource(R.string.lut_creator_tab_ai)) }
-                            )
-                            Tab(
-                                selected = selectedMode == LutCreatorMode.LOCAL,
-                                onClick = { selectedMode = LutCreatorMode.LOCAL },
-                                text = { Text(stringResource(R.string.lut_creator_tab_local)) }
-                            )
-                        }
-
-                        Spacer(modifier = Modifier.height(16.dp))
-
                         Surface(
                             color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f),
                             shape = RoundedCornerShape(20.dp),
                             modifier = Modifier.fillMaxWidth()
                         ) {
                             Column(modifier = Modifier.padding(20.dp)) {
-                                when (selectedMode) {
-                                    LutCreatorMode.AI -> {
+                                val isSelectingTarget = pendingSourceUri != null
+
+                                Text(
+                                    text = stringResource(R.string.lut_creator_tab_local),
+                                    style = MaterialTheme.typography.titleMedium,
+                                    fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold
+                                )
+                                Spacer(modifier = Modifier.height(6.dp))
+                                Text(
+                                    text = stringResource(R.string.lut_creator_local_mode_desc),
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                                Spacer(modifier = Modifier.height(16.dp))
+                                HorizontalDivider(color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.1f))
+                                Spacer(modifier = Modifier.height(16.dp))
+                                Text(
+                                    text = stringResource(R.string.lut_creator_local_pairs_hint),
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                                Spacer(modifier = Modifier.height(16.dp))
+                                Surface(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    shape = RoundedCornerShape(14.dp),
+                                    color = MaterialTheme.colorScheme.surface.copy(alpha = 0.55f)
+                                ) {
+                                    Column(modifier = Modifier.padding(14.dp)) {
                                         Text(
-                                            text = stringResource(R.string.lut_creator_tab_ai),
-                                            style = MaterialTheme.typography.titleMedium,
+                                            text = if (isSelectingTarget) {
+                                                stringResource(R.string.lut_creator_local_step_select_target)
+                                            } else {
+                                                stringResource(R.string.lut_creator_local_step_select_source)
+                                            },
+                                            style = MaterialTheme.typography.titleSmall,
                                             fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold
                                         )
-                                        Spacer(modifier = Modifier.height(6.dp))
+                                        Spacer(modifier = Modifier.height(4.dp))
                                         Text(
-                                            text = stringResource(R.string.lut_creator_ai_mode_desc),
-                                            style = MaterialTheme.typography.bodyMedium,
-                                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                                        )
-                                        Spacer(modifier = Modifier.height(16.dp))
-                                        OutlinedTextField(
-                                            value = customPrompt,
-                                            onValueChange = { customPrompt = it },
-                                            label = { Text(stringResource(R.string.lut_creator_custom_ai_instructions)) },
-                                            placeholder = { Text(stringResource(R.string.lut_creator_custom_ai_hint)) },
-                                            modifier = Modifier.fillMaxWidth(),
-                                            shape = RoundedCornerShape(12.dp),
-                                            colors = OutlinedTextFieldDefaults.colors(
-                                                unfocusedBorderColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.2f),
-                                                focusedBorderColor = Color(0xFFE5A324)
-                                            )
-                                        )
-                                        Spacer(modifier = Modifier.height(12.dp))
-                                        Text(
-                                            text = stringResource(R.string.lut_creator_use_ai),
+                                            text = if (isSelectingTarget) {
+                                                stringResource(R.string.lut_creator_local_step_select_target_desc)
+                                            } else {
+                                                stringResource(R.string.lut_creator_local_step_select_source_desc)
+                                            },
                                             style = MaterialTheme.typography.bodySmall,
                                             color = MaterialTheme.colorScheme.onSurfaceVariant
                                         )
                                     }
-
-                                    LutCreatorMode.LOCAL -> {
-                                        val isSelectingTarget = pendingSourceUri != null
-
-                                        Text(
-                                            text = stringResource(R.string.lut_creator_tab_local),
-                                            style = MaterialTheme.typography.titleMedium,
-                                            fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold
-                                        )
-                                        Spacer(modifier = Modifier.height(6.dp))
-                                        Text(
-                                            text = stringResource(R.string.lut_creator_local_mode_desc),
-                                            style = MaterialTheme.typography.bodyMedium,
-                                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                                        )
-                                        Spacer(modifier = Modifier.height(16.dp))
-                                        HorizontalDivider(color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.1f))
-                                        Spacer(modifier = Modifier.height(16.dp))
-                                        Text(
-                                            text = stringResource(R.string.lut_creator_local_pairs_hint),
-                                            style = MaterialTheme.typography.bodyMedium,
-                                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                                        )
-                                        Spacer(modifier = Modifier.height(16.dp))
-                                        Surface(
-                                            modifier = Modifier.fillMaxWidth(),
-                                            shape = RoundedCornerShape(14.dp),
-                                            color = MaterialTheme.colorScheme.surface.copy(alpha = 0.55f)
-                                        ) {
-                                            Column(modifier = Modifier.padding(14.dp)) {
-                                                Text(
-                                                    text = if (isSelectingTarget) {
-                                                        stringResource(R.string.lut_creator_local_step_select_target)
-                                                    } else {
-                                                        stringResource(R.string.lut_creator_local_step_select_source)
-                                                    },
-                                                    style = MaterialTheme.typography.titleSmall,
-                                                    fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold
-                                                )
-                                                Spacer(modifier = Modifier.height(4.dp))
-                                                Text(
-                                                    text = if (isSelectingTarget) {
-                                                        stringResource(R.string.lut_creator_local_step_select_target_desc)
-                                                    } else {
-                                                        stringResource(R.string.lut_creator_local_step_select_source_desc)
-                                                    },
-                                                    style = MaterialTheme.typography.bodySmall,
-                                                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                                                )
-                                            }
+                                }
+                                Spacer(modifier = Modifier.height(14.dp))
+                                Button(
+                                    onClick = {
+                                        if (isSelectingTarget) {
+                                            localTargetLauncher.launch("image/*")
+                                        } else {
+                                            localSourceLauncher.launch("image/*")
                                         }
-                                        Spacer(modifier = Modifier.height(14.dp))
-                                        Button(
-                                            onClick = {
-                                                if (isSelectingTarget) {
-                                                    localTargetLauncher.launch("image/*")
-                                                } else {
-                                                    localSourceLauncher.launch("image/*")
-                                                }
-                                            },
-                                            modifier = Modifier.fillMaxWidth(),
-                                            shape = RoundedCornerShape(12.dp)
-                                        ) {
+                                    },
+                                    modifier = Modifier.fillMaxWidth(),
+                                    shape = RoundedCornerShape(12.dp)
+                                ) {
+                                    Text(
+                                        if (isSelectingTarget) {
+                                            stringResource(R.string.lut_creator_select_effect_image)
+                                        } else {
+                                            stringResource(R.string.lut_creator_select_source_image)
+                                        }
+                                    )
+                                }
+                                Spacer(modifier = Modifier.height(12.dp))
+                                OutlinedButton(
+                                    onClick = {
+                                        pendingSourceUri = null
+                                        localPairs = emptyList()
+                                    },
+                                    enabled = isSelectingTarget || localPairs.isNotEmpty(),
+                                    modifier = Modifier.fillMaxWidth(),
+                                    shape = RoundedCornerShape(12.dp)
+                                ) {
+                                    Text(stringResource(R.string.lut_creator_reset_local_selection))
+                                }
+                                Spacer(modifier = Modifier.height(16.dp))
+                                Surface(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    shape = RoundedCornerShape(14.dp),
+                                    color = MaterialTheme.colorScheme.surface.copy(alpha = 0.55f)
+                                ) {
+                                    Row(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .padding(horizontal = 14.dp, vertical = 12.dp),
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Default.CheckCircle,
+                                            contentDescription = null,
+                                            tint = Color(0xFFE5A324),
+                                            modifier = Modifier.size(20.dp)
+                                        )
+                                        Spacer(modifier = Modifier.width(10.dp))
+                                        Column(modifier = Modifier.weight(1f)) {
                                             Text(
-                                                if (isSelectingTarget) {
-                                                    stringResource(R.string.lut_creator_select_effect_image)
-                                                } else {
-                                                    stringResource(R.string.lut_creator_select_source_image)
-                                                }
+                                                text = stringResource(
+                                                    R.string.lut_creator_local_pairs_count,
+                                                    localPairs.size
+                                                ),
+                                                style = MaterialTheme.typography.titleSmall
                                             )
-                                        }
-                                        Spacer(modifier = Modifier.height(12.dp))
-                                        OutlinedButton(
-                                            onClick = {
-                                                pendingSourceUri = null
-                                                localPairs = emptyList()
-                                            },
-                                            enabled = isSelectingTarget || localPairs.isNotEmpty(),
-                                            modifier = Modifier.fillMaxWidth(),
-                                            shape = RoundedCornerShape(12.dp)
-                                        ) {
-                                            Text(stringResource(R.string.lut_creator_reset_local_selection))
-                                        }
-                                        Spacer(modifier = Modifier.height(16.dp))
-                                        Surface(
-                                            modifier = Modifier.fillMaxWidth(),
-                                            shape = RoundedCornerShape(14.dp),
-                                            color = MaterialTheme.colorScheme.surface.copy(alpha = 0.55f)
-                                        ) {
-                                            Row(
-                                                modifier = Modifier
-                                                    .fillMaxWidth()
-                                                    .padding(horizontal = 14.dp, vertical = 12.dp),
-                                                verticalAlignment = Alignment.CenterVertically
-                                            ) {
-                                                Icon(
-                                                    imageVector = Icons.Default.CheckCircle,
-                                                    contentDescription = null,
-                                                    tint = Color(0xFFE5A324),
-                                                    modifier = Modifier.size(20.dp)
-                                                )
-                                                Spacer(modifier = Modifier.width(10.dp))
-                                                Column(modifier = Modifier.weight(1f)) {
-                                                    Text(
-                                                        text = stringResource(
-                                                            R.string.lut_creator_local_pairs_count,
-                                                            localPairs.size
-                                                        ),
-                                                        style = MaterialTheme.typography.titleSmall
-                                                    )
-                                                    Spacer(modifier = Modifier.height(2.dp))
-                                                    Text(
-                                                        text = if (isSelectingTarget) {
-                                                            stringResource(R.string.lut_creator_local_pending_target)
-                                                        } else {
-                                                            stringResource(R.string.lut_creator_local_ready_status)
-                                                        },
-                                                        style = MaterialTheme.typography.bodySmall,
-                                                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                                                    )
-                                                }
-                                            }
+                                            Spacer(modifier = Modifier.height(2.dp))
+                                            Text(
+                                                text = if (isSelectingTarget) {
+                                                    stringResource(R.string.lut_creator_local_pending_target)
+                                                } else {
+                                                    stringResource(R.string.lut_creator_local_ready_status)
+                                                },
+                                                style = MaterialTheme.typography.bodySmall,
+                                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                                            )
                                         }
                                     }
                                 }
@@ -310,19 +218,11 @@ fun LutCreatorScreen(
                         Spacer(modifier = Modifier.height(20.dp))
                         Button(
                             onClick = {
-                                if (!canUseLutCreator) {
-                                    viewModel.showPaymentDialog = true
-                                    return@Button
-                                }
-                                if (selectedMode == LutCreatorMode.AI) {
-                                    aiImageLauncher.launch("image/*")
-                                } else {
-                                    viewModel.analyzeLocalImagePairs(
-                                        localPairs.map { LocalImagePairInput(it.sourceUri, it.targetUri) }
-                                    )
-                                }
+                                viewModel.analyzeLocalImagePairs(
+                                    localPairs.map { LocalImagePairInput(it.sourceUri, it.targetUri) }
+                                )
                             },
-                            enabled = selectedMode == LutCreatorMode.AI || localPairs.isNotEmpty(),
+                            enabled = localPairs.isNotEmpty(),
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .height(60.dp),
@@ -333,11 +233,7 @@ fun LutCreatorScreen(
                             )
                         ) {
                             Text(
-                                if (selectedMode == LutCreatorMode.AI) {
-                                    stringResource(R.string.lut_creator_select_images)
-                                } else {
-                                    stringResource(R.string.lut_creator_start_local_analysis)
-                                },
+                                stringResource(R.string.lut_creator_start_local_analysis),
                                 style = MaterialTheme.typography.titleLarge,
                                 fontWeight = androidx.compose.ui.text.font.FontWeight.Medium
                             )
@@ -385,28 +281,6 @@ fun LutCreatorScreen(
                             fontWeight = androidx.compose.ui.text.font.FontWeight.Bold
                         )
                         
-                        state.generatedSourceBitmap?.let { bitmap ->
-                            Spacer(modifier = Modifier.height(24.dp))
-                            Text(
-                                text = stringResource(R.string.lut_creator_ai_restored_preview),
-                                style = MaterialTheme.typography.titleSmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                            Spacer(modifier = Modifier.height(12.dp))
-                            Surface(
-                                shape = RoundedCornerShape(16.dp),
-                                shadowElevation = 4.dp,
-                                modifier = Modifier.sizeIn(maxHeight = 300.dp)
-                            ) {
-                                androidx.compose.foundation.Image(
-                                    bitmap = bitmap.asImageBitmap(),
-                                    contentDescription = "AI Generated Original",
-                                    modifier = Modifier.fillMaxWidth(),
-                                    contentScale = androidx.compose.ui.layout.ContentScale.Fit
-                                )
-                            }
-                        }
-
                         Spacer(modifier = Modifier.height(32.dp))
                         OutlinedTextField(
                             value = lutName,
@@ -512,71 +386,4 @@ fun LutCreatorScreen(
             }
         }
     }
-
-    if (viewModel.showPaymentDialog) {
-        val activity = context.findActivity()
-        PaymentDialog(
-            onDismiss = { viewModel.showPaymentDialog = false },
-            onPurchase = {
-                if (activity != null) {
-                    viewModel.purchase(activity)
-                }
-                viewModel.showPaymentDialog = false
-            }
-        )
-    }
-}
-
-@Composable
-private fun LutCreatorPremiumRequiredCard(
-    onPurchase: () -> Unit
-) {
-    Surface(
-        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f),
-        shape = RoundedCornerShape(20.dp),
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(top = 16.dp)
-    ) {
-        Column(
-            modifier = Modifier.padding(20.dp),
-            horizontalAlignment = Alignment.Start
-        ) {
-            Text(
-                text = stringResource(R.string.lut_creator_premium_required_title),
-                style = MaterialTheme.typography.titleMedium,
-                fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold
-            )
-            Spacer(modifier = Modifier.height(8.dp))
-            Text(
-                text = stringResource(R.string.lut_creator_premium_required_desc),
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
-            Spacer(modifier = Modifier.height(20.dp))
-            Button(
-                onClick = onPurchase,
-                modifier = Modifier.fillMaxWidth(),
-                shape = RoundedCornerShape(12.dp),
-                colors = ButtonDefaults.buttonColors(
-                    containerColor = Color(0xFFE5A324),
-                    contentColor = Color.White
-                )
-            ) {
-                Text(
-                    text = stringResource(R.string.billing_premium_get_access),
-                    fontWeight = androidx.compose.ui.text.font.FontWeight.Bold
-                )
-            }
-        }
-    }
-}
-
-private fun Context.findActivity(): Activity? {
-    var current = this
-    while (current is ContextWrapper) {
-        if (current is Activity) return current
-        current = current.baseContext
-    }
-    return null
 }

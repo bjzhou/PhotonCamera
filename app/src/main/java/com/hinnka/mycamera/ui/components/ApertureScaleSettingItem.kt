@@ -11,7 +11,6 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Switch
@@ -22,7 +21,6 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.scale
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.input.pointer.pointerInput
@@ -75,23 +73,45 @@ fun ApertureScaleSettingItem(
             .fillMaxWidth()
             .padding(vertical = 8.dp)
     ) {
+        // 与 SwitchSettingItem 保持一致的头部：左侧标题 + 描述，右侧开关
         Row(
             modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically
         ) {
-            Text(
-                text = title,
-                color = if (enabled) Color.White else Color.White.copy(alpha = 0.45f),
-                fontSize = 16.sp,
-                fontWeight = FontWeight.Normal
-            )
+            Column(modifier = Modifier.weight(1f)) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        text = title,
+                        color = Color.White,
+                        fontSize = 16.sp,
+                        fontWeight = FontWeight.Normal
+                    )
+                    if (shouldShowScale) {
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(
+                            text = "f/${formatApertureStop(ApertureScaleStops[selectedIndex])}",
+                            color = AccentColor,
+                            fontSize = 14.sp,
+                            fontWeight = FontWeight.Medium
+                        )
+                    }
+                }
+                description?.let {
+                    Spacer(modifier = Modifier.height(2.dp))
+                    Text(
+                        text = it,
+                        color = Color.White.copy(alpha = 0.6f),
+                        fontSize = 13.sp,
+                        lineHeight = 18.sp
+                    )
+                }
+            }
 
             if (toggleValue != null) {
-                Spacer(modifier = Modifier.width(8.dp))
                 Switch(
                     checked = toggleValue,
                     onCheckedChange = onToggleChange,
-                    modifier = Modifier.scale(0.7f).size(40.dp, 24.dp),
                     colors = SwitchDefaults.colors(
                         checkedThumbColor = OnAccentColor,
                         checkedTrackColor = AccentColor,
@@ -101,27 +121,6 @@ fun ApertureScaleSettingItem(
                     )
                 )
             }
-
-            Spacer(modifier = Modifier.weight(1f))
-
-            if (shouldShowScale) {
-                Text(
-                    text = "f/${formatApertureStop(ApertureScaleStops[selectedIndex])}",
-                    color = Color.White.copy(alpha = if (enabled) 0.8f else 0.35f),
-                    fontSize = 14.sp,
-                    fontWeight = FontWeight.Medium
-                )
-            }
-        }
-
-        description?.let {
-            Spacer(modifier = Modifier.height(4.dp))
-            Text(
-                text = it,
-                color = Color.White.copy(alpha = if (enabled) 0.6f else 0.35f),
-                fontSize = 13.sp,
-                lineHeight = 18.sp
-            )
         }
 
         if (shouldShowScale) {

@@ -884,18 +884,11 @@
     <string name="settings_widget_theme_light">ライト</string>
     <string name="settings_widget_theme_dark">ダーク</string>
     <string name="lut_creator_title">LUTクリエイター</string>
-    <string name="lut_creator_desc">画像のスタイルを解析し、カスタムLUTを生成</string>
-    <string name="lut_creator_premium_required_title">Premiumが必要です</string>
-    <string name="lut_creator_premium_required_desc">設定で独自のOpenAI APIキーを指定していない場合、LUT CreatorにはPremiumが必要です。</string>
-    <string name="lut_creator_tab_ai">AI解析</string>
-    <string name="lut_creator_tab_local">ローカル解析</string>
-    <string name="lut_creator_use_ai">AIが選択したスタイル画像からテキスト形式のLUTレシピを生成します。</string>
-    <string name="lut_creator_custom_ai_instructions">カスタムAI指示（任意）</string>
-    <string name="lut_creator_custom_ai_hint">例：もっとムーディーに、赤を強調</string>
+    <string name="lut_creator_desc">オリジナルと仕上がり画像のペアから色調を再現し、カスタムLUTを生成</string>
+    <string name="lut_creator_tab_local">オリジナル／仕上がりペア</string>
     <string name="lut_creator_select_images">画像を選択</string>
-    <string name="lut_creator_ai_mode_desc">スタイル適用済み画像を1枚アップロードします。画像編集は行わず、AIが直接テキストLUTレシピを推定します。</string>
-    <string name="lut_creator_local_mode_desc">複数の画像ペアをアップロードします。各ペアには同一シーンのオリジナル画像とスタイル適用済み画像を含めてください。</string>
-    <string name="lut_creator_local_pairs_hint">ローカル解析では複数のオリジナル／スタイル済みペアを追加します。構図と露出が近いほど、統合されるコントロールポイントの精度が上がります。</string>
+    <string name="lut_creator_local_mode_desc">1組以上の画像ペアを追加します。各ペアは同じシーンのオリジナル画像とカラーグレーディング済み画像です。</string>
+    <string name="lut_creator_local_pairs_hint">ペアが多く、構図と露出が近いほど、より正確なLUTが生成されます。</string>
     <string name="lut_creator_select_source_image">オリジナル画像を選択</string>
     <string name="lut_creator_select_effect_image">スタイル画像を選択</string>
     <string name="lut_creator_reset_local_selection">選択を解除</string>
@@ -906,10 +899,9 @@
     <string name="lut_creator_local_pairs_count">%1$d 組の画像ペアを追加</string>
     <string name="lut_creator_local_pending_target">1組がスタイル画像持ちです</string>
     <string name="lut_creator_local_ready_status">さらにペアを追加するか、このまま解析を開始できます</string>
-    <string name="lut_creator_start_local_analysis">ローカルペアを解析</string>
+    <string name="lut_creator_start_local_analysis">解析を開始</string>
     <string name="lut_creator_analyzing">画像スタイルを解析中...</string>
     <string name="lut_creator_analysis_complete">解析完了</string>
-    <string name="lut_creator_ai_restored_preview">AIがオリジナルプレビューを復元しました</string>
     <string name="lut_creator_lut_name_hint">LUT名</string>
 
     <string name="lut_creator_generate_save">生成して保存</string>
@@ -943,7 +935,7 @@
     <string name="settings_default_virtual_aperture_description">新しい写真で、選択したF値の仮想絞りを自動有効化</string>
     <string name="virtual_aperture_depth_model_description">インストール済みの対応深度モデルを使用します。初回使用時に既定モデルをダウンロードするか、別の対応TFLiteモデルを読み込んでください。</string>
     <string name="gallery_large_aperture_blur_title">大口径ボケ</string>
-    <string name="gallery_large_aperture_blur_description">対応深度モデルでシーン深度を推定し、浅い被写界深度、背景ボケ、柔らかな玉ボケをシミュレートします。画像をタップして合焦点を変更できます。F値が小さいほどボケは強くなります。初回使用時に既定モデルをダウンロードするか、別の対応TFLiteモデルを読み込んでください。</string>
+    <string name="gallery_large_aperture_blur_description">大口径レンズの浅い被写界深度と背景ボケを再現します</string>
     <string name="gallery_bokeh_style_title">ボケ味</string>
     <string name="gallery_bokeh_processing">ボケ処理中…</string>
     <string name="gallery_denoise_processing">ノイズ低減を処理中…</string>

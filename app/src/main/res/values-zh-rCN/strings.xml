@@ -1036,19 +1036,12 @@
     <string name="settings_widget_theme_dark">深色</string>
 
     <!-- LUT Creator & UI -->
-    <string name="lut_creator_title">AI 仿色</string>
-    <string name="lut_creator_desc">选择图片分析色彩风格，并生成专属 LUT。</string>
-    <string name="lut_creator_premium_required_title">需要会员</string>
-    <string name="lut_creator_premium_required_desc">未在设置中配置自己的 OpenAI API Key 时，LUT 创建功能需要购买会员后才能使用。</string>
-    <string name="lut_creator_tab_ai">AI 分析</string>
-    <string name="lut_creator_tab_local">本地分析</string>
-    <string name="lut_creator_use_ai">AI 会根据所选效果图生成文字版 LUT 配方。</string>
-    <string name="lut_creator_custom_ai_instructions">自定义 AI 提示词（选填）</string>
-    <string name="lut_creator_custom_ai_hint">例如：让画面更有氛围感，加深对比度</string>
+    <string name="lut_creator_title">仿色</string>
+    <string name="lut_creator_desc">用原图和效果图配对，复刻色彩风格并生成专属 LUT。</string>
+    <string name="lut_creator_tab_local">原图 / 效果图配对</string>
     <string name="lut_creator_select_images">选择图片</string>
-    <string name="lut_creator_ai_mode_desc">上传一张效果图，AI 会直接推断文字版 LUT 配方，不再调用图片编辑能力。</string>
-    <string name="lut_creator_local_mode_desc">上传多组图片，每组包含一张原图和一张效果图，且应尽量是完全相同的场景。</string>
-    <string name="lut_creator_local_pairs_hint">本地分析支持多组原图/效果图配对。构图、曝光和场景越一致，合并后的控制点越稳定。</string>
+    <string name="lut_creator_local_mode_desc">添加一组或多组图片，每组包含同一场景的一张原图和一张调色后的效果图。</string>
+    <string name="lut_creator_local_pairs_hint">配对越多，构图和曝光越一致，生成的 LUT 越准确。</string>
     <string name="lut_creator_select_source_image">选择原图</string>
     <string name="lut_creator_select_effect_image">选择效果图</string>
     <string name="lut_creator_reset_local_selection">清空已选内容</string>
@@ -1059,10 +1052,9 @@
     <string name="lut_creator_local_pairs_count">已添加 %1$d 组图片</string>
     <string name="lut_creator_local_pending_target">当前有 1 组还差效果图</string>
     <string name="lut_creator_local_ready_status">可以继续添加图片组，或直接开始分析</string>
-    <string name="lut_creator_start_local_analysis">开始本地分析</string>
+    <string name="lut_creator_start_local_analysis">开始分析</string>
     <string name="lut_creator_analyzing">正在分析图片风格…</string>
     <string name="lut_creator_analysis_complete">分析完成！</string>
-    <string name="lut_creator_ai_restored_preview">AI 还原的原图预览</string>
     <string name="lut_creator_lut_name_hint">LUT 预设名称</string>
     <string name="lut_creator_generate_save">生成并保存</string>
     <string name="lut_creator_generating">正在生成 3D LUT 数据…</string>
@@ -1113,7 +1105,7 @@
     <string name="settings_default_virtual_aperture_description">开启后，拍摄及导入照片将自动应用所选光圈值的虚化效果。</string>
     <string name="virtual_aperture_depth_model_description">使用当前已安装的兼容深度模型。首次使用时可下载默认模型，或导入其他兼容的 TFLite 模型。</string>
     <string name="gallery_large_aperture_blur_title">大光圈虚化</string>
-    <string name="gallery_large_aperture_blur_description">使用当前已安装的兼容深度模型估计画面深度，模拟大光圈的浅景深、背景虚化和柔和散景光斑。轻点画面可改变对焦位置；光圈值越小，虚化越强。首次使用时可下载默认模型，或导入其他兼容的 TFLite 模型。</string>
+    <string name="gallery_large_aperture_blur_description">模拟大光圈的浅景深背景虚化效果</string>
     <string name="gallery_bokeh_style_title">光斑风格</string>
     <string name="gallery_bokeh_processing">虚化处理中…</string>
     <string name="gallery_denoise_processing">降噪处理中…</string>
