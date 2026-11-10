@@ -1412,9 +1412,12 @@ class Camera2Controller(private val context: Context) {
             StillFlashPhase.WAITING_AE_AF -> {
                 // The trigger result is eligible. Like MGC's per-key listeners, retain each
                 // completed condition while waiting for the other; AWB is not a prerequisite.
+                // Some (e.g. LEGACY) devices never report AE state; treat null as ready like the
+                // Android screen-flash guideline instead of waiting for the full timeout.
                 pending.aeReady = pending.aeReady ||
-                    (aeMode == request.get(CaptureRequest.CONTROL_AE_MODE) &&
-                        (aeState == CaptureResult.CONTROL_AE_STATE_CONVERGED ||
+                    ((aeMode == null || aeMode == request.get(CaptureRequest.CONTROL_AE_MODE)) &&
+                        (aeState == null ||
+                            aeState == CaptureResult.CONTROL_AE_STATE_CONVERGED ||
                             aeState == CaptureResult.CONTROL_AE_STATE_FLASH_REQUIRED))
                 pending.afReady = pending.afReady || !pending.triggerAf ||
                     (afMode == pending.afMode &&
@@ -1700,6 +1703,7 @@ class Camera2Controller(private val context: Context) {
         val aeMode = result.get(CaptureResult.CONTROL_AE_MODE)
         val aeState = result.get(CaptureResult.CONTROL_AE_STATE)
         val aeReady = aeMode == CaptureResult.CONTROL_AE_MODE_OFF ||
+            aeState == null ||
             aeState == CaptureResult.CONTROL_AE_STATE_CONVERGED ||
             aeState == CaptureResult.CONTROL_AE_STATE_LOCKED
         val awbState = result.get(CaptureResult.CONTROL_AWB_STATE)
