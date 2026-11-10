@@ -47,22 +47,30 @@ sealed interface DepthModelDownloadState {
  *
  * The model is kept in app-private storage and is installed atomically only after
  * it has been verified as a TFLite model compatible with the app's depth pipeline.
- * The bundled download additionally retains exact size and SHA-256 verification.
+ * The default model (Depth Anything 3 Small, LiteRT GPU FP16) is downloaded from a
+ * commit-pinned Hugging Face URL and additionally verified by exact size and SHA-256.
  */
 object DepthModelManager {
     private const val TAG = "DepthModelManager"
-    private const val MODEL_DIRECTORY = "ml_models/depth_anything_v2"
-    private const val MODEL_FILE_NAME = "depth_anything_v2.tflite"
-    private const val MODEL_ARCHIVE_PART_FILE_NAME = "depth_anything_v2.zip.part"
-    private const val MODEL_IMPORT_PART_FILE_NAME = "depth_anything_v2.import.part"
-    private const val MODEL_PART_FILE_NAME = "depth_anything_v2.tflite.part"
-    private const val EXPECTED_MODEL_SIZE_BYTES = 98_920_480L
+    private const val MODEL_DIRECTORY = "ml_models/depth"
+    private const val MODEL_FILE_NAME = "depth.tflite"
+    private const val MODEL_IMPORT_PART_FILE_NAME = "depth.import.part"
+    private const val MODEL_PART_FILE_NAME = "depth.tflite.part"
+    private const val EXPECTED_MODEL_SIZE_BYTES = 55_035_456L
     private const val MAX_IMPORT_SIZE_BYTES = 256L * 1024L * 1024L
-    private const val OFFICIAL_MODEL_SHA256 =
-        "69302c7b94a2ebe6f31d5caa78cb72d7e15f5ba72804d0423e699787368a255f"
+    internal const val OFFICIAL_MODEL_SHA256 =
+        "e170369a72ba1bba7486a4d2de555639fccd0595a9bb5b5349f7733ed4aebd1f"
+    private const val MODEL_PATH =
+        "/litert-community/Depth-Anything-3-Small/resolve/" +
+            "5cd25d936e3fde2edef68f53b4123401454ac9c8/da3_small_gpu_fp16.tflite"
 
-    const val MODEL_DOWNLOAD_URL =
-        "https://qaihub-public-assets.s3.us-west-2.amazonaws.com/qai-hub-models/models/depth_anything_v2/releases/v0.59.0/depth_anything_v2-tflite-float.zip"
+    /**
+     * Before Depth Anything 3 the model lived here. The former default (Depth Anything V2,
+     * identified by its exact size) is removed; a user-imported model is carried over.
+     */
+    private const val LEGACY_MODEL_DIRECTORY = "ml_models/depth_anything_v2"
+    private const val LEGACY_MODEL_FILE_NAME = "depth_anything_v2.tflite"
+    private const val LEGACY_DEFAULT_MODEL_SIZE_BYTES = 98_920_480L
 
     private val lock = Any()
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
@@ -104,7 +112,7 @@ object DepthModelManager {
         return sha256(requireInstalledModelFile(context.applicationContext))
     }
 
-    fun download(context: Context) {
+    fun download(context: Context, source: HfModelSource) {
         val appContext = context.applicationContext
         initialize(appContext)
         synchronized(lock) {
@@ -115,6 +123,7 @@ object DepthModelManager {
             if (operationJob?.isActive == true) {
                 return
             }
+            HfModelSource.remember(appContext, source)
 
             _state.value = DepthModelDownloadState.Downloading(
                 progress = 0f,
@@ -122,10 +131,10 @@ object DepthModelManager {
             )
             val newJob = scope.launch(start = CoroutineStart.LAZY) {
                 try {
-                    downloadAndInstall(appContext)
+                    downloadAndInstall(appContext, source)
                     _state.value = DepthModelDownloadState.Ready
                 } catch (e: Exception) {
-                    PLog.w(TAG, "Failed to download or install the default depth model", e)
+                    PLog.w(TAG, "Failed to download or install the default depth model from ${source.host}", e)
                     _state.value = DepthModelDownloadState.Failed
                 }
             }
@@ -176,6 +185,7 @@ object DepthModelManager {
             if (initialized) {
                 return
             }
+            migrateLegacyModel(context)
             _state.value = if (installedModelFileOrNull(context) != null) {
                 DepthModelDownloadState.Ready
             } else {
@@ -185,30 +195,51 @@ object DepthModelManager {
         }
     }
 
-    private fun downloadAndInstall(context: Context) {
+    private fun migrateLegacyModel(context: Context) {
+        val legacyDirectory = File(context.filesDir, LEGACY_MODEL_DIRECTORY)
+        if (!legacyDirectory.exists()) return
+        val legacyModel = File(legacyDirectory, LEGACY_MODEL_FILE_NAME)
+        val target = modelFile(context)
+        if (
+            hasValidInstalledModelFile(legacyModel) &&
+            legacyModel.length() != LEGACY_DEFAULT_MODEL_SIZE_BYTES &&
+            !target.exists()
+        ) {
+            try {
+                if (!modelDirectory(context).isDirectory && !modelDirectory(context).mkdirs()) {
+                    throw IOException("Cannot create depth model directory")
+                }
+                installAtomically(legacyModel, target)
+                PLog.d(TAG, "Carried over imported depth model to ${target.absolutePath}")
+            } catch (e: IOException) {
+                PLog.e(TAG, "Cannot carry over imported depth model", e)
+            }
+        }
+        if (!legacyDirectory.deleteRecursively()) {
+            PLog.w(TAG, "Cannot remove legacy depth model directory: ${legacyDirectory.absolutePath}")
+        }
+    }
+
+    private fun downloadAndInstall(context: Context, source: HfModelSource) {
         val modelDirectory = modelDirectory(context)
         if (!modelDirectory.isDirectory && !modelDirectory.mkdirs()) {
             throw IOException("Cannot create depth model directory: ${modelDirectory.absolutePath}")
         }
 
-        val archivePartFile = File(modelDirectory, MODEL_ARCHIVE_PART_FILE_NAME)
         val modelPartFile = File(modelDirectory, MODEL_PART_FILE_NAME)
-        archivePartFile.deleteIfExistsOrThrow()
         modelPartFile.deleteIfExistsOrThrow()
 
         try {
-            downloadArchive(archivePartFile)
+            downloadModel(source.url(MODEL_PATH), modelPartFile)
             _state.value = DepthModelDownloadState.Downloading(
                 progress = 1f,
                 isInstalling = true
             )
-            extractOfficialModel(archivePartFile, modelPartFile)
             validateOfficialModel(modelPartFile)
             installAtomically(modelPartFile, modelFile(context))
             publishInstallation()
             PLog.d(TAG, "Default depth model installed: ${modelFile(context).absolutePath}")
         } finally {
-            archivePartFile.deleteIfExistsOrLog()
             modelPartFile.deleteIfExistsOrLog()
         }
     }
@@ -272,9 +303,9 @@ object DepthModelManager {
         }
     }
 
-    private fun downloadArchive(target: File) {
+    private fun downloadModel(url: String, target: File) {
         val request = Request.Builder()
-            .url(MODEL_DOWNLOAD_URL)
+            .url(url)
             .get()
             .build()
         client.newCall(request).execute().use { response ->
@@ -282,7 +313,7 @@ object DepthModelManager {
                 throw IOException("Model download failed with HTTP ${response.code}")
             }
             val body = response.body ?: throw IOException("Model download response has no body")
-            val totalBytes = body.contentLength().takeIf { it > 0L }
+            val totalBytes = EXPECTED_MODEL_SIZE_BYTES
             var downloadedBytes = 0L
             var lastPublishedBytes = 0L
 
@@ -294,8 +325,11 @@ object DepthModelManager {
                         if (read < 0) {
                             break
                         }
-                        output.write(buffer, 0, read)
                         downloadedBytes += read
+                        if (downloadedBytes > totalBytes) {
+                            throw IOException("Model download exceeds the expected size")
+                        }
+                        output.write(buffer, 0, read)
                         if (downloadedBytes - lastPublishedBytes >= PROGRESS_UPDATE_BYTES) {
                             publishDownloadProgress(downloadedBytes, totalBytes)
                             lastPublishedBytes = downloadedBytes
@@ -305,61 +339,19 @@ object DepthModelManager {
                 }
             }
             publishDownloadProgress(downloadedBytes, totalBytes)
-            if (totalBytes != null && downloadedBytes != totalBytes) {
+            if (downloadedBytes != totalBytes) {
                 throw IOException(
-                    "Incomplete model archive: downloaded=$downloadedBytes expected=$totalBytes"
+                    "Incomplete model: downloaded=$downloadedBytes expected=$totalBytes"
                 )
             }
         }
     }
 
-    private fun publishDownloadProgress(downloadedBytes: Long, totalBytes: Long?) {
+    private fun publishDownloadProgress(downloadedBytes: Long, totalBytes: Long) {
         _state.value = DepthModelDownloadState.Downloading(
-            progress = totalBytes?.let {
-                (downloadedBytes.toDouble() / it.toDouble()).toFloat().coerceIn(0f, 1f)
-            },
+            progress = (downloadedBytes.toDouble() / totalBytes.toDouble()).toFloat().coerceIn(0f, 1f),
             isInstalling = false
         )
-    }
-
-    private fun extractOfficialModel(archive: File, target: File) {
-        var modelEntryFound = false
-        FileInputStream(archive).use { fileInput ->
-            ZipInputStream(fileInput).use { zipInput ->
-                var entry = zipInput.nextEntry
-                while (entry != null) {
-                    if (!entry.isDirectory && entry.name.substringAfterLast('/') == MODEL_FILE_NAME) {
-                        if (entry.size >= 0L && entry.size != EXPECTED_MODEL_SIZE_BYTES) {
-                            throw IOException("Unexpected depth model entry size: ${entry.size}")
-                        }
-                        FileOutputStream(target).use { output ->
-                            val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
-                            var extractedBytes = 0L
-                            while (true) {
-                                val read = zipInput.read(buffer)
-                                if (read < 0) {
-                                    break
-                                }
-                                extractedBytes += read
-                                if (extractedBytes > EXPECTED_MODEL_SIZE_BYTES) {
-                                    throw IOException("Depth model ZIP entry exceeds expected size")
-                                }
-                                output.write(buffer, 0, read)
-                            }
-                            output.fd.sync()
-                        }
-                        modelEntryFound = true
-                        zipInput.closeEntry()
-                        break
-                    }
-                    zipInput.closeEntry()
-                    entry = zipInput.nextEntry
-                }
-            }
-        }
-        if (!modelEntryFound) {
-            throw IOException("Depth model archive does not contain $MODEL_FILE_NAME")
-        }
     }
 
     private fun extractImportedModel(archive: File, target: File) {

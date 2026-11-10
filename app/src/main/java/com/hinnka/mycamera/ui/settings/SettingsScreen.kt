@@ -147,6 +147,7 @@ import com.hinnka.mycamera.gallery.Jpeg444ExportEncoder
 import com.hinnka.mycamera.lut.creator.OpenAIApiClient
 import com.hinnka.mycamera.ml.DepthModelDownloadState
 import com.hinnka.mycamera.ml.DepthModelManager
+import com.hinnka.mycamera.ml.HfModelSource
 import com.hinnka.mycamera.raw.RawCfaCorrection
 import com.hinnka.mycamera.raw.RawSharpeningDefaults
 import com.hinnka.mycamera.raw.RawDenoiseDefaults
@@ -879,9 +880,12 @@ fun SettingsScreen(
     }
 
     if (showDepthModelDownloadDialog) {
+        var depthModelSource by remember { mutableStateOf(HfModelSource.preferred(context)) }
         DepthModelDownloadDialog(
+            source = depthModelSource,
+            onSourceChange = { depthModelSource = it },
             state = depthModelState,
-            onDownload = { DepthModelManager.download(context) },
+            onDownload = { DepthModelManager.download(context, depthModelSource) },
             onImport = { depthModelImportLauncher.launch(arrayOf("*/*")) },
             onDismiss = {
                 showDepthModelDownloadDialog = false

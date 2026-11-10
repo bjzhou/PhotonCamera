@@ -14,6 +14,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import com.hinnka.mycamera.R
+import com.hinnka.mycamera.ml.HfModelSource
 import com.hinnka.mycamera.ml.AiDenoiseModelState
 import kotlin.math.roundToInt
 
@@ -21,6 +22,8 @@ import kotlin.math.roundToInt
 @Composable
 fun AiDenoiseModelDownloadDialog(
     state: AiDenoiseModelState,
+    source: HfModelSource,
+    onSourceChange: (HfModelSource) -> Unit,
     onDownload: () -> Unit,
     onDismiss: () -> Unit
 ) {
@@ -42,6 +45,10 @@ fun AiDenoiseModelDownloadDialog(
                     ),
                     style = MaterialTheme.typography.bodyMedium
                 )
+                if (state == AiDenoiseModelState.Missing || state == AiDenoiseModelState.Failed) {
+                    Spacer(modifier = Modifier.height(16.dp))
+                    HfModelSourcePicker(source = source, onSourceChange = onSourceChange)
+                }
                 if (downloading != null) {
                     Spacer(modifier = Modifier.height(16.dp))
                     val progress = downloading.progress

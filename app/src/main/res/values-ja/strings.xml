@@ -954,7 +954,7 @@
     <string name="edit_panel_expand">編集コントロールを展開</string>
     <string name="edit_panel_minimize">編集コントロールを折りたたむ</string>
     <string name="depth_model_download_title">深度モデル</string>
-    <string name="depth_model_download_description">深度連動ボケには、RGB画像1入力・1ch深度出力の対応TFLite深度モデルが必要です。既定のDepth Anything V2モデル（約100MB）をダウンロードするか、別のTFLiteモデルまたはそれを含むZIPを読み込めます。モデルはアプリ内の非公開領域に保存されます。</string>
+    <string name="depth_model_download_description">深度連動ボケには、RGB画像1入力・1ch深度出力の対応TFLite深度モデルが必要です。既定のDepth Anything 3モデル（約55MB）をダウンロードするか、別のTFLiteモデルまたはそれを含むZIPを読み込めます。モデルはアプリ内の非公開領域に保存されます。</string>
     <string name="depth_model_download_action">ダウンロード</string>
     <string name="depth_model_import_action">読み込み</string>
     <string name="depth_model_downloading">モデルをダウンロード中…</string>
@@ -1325,4 +1325,6 @@
     <string name="ai_denoise_model_failed">モデルのダウンロードまたは検証に失敗しました。接続を確認して再試行してください。</string>
     <string name="ai_denoise_model_download">ダウンロード</string>
     <string name="ai_denoise_model_retry">再試行</string>
+    <string name="model_download_source">ダウンロード元</string>
+    <string name="model_download_source_mirror">HF ミラー（hf-mirror.com）</string>
 </resources>

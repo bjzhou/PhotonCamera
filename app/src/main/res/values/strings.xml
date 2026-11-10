@@ -1136,7 +1136,7 @@
     <string name="edit_panel_expand">Expand editing controls</string>
     <string name="edit_panel_minimize">Minimize editing controls</string>
     <string name="depth_model_download_title">Depth Model</string>
-    <string name="depth_model_download_description">Depth-aware blur requires a compatible TFLite depth model with one RGB image input and a single-channel depth output. Download the default Depth Anything V2 model (about 100 MB), or import another TFLite model or a ZIP containing one. The model will be stored privately by the app.</string>
+    <string name="depth_model_download_description">Depth-aware blur requires a compatible TFLite depth model with one RGB image input and a single-channel depth output. Download the default Depth Anything 3 model (about 55 MB), or import another TFLite model or a ZIP containing one. The model will be stored privately by the app.</string>
     <string name="depth_model_download_action">Download</string>
     <string name="depth_model_import_action">Import</string>
     <string name="depth_model_downloading">Downloading model…</string>
@@ -1528,4 +1528,7 @@
     <string name="ai_denoise_model_failed">The model could not be downloaded or verified. Check your connection and try again.</string>
     <string name="ai_denoise_model_download">Download</string>
     <string name="ai_denoise_model_retry">Retry</string>
+    <string name="model_download_source">Download source</string>
+    <string name="model_download_source_hugging_face" translatable="false">Hugging Face</string>
+    <string name="model_download_source_mirror">HF Mirror (hf-mirror.com)</string>
 </resources>

@@ -15,12 +15,15 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import com.hinnka.mycamera.R
 import com.hinnka.mycamera.ml.DepthModelDownloadState
+import com.hinnka.mycamera.ml.HfModelSource
 import androidx.compose.ui.res.stringResource
 import kotlin.math.roundToInt
 
 @Composable
 fun DepthModelDownloadDialog(
     state: DepthModelDownloadState,
+    source: HfModelSource,
+    onSourceChange: (HfModelSource) -> Unit,
     onDownload: () -> Unit,
     onImport: () -> Unit,
     onDismiss: () -> Unit
@@ -47,6 +50,10 @@ fun DepthModelDownloadDialog(
                     },
                     style = MaterialTheme.typography.bodyMedium
                 )
+                if (state == DepthModelDownloadState.Missing || state == DepthModelDownloadState.Failed) {
+                    Spacer(modifier = Modifier.height(16.dp))
+                    HfModelSourcePicker(source = source, onSourceChange = onSourceChange)
+                }
                 if (isBusy) {
                     Spacer(modifier = Modifier.height(16.dp))
                     val progress = (state as? DepthModelDownloadState.Downloading)?.progress

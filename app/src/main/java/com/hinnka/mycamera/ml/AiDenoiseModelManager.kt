@@ -40,7 +40,7 @@ sealed interface AiDenoiseModelState {
 /**
  * Owns the AI denoise model (SCUNet color σ=25, see docs/scunet-tflite.md).
  *
- * The model is downloaded from a commit-pinned Hugging Face URL, verified by exact size,
+ * The model is downloaded from a commit-pinned Hugging Face URL (directly or via hf-mirror.com), verified by exact size,
  * SHA-256 and tensor contract, and installed atomically into app-private storage.
  */
 object AiDenoiseModelManager {
@@ -51,9 +51,8 @@ object AiDenoiseModelManager {
     private const val EXPECTED_MODEL_SIZE_BYTES = 47_200_352L
     const val MODEL_SHA256 = "8d060b8e58d3224ab14ee2af72c737af30cc3dd68790f26aca20f364734dd10c"
 
-    const val MODEL_DOWNLOAD_URL =
-        "https://huggingface.co/Binjia/scunet-color-25-litert/resolve/" +
-            "9454c201ad03a74bbcbb7005232072f01a3b233c/scunet_color_25.tflite"
+    private const val MODEL_PATH =
+        "/Binjia/scunet-color-25-litert/resolve/9454c201ad03a74bbcbb7005232072f01a3b233c/scunet_color_25.tflite"
 
     /** Model directories of earlier AI denoise models, removed on first use. */
     private val LEGACY_MODEL_DIRECTORIES = listOf("ml_models/nafnet_sidd_w32", "ml_models/scunet_color_real_psnr")
@@ -80,7 +79,7 @@ object AiDenoiseModelManager {
         return modelFile(context.applicationContext).takeIf { it.isFile && it.length() == EXPECTED_MODEL_SIZE_BYTES }
     }
 
-    fun download(context: Context) {
+    fun download(context: Context, source: HfModelSource) {
         val appContext = context.applicationContext
         initialize(appContext)
         synchronized(lock) {
@@ -89,14 +88,15 @@ object AiDenoiseModelManager {
                 return
             }
             if (operationJob?.isActive == true) return
+            HfModelSource.remember(appContext, source)
 
             _state.value = AiDenoiseModelState.Downloading(progress = 0f, isInstalling = false)
             val newJob = scope.launch(start = CoroutineStart.LAZY) {
                 try {
-                    downloadAndInstall(appContext)
+                    downloadAndInstall(appContext, source)
                     _state.value = AiDenoiseModelState.Ready
                 } catch (e: Exception) {
-                    PLog.w(TAG, "Failed to download or install the AI denoise model", e)
+                    PLog.w(TAG, "Failed to download or install the AI denoise model from ${source.host}", e)
                     _state.value = AiDenoiseModelState.Failed
                 }
             }
@@ -132,7 +132,7 @@ object AiDenoiseModelManager {
         }
     }
 
-    private fun downloadAndInstall(context: Context) {
+    private fun downloadAndInstall(context: Context, source: HfModelSource) {
         val directory = File(context.filesDir, MODEL_DIRECTORY)
         if (!directory.isDirectory && !directory.mkdirs()) {
             throw IOException("Cannot create model directory: ${directory.absolutePath}")
@@ -142,7 +142,7 @@ object AiDenoiseModelManager {
             throw IOException("Cannot remove stale temporary file: ${partFile.absolutePath}")
         }
         try {
-            downloadTo(partFile)
+            downloadTo(source.url(MODEL_PATH), partFile)
             _state.value = AiDenoiseModelState.Downloading(progress = 1f, isInstalling = true)
             validate(partFile)
             installAtomically(partFile, modelFile(context))
@@ -154,8 +154,8 @@ object AiDenoiseModelManager {
         }
     }
 
-    private fun downloadTo(target: File) {
-        val request = Request.Builder().url(MODEL_DOWNLOAD_URL).get().build()
+    private fun downloadTo(url: String, target: File) {
+        val request = Request.Builder().url(url).get().build()
         client.newCall(request).execute().use { response ->
             if (!response.isSuccessful) {
                 throw IOException("Model download failed with HTTP ${response.code}")

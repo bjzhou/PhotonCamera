@@ -1284,7 +1284,7 @@
     <string name="edit_panel_expand">Développer les commandes de retouche</string>
     <string name="edit_panel_minimize">Réduire les commandes de retouche</string>
     <string name="depth_model_download_title">Modèle de profondeur</string>
-    <string name="depth_model_download_description">Le flou tenant compte de la profondeur nécessite un modèle de profondeur TFLite compatible, avec une entrée image RGB et une sortie de profondeur à un seul canal. Téléchargez le modèle Depth Anything V2 par défaut (environ 100 Mo), ou importez un autre modèle TFLite ou un ZIP en contenant un. Le modèle sera stocké en privé par l\'application.</string>
+    <string name="depth_model_download_description">Le flou tenant compte de la profondeur nécessite un modèle de profondeur TFLite compatible, avec une entrée image RGB et une sortie de profondeur à un seul canal. Téléchargez le modèle Depth Anything 3 par défaut (environ 55 Mo), ou importez un autre modèle TFLite ou un ZIP en contenant un. Le modèle sera stocké en privé par l\'application.</string>
     <string name="depth_model_download_action">Télécharger</string>
     <string name="depth_model_import_action">Importer</string>
     <string name="depth_model_downloading">Téléchargement du modèle…</string>
@@ -1486,4 +1486,6 @@
     <string name="ai_denoise_model_failed">Le modèle n\'a pas pu être téléchargé ou vérifié. Vérifiez votre connexion et réessayez.</string>
     <string name="ai_denoise_model_download">Télécharger</string>
     <string name="ai_denoise_model_retry">Réessayer</string>
+    <string name="model_download_source">Source de téléchargement</string>
+    <string name="model_download_source_mirror">Miroir HF (hf-mirror.com)</string>
 </resources>

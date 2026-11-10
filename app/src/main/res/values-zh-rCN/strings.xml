@@ -1124,7 +1124,7 @@
     <string name="edit_panel_expand">展开编辑面板</string>
     <string name="edit_panel_minimize">最小化编辑面板</string>
     <string name="depth_model_download_title">深度模型</string>
-    <string name="depth_model_download_description">景深虚化功能需要兼容的 TFLite 深度模型：包含一个 RGB 图像输入和一个单通道深度输出。你可以下载默认的 Depth Anything V2 模型（约 100 MB），也可以导入其他 TFLite 模型或包含模型的 ZIP 压缩包。模型将保存在应用的私有目录中。</string>
+    <string name="depth_model_download_description">景深虚化功能需要兼容的 TFLite 深度模型：包含一个 RGB 图像输入和一个单通道深度输出。你可以下载默认的 Depth Anything 3 模型（约 55 MB），也可以导入其他 TFLite 模型或包含模型的 ZIP 压缩包。模型将保存在应用的私有目录中。</string>
     <string name="depth_model_download_action">下载</string>
     <string name="depth_model_import_action">导入</string>
     <string name="depth_model_downloading">正在下载模型…</string>
@@ -1504,4 +1504,6 @@
     <string name="ai_denoise_model_failed">模型下载或校验失败，请检查网络后重试。</string>
     <string name="ai_denoise_model_download">下载</string>
     <string name="ai_denoise_model_retry">重试</string>
+    <string name="model_download_source">下载源</string>
+    <string name="model_download_source_mirror">HF 镜像站（hf-mirror.com）</string>
 </resources>

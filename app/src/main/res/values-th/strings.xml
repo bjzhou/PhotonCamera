@@ -1121,4 +1121,6 @@
     <string name="ai_denoise_model_failed">ไม่สามารถดาวน์โหลดหรือตรวจสอบโมเดลได้ โปรดตรวจสอบการเชื่อมต่อแล้วลองอีกครั้ง</string>
     <string name="ai_denoise_model_download">ดาวน์โหลด</string>
     <string name="ai_denoise_model_retry">ลองอีกครั้ง</string>
+    <string name="model_download_source">แหล่งดาวน์โหลด</string>
+    <string name="model_download_source_mirror">มิเรอร์ HF (hf-mirror.com)</string>
 </resources>

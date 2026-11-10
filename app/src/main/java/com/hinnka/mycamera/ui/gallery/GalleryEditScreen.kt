@@ -72,6 +72,7 @@ import com.hinnka.mycamera.model.RecipeParam
 import com.hinnka.mycamera.model.toEffectParams
 import com.hinnka.mycamera.ml.DepthModelDownloadState
 import com.hinnka.mycamera.ml.DepthModelManager
+import com.hinnka.mycamera.ml.HfModelSource
 import com.hinnka.mycamera.ml.AiDenoiseModelManager
 import com.hinnka.mycamera.ml.AiDenoiseModelState
 import com.hinnka.mycamera.raw.SpectralFilmSelection
@@ -2115,9 +2116,12 @@ fun GalleryEditScreen(
     }
 
     if (pendingAiDenoise) {
+        var aiDenoiseModelSource by remember { mutableStateOf(HfModelSource.preferred(context)) }
         AiDenoiseModelDownloadDialog(
             state = aiDenoiseModelState,
-            onDownload = { AiDenoiseModelManager.download(context) },
+            source = aiDenoiseModelSource,
+            onSourceChange = { aiDenoiseModelSource = it },
+            onDownload = { AiDenoiseModelManager.download(context, aiDenoiseModelSource) },
             onDismiss = {
                 pendingAiDenoise = false
                 viewModel.setAiDenoiseEnabled(false)
@@ -2126,9 +2130,12 @@ fun GalleryEditScreen(
     }
 
     if (showDepthModelDownloadDialog) {
+        var depthModelSource by remember { mutableStateOf(HfModelSource.preferred(context)) }
         DepthModelDownloadDialog(
+            source = depthModelSource,
+            onSourceChange = { depthModelSource = it },
             state = depthModelState,
-            onDownload = { DepthModelManager.download(context) },
+            onDownload = { DepthModelManager.download(context, depthModelSource) },
             onImport = { depthModelImportLauncher.launch(arrayOf("*/*")) },
             onDismiss = {
                 showDepthModelDownloadDialog = false
