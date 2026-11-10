@@ -1447,9 +1447,10 @@
     <string name="model_download_source_mirror">Miroir HF (hf-mirror.com)</string>
     <string name="ai_color_match_action">Correspondance des couleurs IA</string>
     <string name="ai_color_match_active">Correspondance IA · cette photo uniquement</string>
-    <string name="ai_color_match_hint">Adapte les couleurs de cette photo à une image de référence. Le résultat s\'applique uniquement à cette photo et n\'est pas ajouté à la bibliothèque de filtres.</string>
-    <string name="ai_color_match_pick">Choisir une référence</string>
-    <string name="ai_color_match_change">Changer de référence</string>
+    <string name="ai_color_match_hint">Adapte les couleurs de cette photo à une image de référence. Touchez une référence enregistrée pour la réutiliser. Le résultat s\'applique uniquement à cette photo et n\'est pas ajouté à la bibliothèque de filtres.</string>
+    <string name="ai_color_match_add">Ajouter une référence</string>
+    <string name="ai_color_match_delete_reference_title">Supprimer la référence ?</string>
+    <string name="ai_color_match_delete_reference_message">Elle sera retirée de la liste. Les photos déjà harmonisées avec elle conservent leurs couleurs.</string>
     <string name="ai_color_match_remove">Retirer</string>
     <string name="ai_color_match_progress">Correspondance des couleurs…</string>
     <string name="ai_color_match_failed">Échec de la correspondance des couleurs IA. Essayez une autre image de référence.</string>

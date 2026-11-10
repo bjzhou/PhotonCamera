@@ -480,12 +480,22 @@ object GalleryManager {
     fun getAiColorMatchFile(context: Context, photoId: String, version: Long): File =
         File(getPhotoDir(context, photoId, create = true), "$AI_COLOR_MATCH_FILE_PREFIX$version.plut")
 
-    /** Deletes the photo's AI color match LUTs except [keepVersions]. */
+    /**
+     * Id of the [com.hinnka.mycamera.lut.ColorMatchReferenceStore] record a photo's AI color match
+     * was made from, stored next to its LUT.
+     */
+    fun getAiColorMatchReferenceFile(context: Context, photoId: String, version: Long): File =
+        File(getPhotoDir(context, photoId, create = true), "$AI_COLOR_MATCH_FILE_PREFIX$version.ref")
+
+    /** Deletes the photo's AI color match LUTs (and their reference records) except [keepVersions]. */
     fun deleteAiColorMatchFiles(context: Context, photoId: String, keepVersions: Set<Long>) {
         getPhotoDir(context, photoId).listFiles()?.forEach { file ->
-            val version = file.name.removePrefix(AI_COLOR_MATCH_FILE_PREFIX).removeSuffix(".plut").toLongOrNull()
-            if (file.name.startsWith(AI_COLOR_MATCH_FILE_PREFIX) && version != null && version !in keepVersions) {
-                if (!file.delete()) PLog.w(TAG, "Cannot delete AI color match LUT: ${file.absolutePath}")
+            if (!file.name.startsWith(AI_COLOR_MATCH_FILE_PREFIX)) return@forEach
+            val version = file.name.removePrefix(AI_COLOR_MATCH_FILE_PREFIX)
+                .substringBeforeLast('.')
+                .toLongOrNull()
+            if (version != null && version !in keepVersions) {
+                if (!file.delete()) PLog.w(TAG, "Cannot delete AI color match file: ${file.absolutePath}")
             }
         }
     }

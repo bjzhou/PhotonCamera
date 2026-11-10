@@ -1082,9 +1082,10 @@
     <string name="model_download_source_mirror">มิเรอร์ HF (hf-mirror.com)</string>
     <string name="ai_color_match_action">จับคู่สีด้วย AI</string>
     <string name="ai_color_match_active">จับคู่สีด้วย AI · เฉพาะภาพนี้</string>
-    <string name="ai_color_match_hint">ปรับสีภาพนี้ให้เข้ากับภาพอ้างอิง ผลลัพธ์ใช้กับภาพนี้เท่านั้นและไม่ถูกเพิ่มลงในคลังฟิลเตอร์</string>
-    <string name="ai_color_match_pick">เลือกภาพอ้างอิง</string>
-    <string name="ai_color_match_change">เปลี่ยนภาพอ้างอิง</string>
+    <string name="ai_color_match_hint">ปรับสีของภาพนี้ให้ตรงกับภาพอ้างอิง แตะภาพอ้างอิงที่บันทึกไว้เพื่อใช้ซ้ำ ผลลัพธ์ใช้กับภาพนี้เท่านั้นและจะไม่ถูกเพิ่มลงในคลังฟิลเตอร์</string>
+    <string name="ai_color_match_add">เพิ่มภาพอ้างอิง</string>
+    <string name="ai_color_match_delete_reference_title">ลบภาพอ้างอิงหรือไม่?</string>
+    <string name="ai_color_match_delete_reference_message">จะถูกนำออกจากรายการ ภาพที่ปรับสีด้วยภาพนี้แล้วจะไม่ได้รับผลกระทบ</string>
     <string name="ai_color_match_remove">ลบ</string>
     <string name="ai_color_match_progress">กำลังจับคู่สี…</string>
     <string name="ai_color_match_failed">จับคู่สีด้วย AI ไม่สำเร็จ ลองใช้ภาพอ้างอิงอื่น</string>

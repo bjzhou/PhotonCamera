@@ -1302,9 +1302,10 @@
     <string name="model_download_source_mirror">HF ミラー（hf-mirror.com）</string>
     <string name="ai_color_match_action">AI カラーマッチ</string>
     <string name="ai_color_match_active">AI カラーマッチ（この写真のみ）</string>
-    <string name="ai_color_match_hint">参照画像の色調にこの写真を合わせます。結果はこの写真だけに適用され、フィルターライブラリには追加されません。</string>
-    <string name="ai_color_match_pick">参照画像を選択</string>
-    <string name="ai_color_match_change">参照画像を変更</string>
+    <string name="ai_color_match_hint">参照画像の色調にこの写真を合わせます。保存済みの参照画像をタップすると再利用できます。結果はこの写真だけに適用され、フィルターライブラリには追加されません。</string>
+    <string name="ai_color_match_add">参照画像を追加</string>
+    <string name="ai_color_match_delete_reference_title">参照画像を削除しますか？</string>
+    <string name="ai_color_match_delete_reference_message">リストから削除されます。この画像で色合わせ済みの写真には影響しません。</string>
     <string name="ai_color_match_remove">削除</string>
     <string name="ai_color_match_progress">カラーマッチ中…</string>
     <string name="ai_color_match_failed">AI カラーマッチに失敗しました。別の参照画像でお試しください。</string>

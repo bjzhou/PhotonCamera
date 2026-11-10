@@ -1465,9 +1465,10 @@
     <string name="model_download_source_mirror">HF 镜像站（hf-mirror.com）</string>
     <string name="ai_color_match_action">AI 仿色</string>
     <string name="ai_color_match_active">AI 仿色（仅本张照片）</string>
-    <string name="ai_color_match_hint">参考一张图片的色调为本张照片调色，结果只用于这张照片，不会加入滤镜库。</string>
-    <string name="ai_color_match_pick">选择参考图</string>
-    <string name="ai_color_match_change">更换参考图</string>
+    <string name="ai_color_match_hint">参考一张图片的色调为本张照片调色，点按已保存的参考图可重复使用。结果只用于这张照片，不会加入滤镜库。</string>
+    <string name="ai_color_match_add">添加参考图</string>
+    <string name="ai_color_match_delete_reference_title">删除参考图？</string>
+    <string name="ai_color_match_delete_reference_message">将从列表中移除，已用它仿色的照片不受影响。</string>
     <string name="ai_color_match_remove">移除</string>
     <string name="ai_color_match_progress">正在仿色…</string>
     <string name="ai_color_match_failed">AI 仿色失败，请换一张参考图再试。</string>

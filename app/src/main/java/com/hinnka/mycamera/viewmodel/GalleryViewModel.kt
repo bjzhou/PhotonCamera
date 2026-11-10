@@ -1,5 +1,6 @@
 package com.hinnka.mycamera.viewmodel
 
+import com.hinnka.mycamera.lut.ColorMatchReferenceStore
 import com.hinnka.mycamera.lut.PhotoColorMatch
 import android.app.Application
 import android.content.Context
@@ -2477,11 +2478,13 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
     val isAiColorMatching = _isAiColorMatching.asStateFlow()
 
     /**
-     * Matches the photo's colors to [referenceUri] with [com.hinnka.mycamera.ml.AiColorMatcher] and
-     * selects the result as this photo's filter. The LUT belongs to the photo only
-     * ([PhotoColorMatch]); it is stored in the photo's directory, not in the filter library.
+     * Matches the photo's colors to the reference of [source] with
+     * [com.hinnka.mycamera.ml.AiColorMatcher] and selects the result as this photo's filter. A newly
+     * picked image is first saved as a [ColorMatchReferenceStore] record so it can be reused. The
+     * LUT belongs to the photo only ([PhotoColorMatch]); it is stored in the photo's directory,
+     * with the id of the reference record it was made from, not in the filter library.
      */
-    fun applyAiColorMatch(photo: MediaData, referenceUri: Uri, onComplete: (Boolean) -> Unit) {
+    fun applyAiColorMatch(photo: MediaData, source: ColorMatchReferenceStore.Source, onComplete: (Boolean) -> Unit) {
         if (_isAiColorMatching.value) return
         _isAiColorMatching.value = true
         viewModelScope.launch {
@@ -2493,8 +2496,14 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                     content = GalleryManager.loadOriginalBitmap(context, photo.id, AI_COLOR_MATCH_MAX_EDGE)
                         ?: GalleryManager.loadBitmap(context, photo.uri, AI_COLOR_MATCH_MAX_EDGE)
                         ?: error("Failed to load photo ${photo.id}")
-                    reference = GalleryManager.loadBitmap(context, referenceUri, AI_COLOR_MATCH_MAX_EDGE)
-                        ?: error("Failed to load reference image")
+                    val record = when (source) {
+                        is ColorMatchReferenceStore.Source.NewImage ->
+                            ColorMatchReferenceStore.add(context, source.uri)
+                                ?: error("Failed to save reference image")
+                        is ColorMatchReferenceStore.Source.Saved -> source.reference
+                    }
+                    reference = GalleryManager.loadBitmap(context, Uri.fromFile(record.file), AI_COLOR_MATCH_MAX_EDGE)
+                        ?: error("Failed to load reference image ${record.id}")
                     val cube = com.hinnka.mycamera.ml.AiColorMatcher.createCube(context, content, reference, "AI color match")
                     val version = System.currentTimeMillis()
                     val file = GalleryManager.getAiColorMatchFile(context, photo.id, version)
@@ -2502,6 +2511,7 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                         com.hinnka.mycamera.lut.LutConverter.convertCubeToplut(cube.byteInputStream(), output)
                     }
                     check(converted) { "Failed to convert AI color match LUT" }
+                    GalleryManager.getAiColorMatchReferenceFile(context, photo.id, version).writeText(record.id)
                     // Keep the match the saved metadata still refers to until the edit is saved.
                     val savedVersion = PhotoColorMatch.parse(GalleryManager.loadMetadata(context, photo.id)?.lutId)
                         ?.takeIf { it.photoId == photo.id }?.version
@@ -2518,6 +2528,21 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
             _isAiColorMatching.value = false
             if (lutId != null) setEditLut(lutId)
             onComplete(lutId != null)
+        }
+    }
+
+    /** Id of the reference record the AI color match [lutId] was made from, if known. */
+    suspend fun aiColorMatchReferenceId(lutId: String?): String? {
+        val ref = PhotoColorMatch.parse(lutId) ?: return null
+        return withContext(Dispatchers.IO) {
+            val file = GalleryManager.getAiColorMatchReferenceFile(getApplication(), ref.photoId, ref.version)
+            file.takeIf { it.isFile }?.readText()?.trim()?.takeIf { it.isNotEmpty() }
+        }
+    }
+
+    fun deleteColorMatchReference(id: String) {
+        viewModelScope.launch {
+            ColorMatchReferenceStore.delete(getApplication(), id)
         }
     }
 

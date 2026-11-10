@@ -1,5 +1,6 @@
 package com.hinnka.mycamera.ui.gallery
 
+import com.hinnka.mycamera.lut.ColorMatchReferenceStore
 import com.hinnka.mycamera.lut.PhotoColorMatch
 import android.net.Uri
 import androidx.activity.result.PickVisualMediaRequest
@@ -23,10 +24,13 @@ import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.IntSize
 import kotlin.math.roundToInt
+import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.ui.zIndex
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
@@ -218,11 +222,14 @@ fun GalleryEditScreen(
         ColorFmModelManager.observe(context)
     }.collectAsState()
     val isAiColorMatching by viewModel.isAiColorMatching.collectAsState()
-    var pendingColorMatchReference by remember { mutableStateOf<Uri?>(null) }
+    var pendingColorMatchReference by remember { mutableStateOf<ColorMatchReferenceStore.Source?>(null) }
+    var colorMatchReferenceToDelete by remember { mutableStateOf<ColorMatchReferenceStore.Reference?>(null) }
+    val colorMatchReferences by ColorMatchReferenceStore.references.collectAsState()
+    LaunchedEffect(Unit) { ColorMatchReferenceStore.load(context.applicationContext) }
     val colorMatchReferenceLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.PickVisualMedia()
     ) { uri ->
-        pendingColorMatchReference = uri
+        if (uri != null) pendingColorMatchReference = ColorMatchReferenceStore.Source.NewImage(uri)
     }
 
     LaunchedEffect(depthModelState, pendingVirtualAperture) {
@@ -244,6 +251,9 @@ fun GalleryEditScreen(
     val currentPhoto = currentPhotos.getOrNull(viewModel.currentPhotoIndex)
     val editSourcePhoto = currentPhoto?.relatedPhoto ?: currentPhoto
     val editLutId by viewModel.editLutId.collectAsState()
+    val activeColorMatchReferenceId by produceState<String?>(null, editLutId) {
+        value = viewModel.aiColorMatchReferenceId(editLutId)
+    }
     val editLutRecipeParams by viewModel.editLutRecipeParams.collectAsState()
     val editPhotoRecipeParams by viewModel.editPhotoRecipeParams.collectAsState()
     val editLutConfig = viewModel.editLutConfig
@@ -1583,12 +1593,20 @@ fun GalleryEditScreen(
                                                 Spacer(modifier = Modifier.height(8.dp))
                                                 AiColorMatchRow(
                                                     active = PhotoColorMatch.isId(editLutId),
+                                                    activeReferenceId = activeColorMatchReferenceId
+                                                        .takeIf { PhotoColorMatch.isId(editLutId) },
+                                                    references = colorMatchReferences,
                                                     enabled = !isAiColorMatching,
-                                                    onPickReference = {
+                                                    onAddReference = {
                                                         colorMatchReferenceLauncher.launch(
                                                             PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
                                                         )
                                                     },
+                                                    onReuseReference = {
+                                                        pendingColorMatchReference =
+                                                            ColorMatchReferenceStore.Source.Saved(it)
+                                                    },
+                                                    onDeleteReference = { colorMatchReferenceToDelete = it },
                                                     onRemove = { viewModel.setEditLut(null) },
                                                 )
                                             }
@@ -2184,6 +2202,26 @@ fun GalleryEditScreen(
             onDismiss = { pendingColorMatchReference = null }
         )
     }
+    colorMatchReferenceToDelete?.let { reference ->
+        AlertDialog(
+            onDismissRequest = { colorMatchReferenceToDelete = null },
+            title = { Text(stringResource(R.string.ai_color_match_delete_reference_title)) },
+            text = { Text(stringResource(R.string.ai_color_match_delete_reference_message)) },
+            confirmButton = {
+                TextButton(onClick = {
+                    viewModel.deleteColorMatchReference(reference.id)
+                    colorMatchReferenceToDelete = null
+                }) {
+                    Text(stringResource(R.string.delete))
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { colorMatchReferenceToDelete = null }) {
+                    Text(stringResource(R.string.cancel))
+                }
+            }
+        )
+    }
     if (isAiColorMatching) {
         AlertDialog(
             onDismissRequest = {},
@@ -2729,15 +2767,21 @@ private fun VideoEditPlayer(
 
 /**
  * AI color match for the photo being edited. The match is this photo's own filter (not in the
- * filter library): when [active] it can be re-run with another reference or removed.
+ * filter library). Saved [references] can be tapped to match again; the add tile picks a new
+ * image, which becomes a new record. [activeReferenceId] marks the reference of the current match.
  */
 @Composable
 private fun AiColorMatchRow(
     active: Boolean,
+    activeReferenceId: String?,
+    references: List<ColorMatchReferenceStore.Reference>,
     enabled: Boolean,
-    onPickReference: () -> Unit,
+    onAddReference: () -> Unit,
+    onReuseReference: (ColorMatchReferenceStore.Reference) -> Unit,
+    onDeleteReference: (ColorMatchReferenceStore.Reference) -> Unit,
     onRemove: () -> Unit,
 ) {
+    val tileShape = RoundedCornerShape(8.dp)
     Column(
         modifier = Modifier
             .fillMaxWidth()
@@ -2745,24 +2789,84 @@ private fun AiColorMatchRow(
             .background(Color.White.copy(alpha = if (active) 0.12f else 0.06f))
             .padding(horizontal = 12.dp, vertical = 10.dp)
     ) {
-        Text(
-            text = stringResource(if (active) R.string.ai_color_match_active else R.string.ai_color_match_action),
-            color = if (active) AccentColor else Color.White,
-            style = MaterialTheme.typography.titleSmall
-        )
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                text = stringResource(if (active) R.string.ai_color_match_active else R.string.ai_color_match_action),
+                color = if (active) AccentColor else Color.White,
+                style = MaterialTheme.typography.titleSmall,
+                modifier = Modifier.weight(1f)
+            )
+            if (active) {
+                TextButton(
+                    onClick = onRemove,
+                    enabled = enabled,
+                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp),
+                    modifier = Modifier.heightIn(min = 32.dp)
+                ) {
+                    Text(stringResource(R.string.ai_color_match_remove), color = Color.White)
+                }
+            }
+        }
         Text(
             text = stringResource(R.string.ai_color_match_hint),
             color = Color.White.copy(alpha = 0.6f),
             style = MaterialTheme.typography.bodySmall
         )
-        Spacer(modifier = Modifier.height(8.dp))
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            OutlinedButton(onClick = onPickReference, enabled = enabled) {
-                Text(stringResource(if (active) R.string.ai_color_match_change else R.string.ai_color_match_pick))
+        Spacer(modifier = Modifier.height(10.dp))
+        LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            item(key = "add") {
+                Box(
+                    modifier = Modifier
+                        .size(64.dp)
+                        .clip(tileShape)
+                        .border(1.dp, Color.White.copy(alpha = 0.3f), tileShape)
+                        .clickable(enabled = enabled, onClick = onAddReference),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Add,
+                        contentDescription = stringResource(R.string.ai_color_match_add),
+                        tint = Color.White.copy(alpha = if (enabled) 0.8f else 0.3f)
+                    )
+                }
             }
-            if (active) {
-                TextButton(onClick = onRemove, enabled = enabled) {
-                    Text(stringResource(R.string.ai_color_match_remove), color = Color.White)
+            items(references, key = { it.id }) { reference ->
+                val selected = reference.id == activeReferenceId
+                Box(modifier = Modifier.size(64.dp)) {
+                    coil.compose.AsyncImage(
+                        model = ImageRequest.Builder(LocalContext.current)
+                            .data(reference.file)
+                            .size(256)
+                            .build(),
+                        contentDescription = null,
+                        contentScale = ContentScale.Crop,
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .clip(tileShape)
+                            .border(
+                                width = if (selected) 2.dp else 0.dp,
+                                color = if (selected) AccentColor else Color.Transparent,
+                                shape = tileShape
+                            )
+                            .clickable(enabled = enabled) { onReuseReference(reference) }
+                    )
+                    Box(
+                        modifier = Modifier
+                            .align(Alignment.TopEnd)
+                            .padding(3.dp)
+                            .size(18.dp)
+                            .clip(CircleShape)
+                            .background(Color.Black.copy(alpha = 0.6f))
+                            .clickable(enabled = enabled) { onDeleteReference(reference) },
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Close,
+                            contentDescription = stringResource(R.string.delete),
+                            tint = Color.White,
+                            modifier = Modifier.size(12.dp)
+                        )
+                    }
                 }
             }
         }
