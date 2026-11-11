@@ -1,5 +1,6 @@
 package com.hinnka.mycamera.gallery
 
+import com.hinnka.mycamera.processor.NightVisionCapture
 import android.app.PendingIntent
 import android.content.ContentUris
 import android.content.ContentValues
@@ -3221,6 +3222,7 @@ object GalleryManager {
         photoQuality: Int = 95,
         useSuperResolution: Boolean = false,
         superResolutionScale: Float = 1.0f,
+        nightVision: Boolean = false,
     ) = withContext(Dispatchers.IO) {
         try {
             val photoDir = getPhotoDir(context, photoId, true)
@@ -3240,6 +3242,14 @@ object GalleryManager {
 
             if (metadata.isMirrored) {
                 result = BitmapUtils.flipHorizontal(result)
+            }
+            if (nightVision) {
+                result = NightVisionCapture.process(
+                    context = context,
+                    bitmap = result,
+                    sensorIso = metadata.iso,
+                    photoProcessor = photoProcessor,
+                )
             }
 
             val previewBitmap = result
@@ -4534,6 +4544,7 @@ object GalleryManager {
         rawMaxHdrFusionEnabled: Boolean = true,
         rawMaxSpatialOutputMode: MgcSpatialOutputMode = MgcSpatialOutputMode.BAYER,
         rawMaxMergeMethod: MgcMergeMethod = MgcMergeMethod.SPATIAL_BAYER,
+        nightVision: Boolean = false,
     ) = withContext(Dispatchers.IO) {
         when (val format = images[0].format) {
             ImageFormat.YUV_420_888, ImageFormat.YCBCR_P010, ImageFormat.NV21 -> {
@@ -4550,7 +4561,8 @@ object GalleryManager {
                     chromaNoiseReductionValue,
                     photoQuality,
                     useSuperResolution,
-                    superResolutionScale
+                    superResolutionScale,
+                    nightVision,
                 )
             }
 

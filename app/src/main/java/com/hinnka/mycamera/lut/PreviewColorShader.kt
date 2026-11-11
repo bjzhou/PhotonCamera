@@ -1,5 +1,6 @@
 package com.hinnka.mycamera.lut
 
+
 internal object PreviewColorShader {
     fun source(variant: PreviewColorShaderVariant): String {
         val extension = if (variant.textureSource == PreviewColorTextureSource.EXTERNAL_OES) {
@@ -82,10 +83,6 @@ internal object PreviewColorShader {
             uniform sampler2D uSoftLightTexture;
             uniform float uSoftLight;
             """ else ""}
-            ${if (variant.includeJpegInputToneCurve) """
-            uniform highp sampler2D uJpegInputToneCurveTexture;
-            uniform int uJpegInputToneCurveSize;
-            """ else ""}
 
             const vec3 W = vec3(0.2126, 0.7152, 0.0722);
             const float PI = 3.14159265359;
@@ -99,34 +96,7 @@ internal object PreviewColorShader {
             ${PreviewColorShaderModules.SANITIZE}
             ${BasicToneLutShader.GLSL}
 
-            ${if (variant.includeJpegInputToneCurve) """
-            float sampleJpegInputToneCurve(float value) {
-                int lastIndex = max(uJpegInputToneCurveSize - 1, 1);
-                float position = clamp(value, 0.0, 1.0) * float(lastIndex);
-                int lowerIndex = clamp(int(floor(position)), 0, lastIndex);
-                int upperIndex = min(lowerIndex + 1, lastIndex);
-                float amount = position - float(lowerIndex);
-                float lower = texelFetch(
-                    uJpegInputToneCurveTexture,
-                    ivec2(lowerIndex, 0),
-                    0
-                ).r;
-                float upper = texelFetch(
-                    uJpegInputToneCurveTexture,
-                    ivec2(upperIndex, 0),
-                    0
-                ).r;
-                return mix(lower, upper, amount);
-            }
-
-            vec3 applyJpegInputToneCurve(vec3 color) {
-                return vec3(
-                    sampleJpegInputToneCurve(color.r),
-                    sampleJpegInputToneCurve(color.g),
-                    sampleJpegInputToneCurve(color.b)
-                );
-            }
-            """ else ""}
+            ${if (variant.includeNightVisionTone) NightVisionToneGl.GLSL else ""}
 
             float getLuma(vec3 color) {
                 return dot(color, W);
@@ -186,8 +156,8 @@ internal object PreviewColorShader {
                 }
                 """ else "vec4 color = samplePreviewSource(uvCoord);"}
 
-                ${if (variant.includeJpegInputToneCurve) """
-                color.rgb = applyJpegInputToneCurve(color.rgb);
+                ${if (variant.includeNightVisionTone) """
+                color.rgb = applyNightVisionTone(color.rgb);
                 color.rgb = sanitizeColor(color.rgb);
                 """ else ""}
                 ${if (variant.includeLiteClarity) "float previewSourceLuma = getLuma(color.rgb);" else ""}

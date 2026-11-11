@@ -369,9 +369,15 @@ class UserPreferences internal constructor(
         val requested = if (hasCurrentMaxPreferences) p[K.USE_RAW_MAX] ?: false else storedUseRaw && legacyMultiFrameEnabled
         requested || storedUseRaw
     }) { p, v -> p[K.USE_RAW_MAX] = v }
-    /** 使用 RAW 格式拍摄。读取结果综合 [useRawMax]/[useJpgMax]；写入只记录 RAW 开关本身。 */
+    /** 夜视模式：PHOTO 下强制 8 帧 YUV 多帧并叠加模型提亮曲线，与 RAW 互斥。 */
+    var nightVisionMode: Boolean by stored({ p -> p[K.NIGHT_VISION_MODE] ?: false }) { p, v -> p[K.NIGHT_VISION_MODE] = v }
+    /** 实际是否走 YUV 多帧：JPGmax 或夜视模式，且不是 RAW、多重曝光。 */
+    val effectiveUseJpgMax: Boolean
+        get() = (useJpgMax || nightVisionMode) && !useRaw && !useMultipleExposure
+    /** 使用 RAW 格式拍摄。读取结果综合 [useRawMax]/[useJpgMax]/[nightVisionMode]；写入只记录 RAW 开关本身。 */
     var useRaw: Boolean
         get() = when {
+            nightVisionMode -> false
             useRawMax -> true
             useJpgMax -> false
             else -> storedUseRaw
@@ -810,6 +816,7 @@ internal object PreferenceKeys {
     val LUT_SELECTOR_MODE = stringPreferencesKey("lut_selector_mode")
     val CAMERA_ORIENTATION_OFFSETS = stringPreferencesKey("camera_orientation_offsets")
     val USE_JPG_MAX = booleanPreferencesKey("use_jpg_max")
+    val NIGHT_VISION_MODE = booleanPreferencesKey("night_vision_mode")
     val USE_RAW_MAX = booleanPreferencesKey("use_raw_max")
     val LEGACY_USE_MULTI_FRAME = booleanPreferencesKey("use_multi_frame")
     val LEGACY_USE_HDR_COMPOSITION = booleanPreferencesKey("use_hdr_composition")

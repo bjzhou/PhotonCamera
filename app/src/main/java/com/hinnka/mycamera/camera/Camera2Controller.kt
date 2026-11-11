@@ -5170,12 +5170,11 @@ class Camera2Controller(private val context: Context) {
             } else if (availableEdgeModes.contains(CaptureRequest.EDGE_MODE_FAST)) {
                 builder.set(CaptureRequest.EDGE_MODE, CaptureRequest.EDGE_MODE_FAST)
             }
-            val effectiveNrLevel = if (
-                isBurst && selectedNrLevel == NoiseReductionLevel.HIGH_QUALITY
-            ) {
-                NoiseReductionLevel.FAST
-            } else {
-                selectedNrLevel
+            val effectiveNrLevel = when {
+                // Night vision always asks the ISP for HIGH_QUALITY NR on every burst frame.
+                !isVideo && currentState.isNightVisionActive -> NoiseReductionLevel.HIGH_QUALITY
+                isBurst && selectedNrLevel == NoiseReductionLevel.HIGH_QUALITY -> NoiseReductionLevel.FAST
+                else -> selectedNrLevel
             }
             val noiseReductionMode = when (effectiveNrLevel) {
                 NoiseReductionLevel.OFF -> CaptureRequest.NOISE_REDUCTION_MODE_OFF
@@ -7517,6 +7516,10 @@ class Camera2Controller(private val context: Context) {
             hdrBracketCapturing = false,
             hdrBracketFrameCount = 0
         )
+    }
+
+    fun setNightVisionEnabled(enabled: Boolean) {
+        _state.value = _state.value.copy(nightVisionEnabled = enabled)
     }
 
     fun setJpgMultiFrameDenoiseFrameCount(frameCount: Int) {

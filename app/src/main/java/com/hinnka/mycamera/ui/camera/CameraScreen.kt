@@ -1,5 +1,23 @@
 package com.hinnka.mycamera.ui.camera
 
+import androidx.compose.runtime.mutableStateListOf
+import androidx.compose.ui.layout.onPlaced
+import androidx.compose.ui.layout.positionInParent
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
+import androidx.compose.runtime.getValue
+import androidx.compose.animation.core.Animatable
+import androidx.compose.foundation.gestures.detectHorizontalDragGestures
+import androidx.compose.ui.graphics.CompositingStrategy
+import androidx.compose.ui.draw.drawWithContent
+import androidx.compose.ui.graphics.BlendMode
+import androidx.compose.foundation.layout.wrapContentWidth
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.LaunchedEffect
+import kotlin.math.abs
+import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.foundation.layout.offset
 import com.hinnka.mycamera.ui.prefs.rememberUserPreferencesRepository
 import com.hinnka.mycamera.data.UserPreferences
 import com.hinnka.mycamera.ui.prefs.rememberPreference
@@ -113,6 +131,7 @@ enum class ActivePanel {
 private enum class CameraShootingMode {
     PROFESSIONAL,
     PHOTO,
+    NIGHT_VISION,
     VIDEO
 }
 
@@ -634,17 +653,27 @@ fun CameraScreen(
 
         val targetCaptureMode = when (mode) {
             CameraShootingMode.PROFESSIONAL,
-            CameraShootingMode.PHOTO -> CaptureMode.PHOTO
+            CameraShootingMode.PHOTO,
+            CameraShootingMode.NIGHT_VISION -> CaptureMode.PHOTO
             CameraShootingMode.VIDEO -> CaptureMode.VIDEO
         }
         val targetUseRaw = when (mode) {
             CameraShootingMode.PROFESSIONAL -> true
-            CameraShootingMode.PHOTO -> false
+            CameraShootingMode.PHOTO,
+            CameraShootingMode.NIGHT_VISION -> false
             CameraShootingMode.VIDEO -> null
+        }
+        // Video keeps the night vision preference so returning to photo restores it.
+        val targetNightVision = when (mode) {
+            CameraShootingMode.NIGHT_VISION -> true
+            CameraShootingMode.PROFESSIONAL,
+            CameraShootingMode.PHOTO -> false
+            CameraShootingMode.VIDEO -> state.nightVisionEnabled
         }
         if (
             targetCaptureMode == state.captureMode &&
-            (targetUseRaw == null || targetUseRaw == state.useRaw)
+            (targetUseRaw == null || targetUseRaw == state.useRaw) &&
+            targetNightVision == state.nightVisionEnabled
         ) {
             return
         }
@@ -653,7 +682,7 @@ fun CameraScreen(
             if (targetCaptureMode == CaptureMode.VIDEO && state.aspectRatio == AspectRatio.XPAN) {
                 viewModel.setAspectRatio(AspectRatio.RATIO_4_3)
             }
-            viewModel.setShootingMode(targetCaptureMode, targetUseRaw)
+            viewModel.setShootingMode(targetCaptureMode, targetUseRaw, targetNightVision)
         }
     }
 
@@ -1321,6 +1350,7 @@ fun CameraScreen(
                             },
                             livePhotoRecorder = viewModel.livePhotoRecorder,
                             videoLogProfile = state.videoConfig.logProfile,
+                            nightVisionEnabled = state.isNightVisionActive,
                             isEyeFocusBusy = viewModel.isEyeFocusBusy,
                             isAutoFocus = state.isAutoFocus,
                             focusPeakingEnabled = focusPeakingEnabled && !state.isHyperfocalFocusEnabled,
@@ -2203,6 +2233,7 @@ private fun Controls(
                 shootingMode = when {
                     state.captureMode == CaptureMode.VIDEO -> CameraShootingMode.VIDEO
                     state.useRaw && state.isRawSupported -> CameraShootingMode.PROFESSIONAL
+                    state.nightVisionEnabled -> CameraShootingMode.NIGHT_VISION
                     else -> CameraShootingMode.PHOTO
                 },
                 professionalModeEnabled = state.isRawSupported,
@@ -2529,6 +2560,11 @@ private fun rememberPhotoCaptureProgress(progress: PhotoCaptureProgress?): State
     return fraction
 }
 
+/**
+ * Full-width scrolling mode switcher: every mode is shown, and the selected one, drawn as a pill
+ * in the accent color, is always scrolled to the horizontal centre. Tap a mode or drag the row;
+ * a drag settles on the nearest selectable mode.
+ */
 @Composable
 private fun CaptureModeSwitcher(
     shootingMode: CameraShootingMode,
@@ -2536,76 +2572,121 @@ private fun CaptureModeSwitcher(
     enabled: Boolean,
     onModeSelected: (CameraShootingMode) -> Unit
 ) {
+    val modes = CameraShootingMode.entries
+    val selectedIndex = shootingMode.ordinal
+    val currentSelectedIndex by rememberUpdatedState(selectedIndex)
+    val currentOnModeSelected by rememberUpdatedState(onModeSelected)
+    val scope = rememberCoroutineScope()
+    // Item centres in row coordinates, filled in by onPlaced.
+    val itemCenters = remember { mutableStateListOf(*Array(modes.size) { Float.NaN }) }
+    // Horizontal offset of the row inside the switcher, in px.
+    val rowOffset = remember { Animatable(0f) }
+    var positioned by remember { mutableStateOf(false) }
+
+    fun isSelectable(mode: CameraShootingMode): Boolean =
+        enabled && (mode != CameraShootingMode.PROFESSIONAL || professionalModeEnabled)
+
     BoxWithConstraints(
         modifier = Modifier
-            .width(228.dp)
-            .height(CameraControlsLayoutDefaults.ModeSwitcherHeight)
-            .clip(RoundedCornerShape(18.dp))
-            .background(Color.Black.copy(alpha = 0.28f))
-            .border(
-                width = 0.5.dp,
-                color = Color.White.copy(alpha = 0.18f),
-                shape = RoundedCornerShape(18.dp)
-            )
-            .padding(3.dp)
+            .fillMaxWidth()
+            .height(CameraControlsLayoutDefaults.ModeSwitcherHeight),
+        contentAlignment = Alignment.CenterStart
     ) {
-        val knobWidth = maxWidth / 3
-        val selectedIndex = when (shootingMode) {
-            CameraShootingMode.PROFESSIONAL -> 0
-            CameraShootingMode.PHOTO -> 1
-            CameraShootingMode.VIDEO -> 2
-        }
-        val knobOffset by animateDpAsState(
-            targetValue = knobWidth * selectedIndex,
-            animationSpec = tween(durationMillis = 220),
-            label = "modeSwitcher"
-        )
-        val selectedBackground by animateColorAsState(
-            targetValue = if (shootingMode == CameraShootingMode.PROFESSIONAL) {
-                AccentColor
+        val centerPx = constraints.maxWidth / 2f
+        fun offsetFor(index: Int): Float = centerPx - itemCenters[index]
+        val measured = itemCenters.none { it.isNaN() }
+
+        LaunchedEffect(selectedIndex, measured, centerPx) {
+            if (!measured) return@LaunchedEffect
+            val target = offsetFor(selectedIndex)
+            if (positioned) {
+                rowOffset.animateTo(target, tween(durationMillis = 220))
             } else {
-                Color.White
-            },
-            animationSpec = tween(durationMillis = 220),
-            label = "modeSwitcherColor"
-        )
-        Box(
-            modifier = Modifier
-                .offset(x = knobOffset)
-                .width(knobWidth)
-                .fillMaxHeight()
-                .clip(RoundedCornerShape(15.dp))
-                .background(selectedBackground)
-        )
+                rowOffset.snapTo(target)
+                positioned = true
+            }
+        }
+
+        fun settleDrag() {
+            if (!measured) return
+            val target = modes.filter(::isSelectable)
+                .minByOrNull { abs(offsetFor(it.ordinal) - rowOffset.value) }
+            scope.launch {
+                if (target == null || target.ordinal == currentSelectedIndex) {
+                    rowOffset.animateTo(offsetFor(currentSelectedIndex), tween(durationMillis = 220))
+                    return@launch
+                }
+                currentOnModeSelected(target)
+                rowOffset.animateTo(offsetFor(target.ordinal), tween(durationMillis = 220))
+                // The selection can be refused (recording, unsupported RAW); fall back to the
+                // mode actually in effect once the switch had time to apply.
+                delay(ModeSwitcherSettleTimeoutMillis)
+                if (currentSelectedIndex != target.ordinal) {
+                    rowOffset.animateTo(offsetFor(currentSelectedIndex), tween(durationMillis = 220))
+                }
+            }
+        }
+
         Row(
-            modifier = Modifier.fillMaxSize(),
+            modifier = Modifier
+                .fillMaxSize()
+                .pointerInput(enabled, professionalModeEnabled, measured) {
+                    if (!enabled || !measured) return@pointerInput
+                    detectHorizontalDragGestures(
+                        onDragEnd = { settleDrag() },
+                        onDragCancel = { settleDrag() },
+                    ) { change, dragAmount ->
+                        change.consume()
+                        val min = offsetFor(modes.lastIndex)
+                        val max = offsetFor(0)
+                        scope.launch { rowOffset.snapTo((rowOffset.value + dragAmount).coerceIn(min, max)) }
+                    }
+                }
+                .graphicsLayer { compositingStrategy = CompositingStrategy.Offscreen }
+                .drawWithContent {
+                    drawContent()
+                    drawRect(
+                        brush = Brush.horizontalGradient(
+                            0f to Color.Transparent,
+                            0.1f to Color.Black,
+                            0.9f to Color.Black,
+                            1f to Color.Transparent,
+                        ),
+                        blendMode = BlendMode.DstIn,
+                    )
+                }
+                .wrapContentWidth(align = Alignment.Start, unbounded = true)
+                .offset { IntOffset(rowOffset.value.roundToInt(), 0) }
+                .graphicsLayer { alpha = if (positioned) 1f else 0f },
+            horizontalArrangement = Arrangement.spacedBy(ModeSwitcherItemSpacing),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            ModeSwitcherItem(
-                label = stringResource(R.string.capture_mode_professional),
-                selectedContentColor = accentContentColor(selectedBackground),
-                selected = shootingMode == CameraShootingMode.PROFESSIONAL,
-                enabled = enabled && professionalModeEnabled,
-                onClick = { onModeSelected(CameraShootingMode.PROFESSIONAL) },
-                modifier = Modifier.weight(1f)
-            )
-            ModeSwitcherItem(
-                label = stringResource(R.string.capture_mode_photo),
-                selected = shootingMode == CameraShootingMode.PHOTO,
-                enabled = enabled,
-                onClick = { onModeSelected(CameraShootingMode.PHOTO) },
-                modifier = Modifier.weight(1f)
-            )
-            ModeSwitcherItem(
-                label = stringResource(R.string.capture_mode_video),
-                selected = shootingMode == CameraShootingMode.VIDEO,
-                enabled = enabled,
-                onClick = { onModeSelected(CameraShootingMode.VIDEO) },
-                modifier = Modifier.weight(1f)
-            )
+            modes.forEachIndexed { index, mode ->
+                ModeSwitcherItem(
+                    label = stringResource(mode.labelRes),
+                    selected = mode == shootingMode,
+                    enabled = isSelectable(mode),
+                    onClick = { currentOnModeSelected(mode) },
+                    modifier = Modifier.onPlaced { coordinates ->
+                        itemCenters[index] =
+                            coordinates.positionInParent().x + coordinates.size.width / 2f
+                    }
+                )
+            }
         }
     }
 }
+
+private val ModeSwitcherItemSpacing = 8.dp
+private const val ModeSwitcherSettleTimeoutMillis = 1500L
+
+private val CameraShootingMode.labelRes: Int
+    get() = when (this) {
+        CameraShootingMode.PROFESSIONAL -> R.string.capture_mode_professional
+        CameraShootingMode.PHOTO -> R.string.capture_mode_photo
+        CameraShootingMode.NIGHT_VISION -> R.string.capture_mode_night_vision
+        CameraShootingMode.VIDEO -> R.string.capture_mode_video
+    }
 
 @Composable
 private fun ModeSwitcherItem(
@@ -2614,22 +2695,40 @@ private fun ModeSwitcherItem(
     enabled: Boolean,
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
-    selectedContentColor: Color = Color.Black
 ) {
+    // The selected mode carries the capsule that used to frame the whole switcher.
+    val capsuleBackground by animateColorAsState(
+        targetValue = if (selected) Color.Black.copy(alpha = 0.28f) else Color.Transparent,
+        animationSpec = tween(durationMillis = 220),
+        label = "modeSwitcherCapsule"
+    )
+    val capsuleBorder by animateColorAsState(
+        targetValue = if (selected) Color.White.copy(alpha = 0.18f) else Color.Transparent,
+        animationSpec = tween(durationMillis = 220),
+        label = "modeSwitcherCapsuleBorder"
+    )
+    val textColor by animateColorAsState(
+        targetValue = when {
+            selected -> AccentColor
+            enabled -> Color.White.copy(alpha = 0.82f)
+            else -> Color.White.copy(alpha = 0.3f)
+        },
+        animationSpec = tween(durationMillis = 220),
+        label = "modeSwitcherText"
+    )
     Box(
         modifier = modifier
             .fillMaxHeight()
-            .clip(RoundedCornerShape(20.dp))
-            .clickable(enabled = enabled, onClick = onClick),
+            .clip(RoundedCornerShape(18.dp))
+            .background(capsuleBackground)
+            .border(width = 0.5.dp, color = capsuleBorder, shape = RoundedCornerShape(18.dp))
+            .clickable(enabled = enabled, onClick = onClick)
+            .padding(horizontal = 16.dp),
         contentAlignment = Alignment.Center
     ) {
         Text(
             text = label,
-            color = when {
-                selected -> selectedContentColor.copy(alpha = 0.88f)
-                enabled -> Color.White.copy(alpha = 0.82f)
-                else -> Color.White.copy(alpha = 0.3f)
-            },
+            color = textColor,
             fontSize = 12.sp,
             lineHeight = 14.sp,
             fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Medium,

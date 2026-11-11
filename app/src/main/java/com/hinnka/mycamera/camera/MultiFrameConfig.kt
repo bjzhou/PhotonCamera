@@ -12,6 +12,8 @@ object MultiFrameConfig {
 
     const val MIN_DENOISE_FRAME_COUNT = 3
     const val DEFAULT_DENOISE_FRAME_COUNT = 5
+    /** Night vision always stacks this many YUV frames, independent of the JPGmax setting. */
+    const val NIGHT_VISION_FRAME_COUNT = 8
     const val MIN_HDR_PLUS_FRAME_COUNT = 1
     const val MIN_HDR_PLUS_BRACKET_FRAME_COUNT = 2
     const val DEFAULT_HDR_PLUS_FRAME_COUNT = 3

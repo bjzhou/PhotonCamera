@@ -559,7 +559,8 @@ private data class CameraFeatureUpdate(
     val droMode: SettingValue<String>? = null,
     val rawBaselineLutId: SettingValue<String?>? = null,
     val activePresetId: SettingValue<String?>? = null,
-    val useMultipleExposure: SettingValue<Boolean>? = null
+    val useMultipleExposure: SettingValue<Boolean>? = null,
+    val nightVision: SettingValue<Boolean>? = null
 )
 
 /**
@@ -997,8 +998,10 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         var desiredUseRawMax = prefs.useRawMax
         var desiredUseMultipleExposure = prefs.useMultipleExposure
         var desiredRawRenderingEngine = prefs.rawRenderingEngine
+        var desiredNightVision = prefs.nightVisionMode
 
         update.useRaw?.let { desiredUseRaw = it.value }
+        update.nightVision?.let { desiredNightVision = it.value }
         update.useJpgMax?.let { desiredUseJpgMax = it.value }
         update.useRawMax?.let { desiredUseRawMax = it.value }
         update.useMultipleExposure?.let { desiredUseMultipleExposure = it.value }
@@ -1024,9 +1027,19 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             desiredUseJpgMax = false
             desiredUseRawMax = false
         }
+        // 夜视模式与 RAW、多重曝光互斥：显式开启 RAW 或多重曝光时退出夜视，否则夜视优先。
+        if (update.useRaw?.value == true || update.useRawMax?.value == true ||
+            update.useMultipleExposure?.value == true
+        ) {
+            desiredNightVision = false
+        }
+        if (desiredNightVision) {
+            desiredUseRaw = false
+            desiredUseMultipleExposure = false
+        }
         // 专业模式与 HDR+ 是同一个拍摄能力，不再保留可独立关闭的状态。
         desiredUseRawMax = desiredUseRaw
-        val activeUseJpgMax = desiredUseJpgMax && !desiredUseRaw
+        val activeUseJpgMax = (desiredUseJpgMax || desiredNightVision) && !desiredUseRaw
         if (activeUseJpgMax && prefs.useLivePhoto) {
             cameraController.setUseLivePhoto(false)
             userPreferencesRepository.update { useLivePhoto = false }
@@ -1091,6 +1104,9 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             desiredMultiFrameOutputScale != currentState.multiFrameOutputScale
         ) {
             cameraController.setMultiFrameOutputScale(desiredMultiFrameOutputScale)
+        }
+        if (desiredNightVision != currentState.nightVisionEnabled) {
+            cameraController.setNightVisionEnabled(desiredNightVision)
         }
 
         if (captureModeWillChange) {
@@ -1170,6 +1186,9 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             if (update.useRaw != null || desiredUseRaw != prefs.useRaw) useRaw = desiredUseRaw
             if (update.useJpgMax != null || desiredUseJpgMax != prefs.useJpgMax) useJpgMax = desiredUseJpgMax
             if (update.useRawMax != null || desiredUseRawMax != prefs.useRawMax) useRawMax = desiredUseRawMax
+            if (update.nightVision != null || desiredNightVision != prefs.nightVisionMode) {
+                nightVisionMode = desiredNightVision
+            }
             update.ultraHdrGainMapEnabled?.let { ultraHdrGainMapEnabled = it.value }
             if (update.useMultipleExposure != null || desiredUseMultipleExposure != prefs.useMultipleExposure) {
                 useMultipleExposure = desiredUseMultipleExposure
@@ -1871,8 +1890,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 }
                 val multipleExposureEnabled = it.useMultipleExposure
                 val effectiveUseRaw = it.useRaw && !multipleExposureEnabled
-                val effectiveUseJpgMax =
-                    it.useJpgMax && !effectiveUseRaw && !multipleExposureEnabled
+                val effectiveUseJpgMax = it.effectiveUseJpgMax
                 val effectiveUseRawMax =
                     it.useRawMax && effectiveUseRaw && !multipleExposureEnabled
                 val effectiveMultiFrameOutputScale = resolveMultiFrameOutputScale(
@@ -1895,6 +1913,9 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 }
                 if (currentCameraState.multiFrameOutputScale != effectiveMultiFrameOutputScale) {
                     cameraController.setMultiFrameOutputScale(effectiveMultiFrameOutputScale)
+                }
+                if (currentCameraState.nightVisionEnabled != it.nightVisionMode) {
+                    cameraController.setNightVisionEnabled(it.nightVisionMode)
                 }
                 if (
                     currentCameraState.jpgMultiFrameDenoiseFrameCount !=
@@ -2164,8 +2185,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 cameraController.setRawCfaCorrectionModes(prefs.rawCfaCorrectionModes)
                 cameraController.setMultiFrameOutputScale(
                     resolveMultiFrameOutputScale(
-                        useJpgMax = prefs.useJpgMax && !prefs.useRaw &&
-                            !prefs.useMultipleExposure,
+                        useJpgMax = prefs.effectiveUseJpgMax,
                         useRawMax = prefs.useRawMax && prefs.useRaw &&
                             !prefs.useMultipleExposure,
                         rawMaxOutputScale = prefs.rawMaxOutputScale,
@@ -2175,6 +2195,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 cameraController.setJpgMultiFrameDenoiseFrameCount(
                     prefs.jpgMultiFrameDenoiseFrameCount
                 )
+                cameraController.setNightVisionEnabled(prefs.nightVisionMode)
                 cameraController.setHdrPlusMergeMode(prefs.hdrPlusMergeMode)
                 cameraController.setHdrPlusFrameCount(prefs.hdrPlusFrameCount)
                 cameraController.setUseJpgMaxHdrComposition(prefs.useJpgMaxHdrComposition)
@@ -3554,17 +3575,18 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     fun setCaptureMode(mode: CaptureMode) {
-        setShootingMode(mode, useRaw = null)
+        setShootingMode(mode, useRaw = null, nightVision = state.value.nightVisionEnabled)
     }
 
     /**
-     * Applies the three-way shooting mode selection as one ordered operation.
+     * Applies the shooting mode selection (professional / photo / night vision / video) as one
+     * ordered operation.
      *
      * RAW is updated before leaving video mode so the public camera state never passes through
      * the other photo mode (VIDEO -> PROFESSIONAL -> PHOTO, for example). The capture-mode
      * change then owns the single camera restart required by the operation.
      */
-    fun setShootingMode(mode: CaptureMode, useRaw: Boolean?) {
+    fun setShootingMode(mode: CaptureMode, useRaw: Boolean?, nightVision: Boolean) {
         if (state.value.videoRecordingState.isRecording ||
             state.value.videoRecordingState.isProcessing
         ) {
@@ -3574,13 +3596,16 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         shootingModeSwitchJob?.cancel()
         val rawNeedsUpdate = useRaw != null &&
             (state.value.useRaw != useRaw || userPreferencesRepository.current.useRaw != useRaw)
-        if (state.value.captureMode == mode && !rawNeedsUpdate) return
+        val nightVisionNeedsUpdate = state.value.nightVisionEnabled != nightVision ||
+            userPreferencesRepository.current.nightVisionMode != nightVision
+        if (state.value.captureMode == mode && !rawNeedsUpdate && !nightVisionNeedsUpdate) return
 
         shootingModeSwitchJob = viewModelScope.launch {
             applyCameraFeatureUpdate(
                 CameraFeatureUpdate(
                     captureMode = SettingValue(mode),
                     useRaw = useRaw?.let(::SettingValue),
+                    nightVision = SettingValue(nightVision),
                 )
             )
         }
@@ -5827,6 +5852,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                     rawMaxHdrFusionEnabled = rawMaxHdrFusionEnabled,
                     rawMaxSpatialOutputMode = rawSpatialOutputMode,
                     rawMaxMergeMethod = rawMaxMergeMethod,
+                    nightVision = settings.state.isNightVisionActive,
                 )
             }
             PLog.d(TAG, "Image saved: $photoId, LUT: $lutIdToSave, Frame: $frameIdToSave")

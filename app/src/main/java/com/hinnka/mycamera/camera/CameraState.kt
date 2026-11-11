@@ -382,6 +382,8 @@ data class CameraState(
     val hdrPlusLongFrameExposureEv: Float = MultiFrameConfig.LONG_FRAME_EXPOSURE_EV.toFloat(),
     val hdrPlusShortFrameExposureEv: Float = MultiFrameConfig.DEFAULT_SHORT_FRAME_EXPOSURE_EV,
     val useRaw: Boolean = false,
+    /** Night vision mode: forced 8-frame YUV stack plus the model tone curve (PHOTO, non-RAW only). */
+    val nightVisionEnabled: Boolean = false,
     val useMultipleExposure: Boolean = false,
     val rawMinShutterSpeedNs: Long = 0L,
     val useLivePhoto: Boolean = false,
@@ -447,6 +449,10 @@ data class CameraState(
     val isJpgMaxEnabled: Boolean
         get() = isMultiFrameEnabled && !useRaw
 
+    /** Night vision applies only to a PHOTO YUV stack. */
+    val isNightVisionActive: Boolean
+        get() = nightVisionEnabled && captureMode == CaptureMode.PHOTO && isJpgMaxEnabled
+
     val isJpgMaxHdrEnabled: Boolean
         get() = isJpgMaxEnabled && useJpgMaxHdrComposition
 
@@ -459,6 +465,7 @@ data class CameraState(
 
     val activeMultiFrameCount: Int
         get() = when {
+            isNightVisionActive -> MultiFrameConfig.NIGHT_VISION_FRAME_COUNT
             isJpgMaxEnabled -> MultiFrameConfig.normalizeDenoiseFrameCount(
                 jpgMultiFrameDenoiseFrameCount
             )

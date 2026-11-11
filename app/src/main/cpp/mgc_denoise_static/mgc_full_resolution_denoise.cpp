@@ -1468,10 +1468,13 @@ int RunLowFrequencyChromaCorrection(const LowFrequencyChromaRequest& request) {
         request.prepared_normalized_chroma_quadratic < 0.0f) {
         return -1;
     }
-    // The same padded geometry as the in-call branch: the low image is the padded
-    // full-resolution frame box-downsampled by 2^L, the strength map its quarter.
-    const int padded_width = RoundUp(request.full_width, 128);
-    const int padded_height = RoundUp(request.full_height, 16);
+    // The low image is the padded full-resolution frame box-downsampled by 2^L, the strength
+    // map its quarter. The MGC pipelines it runs through (RgbRawToYuv, chroma pyramid) need the
+    // same 128 x 16 alignment as the in-call branch at the LOW resolution, so the full frame is
+    // padded to (128 x 16) << L. Padding the full frame to only 128 x 16 leaves e.g. a portrait
+    // 3060x4080 bitmap with low height 2040 (not a multiple of 16), which RgbRawToYuv rejects.
+    const int padded_width = RoundUp(request.full_width, 128 << log2_factor);
+    const int padded_height = RoundUp(request.full_height, 16 << log2_factor);
     const int low_width = padded_width >> log2_factor;
     const int low_height = padded_height >> log2_factor;
     const int strength_width = padded_width / 4;

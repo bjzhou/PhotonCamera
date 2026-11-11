@@ -24,6 +24,7 @@
     <string name="take_photo">ภาพถ่าย</string>
     <string name="capture_mode_professional">โปร</string>
     <string name="capture_mode_photo">ภาพถ่าย</string>
+    <string name="capture_mode_night_vision">กลางคืน</string>
     <string name="capture_mode_video">วิดีโอ</string>
 
     <!-- Exposure Controls -->
