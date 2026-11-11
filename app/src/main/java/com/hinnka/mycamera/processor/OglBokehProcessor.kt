@@ -77,6 +77,10 @@ class OglBokehProcessor {
 
         /** Pixels per bulk copy of the RGBA8 depth classification readback. */
         private const val CLASSIFICATION_CHUNK_PIXELS = 16384
+
+        /** Indirect dispatch arguments (x, y, z) and padding ahead of the median tile list. */
+        private const val TILE_LIST_HEADER_WORDS = 4
+        private const val GPU_SLICES_IN_FLIGHT = 2
     }
 
     private data class DomainTargets(
@@ -103,7 +107,9 @@ class OglBokehProcessor {
     private var guidedSolveProgramId = 0
     private var guidedMeanProgramId = 0
     private var guidedApplyProgramId = 0
-    private var layerMedianProgramId = 0
+    private var layerMedianMetaProgramId = 0
+    private var layerMedianSlidingProgramId = 0
+    private var layerMedianTileProgramId = 0
     private var jbuUpsampleProgramId = 0
     private var depthRefineProgramId = 0
     private var cocProgramId = 0
@@ -132,6 +138,7 @@ class OglBokehProcessor {
     private var eglContext = EGL14.EGL_NO_CONTEXT
     private var eglSurface = EGL14.EGL_NO_SURFACE
 
+    private var gpuWindow: GlesGpuScheduler.PassWindow? = null
     private val textures = mutableSetOf<Int>()
     private val buffers = mutableSetOf<Int>()
     private var maxStorageBlockSize = 0L
@@ -187,6 +194,7 @@ class OglBokehProcessor {
             )
 
             initEGL(originalImage.width, originalImage.height)
+            gpuWindow = GlesGpuScheduler.PassWindow(TAG, GPU_SLICES_IN_FLIGHT)
             initGL(bokehStyle, medianRadius)
             GLES30.glDisable(GLES30.GL_DITHER)
             GLES30.glDisable(GLES30.GL_BLEND)
@@ -285,14 +293,15 @@ class OglBokehProcessor {
                 uniform1i(compositeProgramId, "uLinearInput", if (linearInput) 1 else 0)
                 uniform1i(compositeProgramId, "uHighlights", if (highlightTex != null) 1 else 0)
                 bindSampler(compositeProgramId, "uHighlightTexture", 4, highlightTex ?: inputTex)
-                // Row bands, each submitted on its own, keep the UI renderer's GPU slots open.
+                // Row bands, paced one at a time, keep the UI renderer's GPU slots open.
                 GLES30.glEnable(GLES30.GL_SCISSOR_TEST)
                 var bandRow = 0
                 while (bandRow < originalImage.height) {
                     val rows = min(OUTPUT_BAND_ROWS, originalImage.height - bandRow)
-                    GLES30.glScissor(0, bandRow, originalImage.width, rows)
-                    drawQuad(compositeProgramId)
-                    GlesGpuScheduler.yieldToUiRenderer()
+                    paced("lens blur composite") {
+                        GLES30.glScissor(0, bandRow, originalImage.width, rows)
+                        drawQuad(compositeProgramId)
+                    }
                     bandRow += rows
                 }
                 GLES30.glDisable(GLES30.GL_SCISSOR_TEST)
@@ -473,23 +482,76 @@ class OglBokehProcessor {
         release(upsampledTex)
 
         val layersTex = track(createStorageTexture(width, height))
-        useProgram(layerMedianProgramId)
+        val metaTex = track(createUintStorageTexture(width, height, GLES30.GL_RGBA16UI))
+        val chunkRows = ceilDiv(height, GlesComputeWorkGroup.IMAGE_TILE_SIZE)
+        val chunkTex = track(createUintStorageTexture(width, chunkRows, GLES30.GL_R32UI))
+        val groupsX = GlesComputeWorkGroup.imageGroupCount(width)
+        // Alternating lists: resetting one band's header never waits for the previous band's dispatch.
+        val tileLists = IntArray(2) {
+            createBuffer(
+                (TILE_LIST_HEADER_WORDS + groupsX.toLong() * BokehShaders.LAYER_MEDIAN_BAND_ROWS / 8) * 4,
+                "layer median tile list",
+            )
+        }
+        val bandGroupRows = BokehShaders.LAYER_MEDIAN_BAND_ROWS / GlesComputeWorkGroup.IMAGE_TILE_SIZE
+        val bandCount = ceilDiv(height, BokehShaders.LAYER_MEDIAN_BAND_ROWS)
+
+        useProgram(layerMedianMetaProgramId)
+        GLES31.glBindImageTexture(0, metaTex, 0, false, 0, GLES31.GL_WRITE_ONLY, GLES30.GL_RGBA16UI)
+        GLES31.glBindImageTexture(1, chunkTex, 0, false, 0, GLES31.GL_WRITE_ONLY, GLES30.GL_R32UI)
+        bindSampler(layerMedianMetaProgramId, "uDepthTexture", 0, refinedTex)
+        uniform1f(layerMedianMetaProgramId, "uFlatThreshold", LAYER_MEDIAN_FLAT_THRESHOLD)
+        for (band in 0 until bandCount) {
+            paced("layer median meta") {
+                uniform1i(layerMedianMetaProgramId, "uGroupRowOffset", band * bandGroupRows)
+                GLES31.glDispatchCompute(groupsX, min(bandGroupRows, chunkRows - band * bandGroupRows), 1)
+            }
+        }
+        GLES31.glMemoryBarrier(GLES31.GL_SHADER_IMAGE_ACCESS_BARRIER_BIT)
+        GLES31.glBindImageTexture(1, 0, 0, false, 0, GLES31.GL_WRITE_ONLY, GLES30.GL_R32UI)
+
+        val header = ByteBuffer.allocateDirect(TILE_LIST_HEADER_WORDS * 4).order(ByteOrder.nativeOrder())
+        header.asIntBuffer().put(intArrayOf(0, 1, 1, 0))
         GLES31.glBindImageTexture(0, layersTex, 0, false, 0, GLES31.GL_WRITE_ONLY, GLES30.GL_RGBA16F)
-        bindSampler(layerMedianProgramId, "uDepthTexture", 0, refinedTex)
-        uniform1f(layerMedianProgramId, "uRangeSigmaBins", LAYER_MEDIAN_SIGMA_BINS)
-        uniform1f(layerMedianProgramId, "uFlatThreshold", LAYER_MEDIAN_FLAT_THRESHOLD)
-        uniform1f(layerMedianProgramId, "uEdgeWeight", LAYER_MEDIAN_EDGE_WEIGHT)
-        GLES31.glDispatchCompute(
-            GlesComputeWorkGroup.imageGroupCount(width),
-            GlesComputeWorkGroup.imageGroupCount(height),
-            1,
-        )
+        GLES31.glBindImageTexture(1, metaTex, 0, false, 0, GLES31.GL_READ_ONLY, GLES30.GL_RGBA16UI)
+        GLES31.glBindImageTexture(2, chunkTex, 0, false, 0, GLES31.GL_READ_ONLY, GLES30.GL_R32UI)
+        for (band in 0 until bandCount) {
+            val tileList = tileLists[band % 2]
+            paced("layer median") {
+                header.position(0)
+                GLES31.glBindBuffer(GLES31.GL_SHADER_STORAGE_BUFFER, tileList)
+                GLES31.glBufferSubData(GLES31.GL_SHADER_STORAGE_BUFFER, 0, TILE_LIST_HEADER_WORDS * 4, header)
+                GLES31.glBindBuffer(GLES31.GL_SHADER_STORAGE_BUFFER, 0)
+                GLES31.glBindBufferBase(GLES31.GL_SHADER_STORAGE_BUFFER, 0, tileList)
+                GLES31.glBindBuffer(GLES31.GL_DISPATCH_INDIRECT_BUFFER, tileList)
+
+                useProgram(layerMedianSlidingProgramId)
+                bindSampler(layerMedianSlidingProgramId, "uDepthTexture", 0, refinedTex)
+                uniform1f(layerMedianSlidingProgramId, "uRangeSigmaBins", LAYER_MEDIAN_SIGMA_BINS)
+                uniform1f(layerMedianSlidingProgramId, "uEdgeWeight", LAYER_MEDIAN_EDGE_WEIGHT)
+                uniform1i(layerMedianSlidingProgramId, "uGroupRowOffset", band)
+                GLES31.glDispatchCompute(groupsX, 1, 1)
+                GLES31.glMemoryBarrier(GLES31.GL_COMMAND_BARRIER_BIT or GLES31.GL_SHADER_STORAGE_BARRIER_BIT)
+
+                useProgram(layerMedianTileProgramId)
+                bindSampler(layerMedianTileProgramId, "uDepthTexture", 0, refinedTex)
+                uniform1f(layerMedianTileProgramId, "uRangeSigmaBins", LAYER_MEDIAN_SIGMA_BINS)
+                uniform1f(layerMedianTileProgramId, "uEdgeWeight", LAYER_MEDIAN_EDGE_WEIGHT)
+                GLES31.glDispatchComputeIndirect(0)
+            }
+        }
         GLES31.glMemoryBarrier(
             GLES31.GL_TEXTURE_FETCH_BARRIER_BIT or GLES31.GL_FRAMEBUFFER_BARRIER_BIT or
                 GLES31.GL_SHADER_IMAGE_ACCESS_BARRIER_BIT,
         )
+        GLES31.glBindBuffer(GLES31.GL_DISPATCH_INDIRECT_BUFFER, 0)
         GLES31.glBindImageTexture(0, 0, 0, false, 0, GLES31.GL_WRITE_ONLY, GLES30.GL_RGBA16F)
+        GLES31.glBindImageTexture(1, 0, 0, false, 0, GLES31.GL_READ_ONLY, GLES30.GL_RGBA16UI)
+        GLES31.glBindImageTexture(2, 0, 0, false, 0, GLES31.GL_READ_ONLY, GLES30.GL_R32UI)
         requireNoGlError("layer discontinuity median")
+        tileLists.forEach(::releaseBuffer)
+        release(metaTex)
+        release(chunkTex)
         release(refinedTex)
         return layersTex
     }
@@ -916,12 +978,19 @@ class OglBokehProcessor {
     ) {
         val stripPixels = width.toLong() * STRIP_ROWS
         val deltaBuffers = targets.map { target ->
-            val rows = if (target.domain.level == 0) STRIP_ROWS else STRIP_ROWS / 2 + 3
-            val words = target.width.toLong() * rows * 4
+            val words = target.width.toLong() * domainStripRows(target.domain.level) * 4
             createBuffer(words * 4, "lens blur gradient field").also { clearBuffer(it, words.toInt()) }
         }
-        val halfIntegratedBuffer = targets.firstOrNull { it.domain.level != 0 }?.let { target ->
-            createBuffer(target.width.toLong() * (STRIP_ROWS / 2 + 3) * 16, "lens blur half-domain field")
+        // Integrated field of each downsampled domain, resampled into the working-resolution band.
+        val integratedBuffers = targets.map { target ->
+            if (target.domain.level == 0) {
+                0
+            } else {
+                createBuffer(
+                    target.width.toLong() * domainStripRows(target.domain.level) * 16,
+                    "lens blur domain field",
+                )
+            }
         }
         val bandBuffer = createBuffer(stripPixels * 16, "lens blur band").also {
             clearBuffer(it, (stripPixels * 4).toInt())
@@ -945,7 +1014,7 @@ class OglBokehProcessor {
         while (stripRow < height) {
             val stripRows = min(STRIP_ROWS, height - stripRow)
             for ((nearField, bands) in listOf(NEAR_PASS to nearBands, FAR_PASS to farBands)) {
-                for (bandIndex in bands) {
+                for (bandIndex in bands) paced("lens blur band") {
                     val band = layout.bands[bandIndex]
                     targets.forEachIndexed { domainIndex, target ->
                         val domain = target.domain
@@ -953,8 +1022,13 @@ class OglBokehProcessor {
                         val (rowLow, rowHigh) = if (domain.level == 0) {
                             stripRow to stripRow + stripRows
                         } else {
-                            val low = max(0, floor(stripRow / 2.0 - 0.25).toInt())
-                            val high = min(target.height, floor((stripRow + stripRows - 1) / 2.0 - 0.25).toInt() + 2)
+                            // Domain rows of the bilinear upsample taps at (y + 0.5) / 2^level - 0.5.
+                            val factor = (1 shl domain.level).toDouble()
+                            val low = max(0, floor((stripRow + 0.5) / factor - 0.5).toInt())
+                            val high = min(
+                                target.height,
+                                floor((stripRow + stripRows - 0.5) / factor - 0.5).toInt() + 2,
+                            )
                             low to high
                         }
                         scatter(
@@ -965,7 +1039,7 @@ class OglBokehProcessor {
                         if (domain.level == 0) {
                             integrate(deltaBuffers[domainIndex], bandBuffer, target.width, rowHigh - rowLow, true)
                         } else {
-                            val integrated = checkNotNull(halfIntegratedBuffer)
+                            val integrated = integratedBuffers[domainIndex]
                             integrate(deltaBuffers[domainIndex], integrated, target.width, rowHigh - rowLow, false)
                             upsampleAdd(integrated, bandBuffer, width, stripRow, stripRows, target, rowLow, rowHigh)
                         }
@@ -978,11 +1052,11 @@ class OglBokehProcessor {
                         if (nearField) LensBlurParams.NEAR_ALPHA_GAIN else LensBlurParams.FAR_ALPHA_GAIN,
                         linearInput,
                     )
-                    // Submit each band on its own so the UI renderer is not queued behind a strip.
-                    GlesGpuScheduler.yieldToUiRenderer()
                 }
             }
-            store(nearBuffer, farBuffer, nearTex, farTex, width, stripRow, stripRows)
+            paced("lens blur store") {
+                store(nearBuffer, farBuffer, nearTex, farTex, width, stripRow, stripRows)
+            }
             stripRow += stripRows
         }
         GLES31.glMemoryBarrier(
@@ -990,7 +1064,7 @@ class OglBokehProcessor {
         )
         requireNoGlError("lens blur strips")
         deltaBuffers.forEach(::releaseBuffer)
-        halfIntegratedBuffer?.let(::releaseBuffer)
+        integratedBuffers.filter { it != 0 }.forEach(::releaseBuffer)
         releaseBuffer(bandBuffer)
         releaseBuffer(nearBuffer)
         releaseBuffer(farBuffer)
@@ -1065,6 +1139,10 @@ class OglBokehProcessor {
         GLES31.glMemoryBarrier(GLES31.GL_SHADER_STORAGE_BARRIER_BIT)
     }
 
+    /** Delta / integrated rows of one strip in a 2^-level domain, including the upsample's apron. */
+    private fun domainStripRows(level: Int): Int =
+        if (level == 0) STRIP_ROWS else STRIP_ROWS / (1 shl level) + 3
+
     private fun integrate(deltaBuffer: Int, targetBuffer: Int, width: Int, rows: Int, accumulate: Boolean) {
         useProgram(integrateProgramId)
         GLES31.glBindBufferBase(GLES31.GL_SHADER_STORAGE_BUFFER, 0, deltaBuffer)
@@ -1072,7 +1150,7 @@ class OglBokehProcessor {
         uniform1i(integrateProgramId, "uWidth", width)
         uniform1i(integrateProgramId, "uRows", rows)
         uniform1i(integrateProgramId, "uAccumulate", if (accumulate) 1 else 0)
-        GLES31.glDispatchCompute(GlesComputeWorkGroup.linearGroupCount(rows), 1, 1)
+        GLES31.glDispatchCompute(rows, 1, 1)
         GLES31.glMemoryBarrier(GLES31.GL_SHADER_STORAGE_BARRIER_BIT)
     }
 
@@ -1095,6 +1173,7 @@ class OglBokehProcessor {
         uniform1i(upsampleAddProgramId, "uSourceWidth", target.width)
         uniform1i(upsampleAddProgramId, "uSourceRow", sourceRow)
         uniform1i(upsampleAddProgramId, "uSourceRows", sourceRowEnd - sourceRow)
+        uniform1f(upsampleAddProgramId, "uScale", target.domain.scale)
         GLES31.glDispatchCompute(
             GlesComputeWorkGroup.imageGroupCount(width),
             GlesComputeWorkGroup.imageGroupCount(stripRows),
@@ -1350,6 +1429,33 @@ class OglBokehProcessor {
         return texture
     }
 
+    /** Immutable unsigned-integer image (RGBA16UI / R32UI) written and read through image units only. */
+    private fun createUintStorageTexture(width: Int, height: Int, internalFormat: Int): Int {
+        val texture = IntArray(1)
+        GLES30.glGenTextures(1, texture, 0)
+        GLES30.glActiveTexture(GLES30.GL_TEXTURE0)
+        GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, texture[0])
+        GLES30.glTexStorage2D(GLES30.GL_TEXTURE_2D, 1, internalFormat, width, height)
+        GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_MIN_FILTER, GLES30.GL_NEAREST)
+        GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_MAG_FILTER, GLES30.GL_NEAREST)
+        requireNoGlError("lens blur integer image ${width}x$height")
+        return texture[0]
+    }
+
+    /**
+     * Submits one bounded slice of GPU work. At most two slices are in flight, so the
+     * UI renderer is never queued behind more than one slice of this pipeline.
+     */
+    private inline fun paced(label: String, block: () -> Unit) {
+        val window = checkNotNull(gpuWindow) { "GPU pass window is not initialised" }
+        window.beginPass(label)
+        try {
+            block()
+        } finally {
+            window.endPass()
+        }
+    }
+
     /** Immutable RGBA16F target of write-only image stores, sampled with linear filtering afterwards. */
     private fun createStorageTexture(width: Int, height: Int): Int {
         val texture = IntArray(1)
@@ -1556,8 +1662,14 @@ class OglBokehProcessor {
         guidedSolveProgramId = createComputeProgram(BokehShaders.GUIDED_SOLVE_COMPUTE_SHADER, "guided depth solve")
         guidedMeanProgramId = createComputeProgram(BokehShaders.GUIDED_MEAN_COMPUTE_SHADER, "guided depth mean")
         guidedApplyProgramId = createComputeProgram(BokehShaders.GUIDED_APPLY_COMPUTE_SHADER, "guided depth apply")
-        layerMedianProgramId = createComputeProgram(
-            BokehShaders.layerMedianComputeShader(medianRadius), "layer depth median",
+        layerMedianMetaProgramId = createComputeProgram(
+            BokehShaders.LAYER_MEDIAN_META_COMPUTE_SHADER, "layer depth median meta",
+        )
+        layerMedianSlidingProgramId = createComputeProgram(
+            BokehShaders.layerMedianSlidingComputeShader(medianRadius), "layer depth median sliding",
+        )
+        layerMedianTileProgramId = createComputeProgram(
+            BokehShaders.layerMedianTileComputeShader(medianRadius), "layer depth median tiles",
         )
         maxProgramId = createComputeProgram(BokehShaders.MAX_COMPUTE_SHADER, "lens blur maximum")
         histogramProgramId = createComputeProgram(BokehShaders.HISTOGRAM_COMPUTE_SHADER, "lens blur histogram")
@@ -1646,11 +1758,12 @@ class OglBokehProcessor {
 
     private fun releaseGL() {
         if (eglDisplay != EGL14.EGL_NO_DISPLAY && eglContext != EGL14.EGL_NO_CONTEXT) {
+            gpuWindow?.drain("lens blur release")
             textures.forEach { GLES30.glDeleteTextures(1, intArrayOf(it), 0) }
             buffers.forEach { GLES31.glDeleteBuffers(1, intArrayOf(it), 0) }
             listOf(
                 guidedMomentsProgramId, guidedSolveProgramId, guidedMeanProgramId, guidedApplyProgramId,
-                layerMedianProgramId, jbuUpsampleProgramId, depthRefineProgramId, cocProgramId, cocSpreadProgramId,
+                layerMedianMetaProgramId, layerMedianSlidingProgramId, layerMedianTileProgramId, jbuUpsampleProgramId, depthRefineProgramId, cocProgramId, cocSpreadProgramId,
                 guideLuminanceProgramId, guideGradientProgramId, guideCombineProgramId, compositeProgramId,
                 maxProgramId, histogramProgramId, scatterProgramId, integrateProgramId, upsampleAddProgramId,
                 alphaBlendProgramId, storeProgramId, clearProgramId, depthReadbackProgramId, layerColorProgramId,
@@ -1660,6 +1773,7 @@ class OglBokehProcessor {
                 .filter { it != 0 }
                 .forEach { GLES30.glDeleteBuffers(1, intArrayOf(it), 0) }
         }
+        gpuWindow = null
         textures.clear()
         buffers.clear()
 
@@ -1676,7 +1790,9 @@ class OglBokehProcessor {
         guidedSolveProgramId = 0
         guidedMeanProgramId = 0
         guidedApplyProgramId = 0
-        layerMedianProgramId = 0
+        layerMedianMetaProgramId = 0
+        layerMedianSlidingProgramId = 0
+        layerMedianTileProgramId = 0
         jbuUpsampleProgramId = 0
         depthRefineProgramId = 0
         cocProgramId = 0

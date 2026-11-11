@@ -409,23 +409,285 @@ internal object BokehShaders {
      * neighbours of its layer lie within 0.01, otherwise 1e-5, times the range
      * Gaussian exp(-dBin^2 / 2 sigma^2) of 256 bins around the centre. The
      * weighted median bin is the first bin whose cumulative vote exceeds half
-     * the total, found by two radix-16 histogram passes over the window; its
-     * value is the weighted mean of the samples inside that bin, so float
-     * layers do not terrace to 8 bits.
-     * R is recomposed from the filtered layers; A is unchanged.
+     * the total; its value is the weighted mean of the samples inside that bin,
+     * so float layers do not terrace to 8 bits. R is recomposed from the
+     * filtered layers; A is unchanged.
      *
-     * The window radius is compiled in, sizing the tile to the window. Each
-     * tile sample carries both layers' bins and flatness votes, so the three
-     * window passes per layer only read shared memory. The radix counters are
-     * per invocation, lane-minor in shared memory; shared memory stays within
-     * the GLES 3.1 minimum of 16 KiB at [LAYER_MEDIAN_MAX_RADIUS].
+     * The filter runs in three passes:
+     * 1. [LAYER_MEDIAN_META_COMPUTE_SHADER] stores each pixel's bins, flatness
+     *    votes and fp16 layers once, plus the bin range of every 8-row column
+     *    chunk.
+     * 2. [layerMedianSlidingComputeShader] gives each invocation one column
+     *    segment of [LAYER_MEDIAN_SEGMENT_ROWS] rows. When every window of the
+     *    segment spans fewer than [LAYER_MEDIAN_SLIDING_BINS] bins, a sliding
+     *    integer histogram of that span (vote counts and fixed-point depth sums
+     *    per bin) replaces the per-pixel window scans. The range weight only
+     *    depends on the bin, so it is applied when the histogram is queried and
+     *    cancels inside the median bin. Segments spanning more bins append
+     *    their 8x8 tiles to an indirect dispatch.
+     * 3. [layerMedianTileComputeShader] filters those tiles with the per-pixel
+     *    radix search over the shared-memory window.
      */
-    fun layerMedianComputeShader(radius: Int): String {
+    val LAYER_MEDIAN_META_COMPUTE_SHADER = """#version 310 es
+        precision highp float;
+        precision highp int;
+        precision highp sampler2D;
+        precision highp uimage2D;
+        layout(local_size_x = 8, local_size_y = 8) in;
+
+        // x: G bin | B bin << 8, y: G flat | B flat << 1, z / w: G / B as fp16 bits.
+        layout(rgba16ui, binding = 0) writeonly uniform highp uimage2D uMetaImage;
+        // Per column and 8-row chunk: G min | G max << 8 | B min << 16 | B max << 24.
+        layout(r32ui, binding = 1) writeonly uniform highp uimage2D uChunkImage;
+        uniform sampler2D uDepthTexture;
+        uniform float uFlatThreshold;
+        uniform int uGroupRowOffset;
+
+        shared uint lowG[8];
+        shared uint highG[8];
+        shared uint lowB[8];
+        shared uint highB[8];
+
+        int depthBin(float value) {
+            return int(clamp(value, 0.0, 1.0) * 255.0);
+        }
+
+        void main() {
+            ivec2 size = textureSize(uDepthTexture, 0);
+            ivec2 local = ivec2(gl_LocalInvocationID.xy);
+            ivec2 group = ivec2(gl_WorkGroupID.xy) + ivec2(0, uGroupRowOffset);
+            ivec2 pixel = group * 8 + local;
+            if (local.y == 0) {
+                lowG[local.x] = 255u;
+                highG[local.x] = 0u;
+                lowB[local.x] = 255u;
+                highB[local.x] = 0u;
+            }
+            barrier();
+            if (pixel.x < size.x && pixel.y < size.y) {
+                vec2 layers = texelFetch(uDepthTexture, pixel, 0).gb;
+                bvec2 isFlat = bvec2(true);
+                for (int y = -1; y <= 1; y++) {
+                    for (int x = -1; x <= 1; x++) {
+                        vec2 neighbour = texelFetch(uDepthTexture, clamp(pixel + ivec2(x, y), ivec2(0), size - 1), 0).gb;
+                        isFlat = bvec2(isFlat.x && abs(neighbour.x - layers.x) <= uFlatThreshold,
+                            isFlat.y && abs(neighbour.y - layers.y) <= uFlatThreshold);
+                    }
+                }
+                uint binG = uint(depthBin(layers.x));
+                uint binB = uint(depthBin(layers.y));
+                imageStore(uMetaImage, pixel, uvec4(
+                    binG | (binB << 8),
+                    (isFlat.x ? 1u : 0u) | (isFlat.y ? 2u : 0u),
+                    packHalf2x16(vec2(layers.x, 0.0)),
+                    packHalf2x16(vec2(layers.y, 0.0))));
+                atomicMin(lowG[local.x], binG);
+                atomicMax(highG[local.x], binG);
+                atomicMin(lowB[local.x], binB);
+                atomicMax(highB[local.x], binB);
+            }
+            barrier();
+            if (local.y == 0 && pixel.x < size.x && group.y * 8 < size.y) {
+                imageStore(uChunkImage, ivec2(pixel.x, group.y), uvec4(
+                    lowG[local.x] | (highG[local.x] << 8) | (lowB[local.x] << 16) | (highB[local.x] << 24)));
+            }
+        }
+    """.trimIndent()
+
+    const val LAYER_MEDIAN_SEGMENT_ROWS = 32
+    const val LAYER_MEDIAN_SLIDING_BINS = 16
+    /** Rows of one sliding dispatch: an 8x8 group of column segments. */
+    const val LAYER_MEDIAN_BAND_ROWS = 8 * LAYER_MEDIAN_SEGMENT_ROWS
+
+    /**
+     * Sliding-histogram pass. Shared memory: three 16-bin integer histograms
+     * per invocation (12 KiB, lane-minor) and the range table, within the
+     * GLES 3.1 minimum of 16 KiB.
+     */
+    fun layerMedianSlidingComputeShader(radius: Int): String {
         require(radius in 1..LAYER_MEDIAN_MAX_RADIUS) { "Layer median radius $radius out of range" }
         return """#version 310 es
         precision highp float;
         precision highp int;
         precision highp sampler2D;
+        precision highp uimage2D;
+        layout(local_size_x = 8, local_size_y = 8) in;
+
+        const int RADIUS = $radius;
+        const int SEGMENT = $LAYER_MEDIAN_SEGMENT_ROWS;
+        const int BINS = $LAYER_MEDIAN_SLIDING_BINS;
+        const int LANES = 64;
+        // Fixed-point depth: (2R+1)^2 samples of |depth| <= 4 stay inside int32.
+        const float DEPTH_SCALE = 1048576.0;
+        // Flat votes count in the low half, edge votes in the high half.
+        const int EDGE_COUNT = 65536;
+
+        layout(rgba16ui, binding = 1) readonly uniform highp uimage2D uMetaImage;
+        layout(r32ui, binding = 2) readonly uniform highp uimage2D uChunkImage;
+        layout(rgba16f, binding = 0) writeonly uniform highp image2D uLayerImage;
+        layout(std430, binding = 0) buffer TileList {
+            uint groupCountX;
+            uint groupCountY;
+            uint groupCountZ;
+            uint reserved;
+            uint tiles[];
+        };
+        uniform sampler2D uDepthTexture;
+        uniform float uRangeSigmaBins;
+        uniform float uEdgeWeight;
+        uniform int uGroupRowOffset;
+
+        shared int histCount[BINS * LANES];
+        shared int histFlatDepth[BINS * LANES];
+        shared int histEdgeDepth[BINS * LANES];
+        shared float rangeWeight[256];
+        shared uint segmentFailed[8];
+
+        ivec2 size;
+        int lane;
+
+        void addRow(int column, int row, int layer, int low, int direction) {
+            int y = clamp(row, 0, size.y - 1);
+            for (int dx = -RADIUS; dx <= RADIUS; dx++) {
+                uvec4 meta = imageLoad(uMetaImage, ivec2(clamp(column + dx, 0, size.x - 1), y));
+                int slot = (int((meta.x >> uint(8 * layer)) & 255u) - low) * LANES + lane;
+                float depth = unpackHalf2x16(layer == 0 ? meta.z : meta.w).x;
+                int quantized = direction * int(round(depth * DEPTH_SCALE));
+                if (((meta.y >> uint(layer)) & 1u) != 0u) {
+                    histCount[slot] += direction;
+                    histFlatDepth[slot] += quantized;
+                } else {
+                    histCount[slot] += direction * EDGE_COUNT;
+                    histEdgeDepth[slot] += quantized;
+                }
+            }
+        }
+
+        float vote(int slot) {
+            int count = histCount[slot];
+            return float(count & 65535) + uEdgeWeight * float(count >> 16);
+        }
+
+        float median(int low, int centerBin) {
+            float total = 0.0;
+            for (int i = 0; i < BINS; i++) {
+                total += vote(i * LANES + lane) * rangeWeight[abs(low + i - centerBin)];
+            }
+            float halfTotal = 0.5 * total;
+            float below = 0.0;
+            for (int i = 0; i < BINS; i++) {
+                int slot = i * LANES + lane;
+                float binVote = vote(slot);
+                below += binVote * rangeWeight[abs(low + i - centerBin)];
+                if (below > halfTotal) {
+                    return (float(histFlatDepth[slot]) + uEdgeWeight * float(histEdgeDepth[slot])) /
+                        (DEPTH_SCALE * binVote);
+                }
+            }
+            // No bin reaching half the vote leaves the last bin, as the radix search does.
+            int lastSlot = (255 - low) * LANES + lane;
+            if (255 - low < BINS && vote(lastSlot) > 0.0) {
+                return (float(histFlatDepth[lastSlot]) + uEdgeWeight * float(histEdgeDepth[lastSlot])) /
+                    (DEPTH_SCALE * vote(lastSlot));
+            }
+            return 1.0;
+        }
+
+        void main() {
+            size = imageSize(uMetaImage);
+            lane = int(gl_LocalInvocationIndex);
+            for (int i = lane; i < 256; i += LANES) {
+                rangeWeight[i] = exp(-float(i * i) / (2.0 * uRangeSigmaBins * uRangeSigmaBins));
+            }
+            int segment = int(gl_LocalInvocationID.y);
+            if (gl_LocalInvocationID.x == 0u) segmentFailed[segment] = 0u;
+            barrier();
+
+            int column = int(gl_GlobalInvocationID.x);
+            int firstRow = ((int(gl_WorkGroupID.y) + uGroupRowOffset) * 8 + segment) * SEGMENT;
+            bool inBounds = column < size.x && firstRow < size.y;
+            int endRow = min(firstRow + SEGMENT, size.y);
+            ivec2 low = ivec2(0);
+            if (inBounds) {
+                int firstChunk = max(firstRow - RADIUS, 0) / 8;
+                int lastChunk = min(endRow - 1 + RADIUS, size.y - 1) / 8;
+                uvec2 minBin = uvec2(255u);
+                uvec2 maxBin = uvec2(0u);
+                for (int dx = -RADIUS; dx <= RADIUS; dx++) {
+                    int x = clamp(column + dx, 0, size.x - 1);
+                    for (int chunk = firstChunk; chunk <= lastChunk; chunk++) {
+                        uint range = imageLoad(uChunkImage, ivec2(x, chunk)).r;
+                        minBin = min(minBin, uvec2(range & 255u, (range >> 16) & 255u));
+                        maxBin = max(maxBin, uvec2((range >> 8) & 255u, range >> 24));
+                    }
+                }
+                if (maxBin.x - minBin.x >= uint(BINS) || maxBin.y - minBin.y >= uint(BINS)) {
+                    atomicOr(segmentFailed[segment], 1u);
+                }
+                low = ivec2(minBin);
+            }
+            barrier();
+
+            if (segmentFailed[segment] != 0u) {
+                if (gl_LocalInvocationID.x == 0u) {
+                    uint tileX = gl_WorkGroupID.x;
+                    for (int tileY = firstRow / 8; tileY * 8 < endRow; tileY++) {
+                        uint index = atomicAdd(groupCountX, 1u);
+                        tiles[index] = tileX | (uint(tileY) << 16);
+                    }
+                }
+                return;
+            }
+            if (!inBounds) return;
+
+            float subject[SEGMENT];
+            for (int layer = 0; layer < 2; layer++) {
+                int layerLow = low[layer];
+                for (int i = 0; i < BINS; i++) {
+                    int slot = i * LANES + lane;
+                    histCount[slot] = 0;
+                    histFlatDepth[slot] = 0;
+                    histEdgeDepth[slot] = 0;
+                }
+                for (int row = firstRow - RADIUS; row <= firstRow + RADIUS; row++) {
+                    addRow(column, row, layer, layerLow, 1);
+                }
+                for (int row = firstRow; row < endRow; row++) {
+                    uvec4 meta = imageLoad(uMetaImage, ivec2(column, row));
+                    float filtered = median(layerLow, int((meta.x >> uint(8 * layer)) & 255u));
+                    if (layer == 0) {
+                        subject[row - firstRow] = filtered;
+                    } else {
+                        vec4 center = texelFetch(uDepthTexture, ivec2(column, row), 0);
+                        float subjectDepth = subject[row - firstRow];
+                        imageStore(uLayerImage, ivec2(column, row),
+                            vec4(mix(filtered, subjectDepth, center.a), subjectDepth, filtered, center.a));
+                    }
+                    if (row + 1 < endRow) {
+                        addRow(column, row - RADIUS, layer, layerLow, -1);
+                        addRow(column, row + RADIUS + 1, layer, layerLow, 1);
+                    }
+                }
+            }
+        }
+    """.trimIndent()
+    }
+
+    /**
+     * Per-pixel weighted median of the tiles listed by the sliding pass, one
+     * 8x8 work group per listed tile. The window radius is compiled in, sizing
+     * the shared tile to the window; the three window passes per layer only
+     * read shared memory. The radix counters are per invocation, lane-minor in
+     * shared memory; shared memory stays within the GLES 3.1 minimum of 16 KiB
+     * at [LAYER_MEDIAN_MAX_RADIUS].
+     */
+    fun layerMedianTileComputeShader(radius: Int): String {
+        require(radius in 1..LAYER_MEDIAN_MAX_RADIUS) { "Layer median radius $radius out of range" }
+        return """#version 310 es
+        precision highp float;
+        precision highp int;
+        precision highp sampler2D;
+        precision highp uimage2D;
         layout(local_size_x = 8, local_size_y = 8) in;
 
         const int RADIUS = $radius;
@@ -439,10 +701,17 @@ internal object BokehShaders {
         // Radix counters of each invocation at [digit * LANES + lane].
         shared float radixWeight[RADIX * LANES];
 
+        layout(rgba16ui, binding = 1) readonly uniform highp uimage2D uMetaImage;
         layout(rgba16f, binding = 0) writeonly uniform highp image2D uLayerImage;
+        layout(std430, binding = 0) readonly buffer TileList {
+            uint groupCountX;
+            uint groupCountY;
+            uint groupCountZ;
+            uint reserved;
+            uint tiles[];
+        };
         uniform sampler2D uDepthTexture;
         uniform float uRangeSigmaBins;
-        uniform float uFlatThreshold;
         uniform float uEdgeWeight;
 
         int depthBin(float value) {
@@ -521,30 +790,23 @@ internal object BokehShaders {
         }
 
         void main() {
-            ivec2 size = textureSize(uDepthTexture, 0);
-            ivec2 origin = ivec2(gl_WorkGroupID.xy) * 8 - RADIUS;
+            ivec2 size = imageSize(uMetaImage);
+            uint tile = tiles[gl_WorkGroupID.x];
+            ivec2 tileOrigin = ivec2(int(tile & 65535u), int(tile >> 16)) * 8;
+            ivec2 origin = tileOrigin - RADIUS;
             int lane = int(gl_LocalInvocationIndex);
             for (int i = lane; i < TILE * TILE; i += LANES) {
                 ivec2 pixel = clamp(origin + ivec2(i % TILE, i / TILE), ivec2(0), size - 1);
-                vec2 layers = texelFetch(uDepthTexture, pixel, 0).gb;
-                bvec2 isFlat = bvec2(true);
-                for (int y = -1; y <= 1; y++) {
-                    for (int x = -1; x <= 1; x++) {
-                        vec2 neighbour = texelFetch(uDepthTexture, clamp(pixel + ivec2(x, y), ivec2(0), size - 1), 0).gb;
-                        isFlat = bvec2(isFlat.x && abs(neighbour.x - layers.x) <= uFlatThreshold,
-                            isFlat.y && abs(neighbour.y - layers.y) <= uFlatThreshold);
-                    }
-                }
-                tileDepth[i] = layers;
-                tileMeta[i] = uint(depthBin(layers.x)) | (uint(depthBin(layers.y)) << 8) |
-                    (isFlat.x ? 65536u : 0u) | (isFlat.y ? 131072u : 0u);
+                uvec4 meta = imageLoad(uMetaImage, pixel);
+                tileDepth[i] = vec2(unpackHalf2x16(meta.z).x, unpackHalf2x16(meta.w).x);
+                tileMeta[i] = meta.x | (meta.y << 16);
             }
             for (int i = lane; i < 256; i += LANES) {
                 rangeWeight[i] = exp(-float(i * i) / (2.0 * uRangeSigmaBins * uRangeSigmaBins));
             }
             barrier();
 
-            ivec2 pixel = ivec2(gl_GlobalInvocationID.xy);
+            ivec2 pixel = tileOrigin + ivec2(gl_LocalInvocationID.xy);
             if (pixel.x >= size.x || pixel.y >= size.y) return;
             ivec2 local = ivec2(gl_LocalInvocationID.xy) + RADIUS;
             vec4 center = texelFetch(uDepthTexture, pixel, 0);
@@ -1137,11 +1399,21 @@ internal object BokehShaders {
      * `Integrate`: row prefix sums of the gradient field; the weight channel
      * is clamped at zero on every step. The deltas are cleared for the next
      * scatter. uAccumulate adds into the target instead of overwriting it.
+     *
+     * One work group per row; each lane owns a contiguous run of columns. The
+     * clamped weight recurrence w <- max(w + d, 0) composes as w -> max(w + A, B),
+     * so the lanes' runs are combined by a shared-memory scan of (sum, A, B).
+     * Sums stay in the fixed-point integers of the deltas, so the result does
+     * not depend on the summation order.
      */
     val INTEGRATE_COMPUTE_SHADER = """#version 310 es
         precision highp float;
         precision highp int;
         layout(local_size_x = 128) in;
+
+        const int LANES = 128;
+        // Below any reachable weight; one delta lifts it to the clamp at zero.
+        const int NO_FLOOR = -1073741824;
 
         layout(std430, binding = 0) buffer Deltas { int deltas[]; };
         layout(std430, binding = 1) buffer Target { vec4 target[]; };
@@ -1150,20 +1422,66 @@ internal object BokehShaders {
         uniform int uRows;
         uniform int uAccumulate;
 
+        shared ivec3 colorScan[LANES];
+        shared ivec2 weightScan[LANES];
+
         void main() {
-            int row = int(gl_GlobalInvocationID.x);
+            int row = int(gl_WorkGroupID.x);
+            int lane = int(gl_LocalInvocationIndex);
+            int run = (uWidth + LANES - 1) / LANES;
+            int first = min(lane * run, uWidth);
+            int last = min(first + run, uWidth);
+
+            // This lane's run as a color sum and a weight map w -> max(w + A, B).
+            ivec3 color = ivec3(0);
+            ivec2 weight = ivec2(0, NO_FLOOR);
+            if (row < uRows) {
+                for (int x = first; x < last; x++) {
+                    int base = (row * uWidth + x) * 4;
+                    color += ivec3(deltas[base], deltas[base + 1], deltas[base + 2]);
+                    int d = deltas[base + 3];
+                    weight = ivec2(weight.x + d, max(weight.y + d, 0));
+                }
+            }
+            colorScan[lane] = color;
+            weightScan[lane] = weight;
+            barrier();
+            // Inclusive Hillis-Steele scan; the earlier run is applied first.
+            for (int offset = 1; offset < LANES; offset <<= 1) {
+                ivec3 earlierColor = ivec3(0);
+                ivec2 earlierWeight = ivec2(0, NO_FLOOR);
+                bool combine = lane >= offset;
+                if (combine) {
+                    earlierColor = colorScan[lane - offset];
+                    earlierWeight = weightScan[lane - offset];
+                }
+                barrier();
+                if (combine) {
+                    ivec2 own = weightScan[lane];
+                    colorScan[lane] = earlierColor + colorScan[lane];
+                    weightScan[lane] = ivec2(earlierWeight.x + own.x, max(earlierWeight.y + own.x, own.y));
+                }
+                barrier();
+            }
             if (row >= uRows) return;
-            vec4 sum = vec4(0.0);
-            for (int x = 0; x < uWidth; x++) {
+
+            ivec3 colorSum = ivec3(0);
+            int weightSum = 0;
+            if (lane > 0) {
+                colorSum = colorScan[lane - 1];
+                ivec2 incoming = weightScan[lane - 1];
+                weightSum = max(incoming.x, incoming.y);
+            }
+            for (int x = first; x < last; x++) {
                 int index = row * uWidth + x;
                 int base = index * 4;
-                ivec4 delta = ivec4(deltas[base], deltas[base + 1], deltas[base + 2], deltas[base + 3]);
+                colorSum += ivec3(deltas[base], deltas[base + 1], deltas[base + 2]);
+                weightSum = max(weightSum + deltas[base + 3], 0);
                 deltas[base] = 0;
                 deltas[base + 1] = 0;
                 deltas[base + 2] = 0;
                 deltas[base + 3] = 0;
-                sum += vec4(delta) / $DELTA_FIXED_SCALE;
-                sum.w = max(sum.w, 0.0);
+                vec4 sum = vec4(vec3(colorSum), float(weightSum)) / $DELTA_FIXED_SCALE;
                 if (uAccumulate != 0) {
                     vec4 current = target[index];
                     target[index] = current + sum;
@@ -1174,7 +1492,7 @@ internal object BokehShaders {
         }
     """.trimIndent()
 
-    /** `ResampleToImageDomain` of the half-resolution domain + `AdditiveBlend` into the band. */
+    /** `ResampleToImageDomain` of a 2^-level domain (bilinear) + `AdditiveBlend` into the band. */
     val UPSAMPLE_ADD_COMPUTE_SHADER = """#version 310 es
         precision highp float;
         precision highp int;
@@ -1189,6 +1507,7 @@ internal object BokehShaders {
         uniform int uSourceWidth;
         uniform int uSourceRow;
         uniform int uSourceRows;
+        uniform float uScale;
 
         vec4 fetchSource(int x, int y) {
             int cx = clamp(x, 0, uSourceWidth - 1);
@@ -1201,7 +1520,7 @@ internal object BokehShaders {
             int x = int(gl_GlobalInvocationID.x);
             int row = int(gl_GlobalInvocationID.y);
             if (x >= uWidth || row >= uStripRows) return;
-            vec2 position = (vec2(x, uStripRow + row) + 0.5) * 0.5 - 0.5;
+            vec2 position = (vec2(x, uStripRow + row) + 0.5) * uScale - 0.5;
             ivec2 base = ivec2(floor(position));
             vec2 f = position - vec2(base);
             vec4 top = mix(fetchSource(base.x, base.y), fetchSource(base.x + 1, base.y), f.x);

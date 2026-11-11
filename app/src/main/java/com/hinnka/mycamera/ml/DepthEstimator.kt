@@ -19,52 +19,51 @@ import java.nio.MappedByteBuffer
 import java.nio.channels.FileChannel
 
 /**
- * Runs the installed monocular depth model and returns a normalized disparity map
- * (larger is nearer) in the orientation of the input image.
+ * Runs Depth Anything 3 Small (see [DepthModelManager]) and returns a normalized disparity
+ * map (larger is nearer) in the orientation of the input image.
  *
- * The default model (Depth Anything 3 Small, see [DepthModelManager]) takes an
- * ImageNet-normalized NCHW image and outputs depth; imported models take [0, 1] RGB and
- * their output polarity is resolved later by the bokeh preprocessor. Models with a
- * non-square input of the other orientation get the image rotated by 90 degrees.
+ * The model takes an ImageNet-normalized NCHW FLOAT32 image and outputs positive depth.
+ * It runs on the LiteRT GPU accelerator in FP16, in which it is exact; the CPU interpreter
+ * is the fallback. Input of the other orientation than the model's is rotated by 90 degrees.
  */
 class DepthEstimator(context: Context) {
     private var cpuInterpreter: Interpreter? = null
     private var gpuModel: LiteRtGpuModel? = null
     private var modelBuffer: MappedByteBuffer? = null
     private lateinit var contract: DepthModelContract
-    private var isOfficialModel = false
     private var isInitialized = false
     internal val isReady: Boolean
         get() = isInitialized
 
     init {
-        val modelFile = DepthModelManager.requireInstalledModelFile(context)
         try {
-            val fingerprint = StartupTrace.measure("DepthEstimator.fingerprint") {
-                DepthModelManager.installedModelFingerprint(context)
+            val modelFile = StartupTrace.measure("DepthEstimator.verifyModel") {
+                DepthModelManager.requireVerifiedModelFile(context)
             }
-            isOfficialModel = fingerprint == DepthModelManager.OFFICIAL_MODEL_SHA256
             val buffer = StartupTrace.measure("DepthEstimator.mapModelFile") {
                 FileInputStream(modelFile).channel.use { channel ->
                     channel.map(FileChannel.MapMode.READ_ONLY, 0L, channel.size())
                 }
             }
             modelBuffer = buffer
-            val outputCount = Interpreter(buffer, Interpreter.Options().setUseXNNPACK(false)).use {
+            Interpreter(buffer, Interpreter.Options().setUseXNNPACK(false)).use {
                 contract = inspectDepthModelContract(it)
-                it.outputTensorCount
+                check(
+                    contract.inputDataType == DataType.FLOAT32 &&
+                        contract.outputDataType == DataType.FLOAT32 &&
+                        it.outputTensorCount == 1
+                ) { "Depth model does not match the Depth Anything 3 contract" }
             }
-            gpuModel = createGpuModel(context, modelFile, fingerprint, outputCount)
+            gpuModel = createGpuModel(context, modelFile)
             if (gpuModel == null) {
                 cpuInterpreter = createCpuInterpreter(buffer)
             }
             isInitialized = true
             PLog.d(
                 TAG,
-                "Depth model ready: backend=${if (gpuModel != null) "GPU" else "CPU"} official=$isOfficialModel " +
+                "Depth model ready: backend=${if (gpuModel != null) "GPU" else "CPU"} " +
                     "input=${contract.inputWidth}x${contract.inputHeight} output=${contract.outputWidth}x${contract.outputHeight} " +
-                    "inputLayout=${if (contract.inputChannelsFirst) "NCHW" else "NHWC"} " +
-                    "inputType=${contract.inputDataType} outputType=${contract.outputDataType} outputIndex=${contract.outputTensorIndex}"
+                    "inputLayout=${if (contract.inputChannelsFirst) "NCHW" else "NHWC"}"
             )
         } catch (e: Exception) {
             close()
@@ -72,24 +71,8 @@ class DepthEstimator(context: Context) {
         }
     }
 
-    /**
-     * GPU needs one FLOAT32 input and one FLOAT32 output. The default model is converted
-     * for the LiteRT GPU delegate and is exact in FP16; imported models run in FP32.
-     */
-    private fun createGpuModel(context: Context, file: File, fingerprint: String, outputCount: Int): LiteRtGpuModel? {
-        if (
-            contract.inputDataType != DataType.FLOAT32 ||
-            contract.outputDataType != DataType.FLOAT32 ||
-            outputCount != 1
-        ) {
-            PLog.d(TAG, "Depth model contract is not GPU-eligible; using CPU")
-            return null
-        }
-        val precision = if (isOfficialModel) {
-            CompiledModel.GpuOptions.Precision.FP16
-        } else {
-            CompiledModel.GpuOptions.Precision.FP32
-        }
+    private fun createGpuModel(context: Context, file: File): LiteRtGpuModel? {
+        val precision = CompiledModel.GpuOptions.Precision.FP16
         return try {
             val cache = MlDelegateCacheFactory.create(
                 context = context,
@@ -97,7 +80,7 @@ class DepthEstimator(context: Context) {
                 cacheName = "depth_${precision.name.lowercase()}",
                 modelAssetName = file.name,
                 modelSizeBytes = file.length().toInt(),
-                modelFingerprint = fingerprint,
+                modelFingerprint = DepthModelManager.OFFICIAL_MODEL_SHA256,
             )
             StartupTrace.measure("DepthEstimator.CompiledModel(GPU)") {
                 LiteRtGpuModel.fromFile(
@@ -136,8 +119,7 @@ class DepthEstimator(context: Context) {
         return try {
             val pixels = readModelInputPixels(inputBitmap, rotate)
             val raw = runGpu(pixels) ?: runCpu(pixels)
-            val disparity = if (isOfficialModel) depthToDisparity(raw) else raw
-            val map = normalize(disparity, contract.outputWidth, contract.outputHeight)
+            val map = normalize(depthToDisparity(raw), contract.outputWidth, contract.outputHeight)
             if (rotate) rotateBack(map) else map
         } catch (e: Exception) {
             PLog.e(TAG, "Error during depth model inference", e)
@@ -174,35 +156,21 @@ class DepthEstimator(context: Context) {
 
     private fun runCpu(pixels: IntArray): FloatArray {
         val interpreter = cpuInterpreter ?: error("CPU depth interpreter is not available")
-        val outputTensor = interpreter.getOutputTensor(contract.outputTensorIndex)
-        val outputBuffer = TensorBuffer.createFixedSize(outputTensor.shape(), contract.outputDataType)
-        val inputBuffer = cpuInput(pixels, interpreter)
+        val outputBuffer = TensorBuffer.createFixedSize(
+            interpreter.getOutputTensor(contract.outputTensorIndex).shape(),
+            DataType.FLOAT32,
+        )
+        val input = floatInput(pixels)
+        val inputBuffer = LargeDirectBuffer.allocate(input.size.toLong() * Float.SIZE_BYTES, "Depth model input")
+            ?: throw OutOfMemoryError("Failed to allocate depth model input buffer")
         try {
-            if (interpreter.outputTensorCount == 1 && contract.outputTensorIndex == 0) {
-                interpreter.run(inputBuffer, outputBuffer.buffer)
-            } else {
-                interpreter.runForMultipleInputsOutputs(
-                    arrayOf(inputBuffer),
-                    mapOf(contract.outputTensorIndex to outputBuffer.buffer),
-                )
-            }
+            inputBuffer.asFloatBuffer().put(input)
+            inputBuffer.rewind()
+            interpreter.run(inputBuffer, outputBuffer.buffer)
         } finally {
             LargeDirectBuffer.free(inputBuffer)
         }
-        return when (contract.outputDataType) {
-            DataType.FLOAT32 -> outputBuffer.floatArray
-            DataType.UINT8, DataType.INT8 -> {
-                val byteBuffer = outputBuffer.buffer
-                byteBuffer.rewind()
-                val bytes = ByteArray(outputBuffer.flatSize)
-                byteBuffer.get(bytes)
-                FloatArray(bytes.size) { i ->
-                    if (contract.outputDataType == DataType.UINT8) (bytes[i].toInt() and 0xFF).toFloat()
-                    else bytes[i].toFloat()
-                }
-            }
-            else -> error("Unsupported depth model output type: ${contract.outputDataType}")
-        }
+        return outputBuffer.floatArray
     }
 
     /**
@@ -239,14 +207,14 @@ class DepthEstimator(context: Context) {
         return pixels
     }
 
-    /** Normalized RGB channel value; ImageNet mean/std for the default model, [0, 1] otherwise. */
+    /** ImageNet-normalized RGB channel value. */
     private fun channelValue(pixel: Int, channel: Int): Float {
         val value = when (channel) {
             0 -> (pixel shr 16) and 0xFF
             1 -> (pixel shr 8) and 0xFF
             else -> pixel and 0xFF
         } / 255.0f
-        return if (isOfficialModel) (value - IMAGENET_MEAN[channel]) / IMAGENET_STD[channel] else value
+        return (value - IMAGENET_MEAN[channel]) / IMAGENET_STD[channel]
     }
 
     private fun floatInput(pixels: IntArray): FloatArray {
@@ -264,44 +232,7 @@ class DepthEstimator(context: Context) {
         return out
     }
 
-    private fun cpuInput(pixels: IntArray, interpreter: Interpreter): ByteBuffer {
-        val bytesPerChannel = when (contract.inputDataType) {
-            DataType.FLOAT32 -> Float.SIZE_BYTES
-            DataType.UINT8, DataType.INT8 -> Byte.SIZE_BYTES
-            else -> throw IllegalArgumentException("Unsupported depth model input type: ${contract.inputDataType}")
-        }
-        val buffer = LargeDirectBuffer.allocate(
-            pixels.size.toLong() * RGB_CHANNELS * bytesPerChannel,
-            "Depth model input"
-        ) ?: throw OutOfMemoryError("Failed to allocate depth model input buffer")
-        if (contract.inputDataType == DataType.FLOAT32) {
-            buffer.asFloatBuffer().put(floatInput(pixels))
-            buffer.rewind()
-            return buffer
-        }
-        val quantization = interpreter.getInputTensor(0).quantizationParams()
-        fun putChannel(pixel: Int, channel: Int) {
-            val quantized = quantize(channelValue(pixel, channel), quantization.scale, quantization.zeroPoint)
-            buffer.put(
-                if (contract.inputDataType == DataType.UINT8) quantized.coerceIn(0, 255).toByte()
-                else quantized.coerceIn(-128, 127).toByte()
-            )
-        }
-        if (contract.inputChannelsFirst) {
-            for (channel in 0 until RGB_CHANNELS) for (pixel in pixels) putChannel(pixel, channel)
-        } else {
-            for (pixel in pixels) for (channel in 0 until RGB_CHANNELS) putChannel(pixel, channel)
-        }
-        buffer.rewind()
-        return buffer
-    }
-
-    private fun quantize(value: Float, scale: Float, zeroPoint: Int): Int {
-        require(scale > 0f) { "Quantized depth model input has no valid scale" }
-        return kotlin.math.round(value / scale + zeroPoint.toFloat()).toInt()
-    }
-
-    /** The default model outputs positive depth; disparity is its reciprocal. */
+    /** The model outputs positive depth; disparity is its reciprocal. */
     private fun depthToDisparity(depth: FloatArray): FloatArray {
         return FloatArray(depth.size) { i ->
             val d = depth[i]

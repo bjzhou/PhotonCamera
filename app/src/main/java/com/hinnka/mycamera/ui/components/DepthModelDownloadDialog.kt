@@ -1,7 +1,6 @@
 package com.hinnka.mycamera.ui.components
 
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -25,11 +24,9 @@ fun DepthModelDownloadDialog(
     source: HfModelSource,
     onSourceChange: (HfModelSource) -> Unit,
     onDownload: () -> Unit,
-    onImport: () -> Unit,
     onDismiss: () -> Unit
 ) {
-    val isBusy = state is DepthModelDownloadState.Downloading ||
-        state is DepthModelDownloadState.Importing
+    val isBusy = state is DepthModelDownloadState.Downloading
     AlertDialog(
         onDismissRequest = onDismiss,
         title = {
@@ -67,9 +64,7 @@ fun DepthModelDownloadDialog(
                     }
                     Spacer(modifier = Modifier.height(8.dp))
                     Text(
-                        text = if (state is DepthModelDownloadState.Importing) {
-                            stringResource(R.string.depth_model_importing)
-                        } else if (
+                        text = if (
                             state is DepthModelDownloadState.Downloading &&
                             state.isInstalling
                         ) {
@@ -90,37 +85,21 @@ fun DepthModelDownloadDialog(
         confirmButton = {
             when (state) {
                 DepthModelDownloadState.Missing -> {
-                    Row {
-                        TextButton(onClick = onImport) {
-                            Text(stringResource(R.string.depth_model_import_action))
-                        }
-                        TextButton(onClick = onDownload) {
-                            Text(stringResource(R.string.depth_model_download_action))
-                        }
+                    TextButton(onClick = onDownload) {
+                        Text(stringResource(R.string.depth_model_download_action))
                     }
                 }
                 DepthModelDownloadState.Failed -> {
-                    Row {
-                        TextButton(onClick = onImport) {
-                            Text(stringResource(R.string.depth_model_import_action))
-                        }
-                        TextButton(onClick = onDownload) {
-                            Text(stringResource(R.string.depth_model_retry))
-                        }
+                    TextButton(onClick = onDownload) {
+                        Text(stringResource(R.string.depth_model_retry))
                     }
                 }
                 DepthModelDownloadState.Ready -> {
-                    Row {
-                        TextButton(onClick = onImport) {
-                            Text(stringResource(R.string.depth_model_import_action))
-                        }
-                        TextButton(onClick = onDismiss) {
-                            Text(stringResource(R.string.depth_model_done))
-                        }
+                    TextButton(onClick = onDismiss) {
+                        Text(stringResource(R.string.depth_model_done))
                     }
                 }
                 is DepthModelDownloadState.Downloading -> Unit
-                DepthModelDownloadState.Importing -> Unit
             }
         },
         dismissButton = {

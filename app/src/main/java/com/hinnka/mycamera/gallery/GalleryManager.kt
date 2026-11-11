@@ -140,6 +140,9 @@ object GalleryManager {
     private const val AI_DENOISE_FILE = "ai_denoise.jpg"
     private const val THUMBNAIL_FILE = "thumbnail.jpg"
     private const val BOKEH_FILE = "bokeh.jpg"
+    private const val DEPTH_CACHE_FILE = "depthmap.phdp"
+    /** 8-bit depth PNG of versions before the float cache; never read any more. */
+    private const val LEGACY_DEPTH_CACHE_FILE = "depthmap.png"
     private const val DETAIL_HDR_FILE = "detail_hdr.jpg"
     private const val MULTIPLE_EXPOSURE_DIR = "multiple_exposure_sessions"
     private const val MULTIPLE_EXPOSURE_PREVIEW_FILE = "preview.jpg"
@@ -631,12 +634,24 @@ object GalleryManager {
         return File(getPhotoDir(context, photoId), AI_DENOISE_FILE)
     }
 
-    fun getDepthFile(context: Context, photoId: String): File {
-        return File(getPhotoDir(context, photoId), "depthmap.png")
+    fun getFloatDepthFile(context: Context, photoId: String): File {
+        return File(getPhotoDir(context, photoId), DEPTH_CACHE_FILE)
     }
 
-    fun getFloatDepthFile(context: Context, photoId: String): File {
-        return File(getPhotoDir(context, photoId), "depthmap.phdp")
+    /**
+     * Removes every photo's former 8-bit depth cache and each float depth cache for which
+     * [isStale] holds. Returns the number of removed files.
+     */
+    fun removeDepthCaches(context: Context, isStale: (File) -> Boolean): Int {
+        var removed = 0
+        getPhotosBaseDir(context).listFiles()?.forEach { photoDir ->
+            if (!photoDir.isDirectory) return@forEach
+            val legacy = File(photoDir, LEGACY_DEPTH_CACHE_FILE)
+            if (legacy.exists() && legacy.delete()) removed++
+            val cache = File(photoDir, DEPTH_CACHE_FILE)
+            if (cache.exists() && isStale(cache) && cache.delete()) removed++
+        }
+        return removed
     }
 
     fun getThumbnailFile(context: Context, photoId: String): File {

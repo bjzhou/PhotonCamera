@@ -809,14 +809,6 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
         }
     }
 
-    fun hasDepthInfo(photo: MediaData?): Boolean {
-        if (photo == null) return false
-        if (selectedTab == GalleryTab.SYSTEM) return false
-        val context = getApplication<Application>()
-        return GalleryManager.getFloatDepthFile(context, photo.id).exists() ||
-            GalleryManager.getDepthFile(context, photo.id).exists()
-    }
-
     // 最新照片（用于相机界面显示入口）
     private val _latestPhoto = MutableStateFlow<MediaData?>(null)
     val latestPhoto: StateFlow<MediaData?> = _latestPhoto.asStateFlow()

@@ -1,7 +1,7 @@
 package com.hinnka.mycamera.ml
 
 import android.content.Context
-import android.net.Uri
+import com.hinnka.mycamera.gallery.GalleryManager
 import com.hinnka.mycamera.utils.PLog
 import java.io.File
 import java.io.FileInputStream
@@ -13,7 +13,6 @@ import java.nio.file.Files
 import java.nio.file.StandardCopyOption
 import java.security.MessageDigest
 import java.util.concurrent.TimeUnit
-import java.util.zip.ZipInputStream
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
@@ -35,8 +34,6 @@ sealed interface DepthModelDownloadState {
         val isInstalling: Boolean
     ) : DepthModelDownloadState
 
-    data object Importing : DepthModelDownloadState
-
     data object Ready : DepthModelDownloadState
 
     data object Failed : DepthModelDownloadState
@@ -45,34 +42,39 @@ sealed interface DepthModelDownloadState {
 /**
  * Owns the optional depth model lifecycle.
  *
- * The model is kept in app-private storage and is installed atomically only after
- * it has been verified as a TFLite model compatible with the app's depth pipeline.
- * The default model (Depth Anything 3 Small, LiteRT GPU FP16) is downloaded from a
- * commit-pinned Hugging Face URL and additionally verified by exact size and SHA-256.
+ * The only accepted model is Depth Anything 3 Small (LiteRT GPU FP16), downloaded from a
+ * commit-pinned Hugging Face URL and verified by exact size, SHA-256 and tensor contract
+ * before it is installed atomically in app-private storage. Any other model file, the
+ * former Depth Anything V2 directory, their delegate caches and per-photo depth caches
+ * made by another model are removed.
  */
 object DepthModelManager {
     private const val TAG = "DepthModelManager"
     private const val MODEL_DIRECTORY = "ml_models/depth"
     private const val MODEL_FILE_NAME = "depth.tflite"
-    private const val MODEL_IMPORT_PART_FILE_NAME = "depth.import.part"
     private const val MODEL_PART_FILE_NAME = "depth.tflite.part"
     private const val EXPECTED_MODEL_SIZE_BYTES = 55_035_456L
-    private const val MAX_IMPORT_SIZE_BYTES = 256L * 1024L * 1024L
     internal const val OFFICIAL_MODEL_SHA256 =
         "e170369a72ba1bba7486a4d2de555639fccd0595a9bb5b5349f7733ed4aebd1f"
     private const val MODEL_PATH =
         "/litert-community/Depth-Anything-3-Small/resolve/" +
             "5cd25d936e3fde2edef68f53b4123401454ac9c8/da3_small_gpu_fp16.tflite"
 
-    /**
-     * Before Depth Anything 3 the model lived here. The former default (Depth Anything V2,
-     * identified by its exact size) is removed; a user-imported model is carried over.
-     */
+    /** Identifies per-photo depth caches made by the official model (see [RelativeDepthMapFile]). */
+    internal val OFFICIAL_MODEL_ID: Long = OFFICIAL_MODEL_SHA256.substring(0, 16).toULong(16).toLong()
+
+    /** Depth Anything V2 and imported models lived here before Depth Anything 3. */
     private const val LEGACY_MODEL_DIRECTORY = "ml_models/depth_anything_v2"
-    private const val LEGACY_MODEL_FILE_NAME = "depth_anything_v2.tflite"
-    private const val LEGACY_DEFAULT_MODEL_SIZE_BYTES = 98_920_480L
+    /** no_backup delegate caches of former models: V2 (NNAPI) and imported FP32 models. */
+    private val LEGACY_DELEGATE_CACHE_DIRECTORIES = listOf(
+        "depth_estimator_delegate_cache",
+        "depth_fp32_delegate_cache",
+    )
+    /** Holds the model id whose per-photo depth caches were last swept. */
+    private const val DEPTH_CACHE_MARKER_FILE_NAME = "depth_cache_model"
 
     private val lock = Any()
+    private val verificationLock = Any()
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val client = OkHttpClient.Builder()
         .connectTimeout(30, TimeUnit.SECONDS)
@@ -86,6 +88,9 @@ object DepthModelManager {
     internal var installationRevision: Long = 0L
         private set
 
+    /** Size and modification time of the installed file whose SHA-256 has been verified. */
+    private var verifiedModelStamp: Pair<Long, Long>? = null
+
     val state: StateFlow<DepthModelDownloadState> = _state.asStateFlow()
 
     fun observe(context: Context): StateFlow<DepthModelDownloadState> {
@@ -98,18 +103,36 @@ object DepthModelManager {
         return installedModelFileOrNull(context.applicationContext) != null
     }
 
+    /** The installed file when its size and header match the official model; cheap enough for UI. */
     fun installedModelFileOrNull(context: Context): File? {
         val modelFile = modelFile(context.applicationContext)
-        return modelFile.takeIf(::hasValidInstalledModelFile)
+        return modelFile.takeIf(::hasOfficialModelShape)
     }
 
-    fun requireInstalledModelFile(context: Context): File {
-        return installedModelFileOrNull(context)
-            ?: throw IllegalStateException("A compatible depth model is not installed")
-    }
-
-    internal fun installedModelFingerprint(context: Context): String {
-        return sha256(requireInstalledModelFile(context.applicationContext))
+    /**
+     * The installed model after its SHA-256 matched the official model, hashed once per
+     * installed file. A mismatching file is removed and the state returns to missing.
+     * Must not run on the main thread.
+     */
+    internal fun requireVerifiedModelFile(context: Context): File {
+        val appContext = context.applicationContext
+        initialize(appContext)
+        // Hashing takes a separate lock so that UI calls of [isInstalled] never wait for it.
+        synchronized(verificationLock) {
+            val modelFile = installedModelFileOrNull(appContext)
+                ?: throw IllegalStateException("The depth model is not installed")
+            val stamp = modelFile.length() to modelFile.lastModified()
+            if (verifiedModelStamp == stamp) return modelFile
+            if (sha256(modelFile) != OFFICIAL_MODEL_SHA256) {
+                PLog.w(TAG, "Installed depth model is not the official model; removing it")
+                modelFile.deleteIfExistsOrLog()
+                verifiedModelStamp = null
+                _state.value = DepthModelDownloadState.Missing
+                throw IllegalStateException("The installed depth model failed verification")
+            }
+            verifiedModelStamp = stamp
+            return modelFile
+        }
     }
 
     fun download(context: Context, source: HfModelSource) {
@@ -150,42 +173,12 @@ object DepthModelManager {
         }
     }
 
-    fun importModel(context: Context, source: Uri) {
-        val appContext = context.applicationContext
-        initialize(appContext)
-        synchronized(lock) {
-            if (operationJob?.isActive == true) {
-                return
-            }
-
-            _state.value = DepthModelDownloadState.Importing
-            val newJob = scope.launch(start = CoroutineStart.LAZY) {
-                try {
-                    importAndInstall(appContext, source)
-                    _state.value = DepthModelDownloadState.Ready
-                } catch (e: Exception) {
-                    PLog.e(TAG, "Failed to import or install depth model", e)
-                    _state.value = DepthModelDownloadState.Failed
-                }
-            }
-            operationJob = newJob
-            newJob.invokeOnCompletion {
-                synchronized(lock) {
-                    if (operationJob === newJob) {
-                        operationJob = null
-                    }
-                }
-            }
-            newJob.start()
-        }
-    }
-
     private fun initialize(context: Context) {
         synchronized(lock) {
             if (initialized) {
                 return
             }
-            migrateLegacyModel(context)
+            removeLegacyModels(context)
             _state.value = if (installedModelFileOrNull(context) != null) {
                 DepthModelDownloadState.Ready
             } else {
@@ -193,30 +186,53 @@ object DepthModelManager {
             }
             initialized = true
         }
+        scope.launch { purgeForeignDepthCaches(context) }
     }
 
-    private fun migrateLegacyModel(context: Context) {
+    /**
+     * Only the downloaded Depth Anything 3 model is accepted: the former V2 / imported model
+     * directory, any installed file of another size, leftover temporary files and the delegate
+     * caches of former models are removed.
+     */
+    private fun removeLegacyModels(context: Context) {
         val legacyDirectory = File(context.filesDir, LEGACY_MODEL_DIRECTORY)
-        if (!legacyDirectory.exists()) return
-        val legacyModel = File(legacyDirectory, LEGACY_MODEL_FILE_NAME)
-        val target = modelFile(context)
-        if (
-            hasValidInstalledModelFile(legacyModel) &&
-            legacyModel.length() != LEGACY_DEFAULT_MODEL_SIZE_BYTES &&
-            !target.exists()
-        ) {
-            try {
-                if (!modelDirectory(context).isDirectory && !modelDirectory(context).mkdirs()) {
-                    throw IOException("Cannot create depth model directory")
-                }
-                installAtomically(legacyModel, target)
-                PLog.d(TAG, "Carried over imported depth model to ${target.absolutePath}")
-            } catch (e: IOException) {
-                PLog.e(TAG, "Cannot carry over imported depth model", e)
+        if (legacyDirectory.exists() && !legacyDirectory.deleteRecursively()) {
+            PLog.w(TAG, "Cannot remove legacy depth model directory: ${legacyDirectory.absolutePath}")
+        }
+        val installed = modelFile(context)
+        if (installed.exists() && !hasOfficialModelShape(installed)) {
+            PLog.d(TAG, "Removing a depth model that is not the official model")
+            installed.deleteIfExistsOrLog()
+        }
+        modelDirectory(context).listFiles()?.forEach { file ->
+            if (file.name != MODEL_FILE_NAME && file.name != MODEL_PART_FILE_NAME) {
+                if (!file.deleteRecursively()) PLog.w(TAG, "Cannot remove ${file.absolutePath}")
             }
         }
-        if (!legacyDirectory.deleteRecursively()) {
-            PLog.w(TAG, "Cannot remove legacy depth model directory: ${legacyDirectory.absolutePath}")
+        for (name in LEGACY_DELEGATE_CACHE_DIRECTORIES) {
+            val directory = File(context.noBackupFilesDir, name)
+            if (directory.exists() && !directory.deleteRecursively()) {
+                PLog.w(TAG, "Cannot remove legacy delegate cache: ${directory.absolutePath}")
+            }
+        }
+    }
+
+    /**
+     * Removes per-photo depth caches made by any other model once per official model id;
+     * caches read later are still checked against the model id on every read.
+     */
+    private fun purgeForeignDepthCaches(context: Context) {
+        val marker = File(context.noBackupFilesDir, DEPTH_CACHE_MARKER_FILE_NAME)
+        val modelId = OFFICIAL_MODEL_ID.toString()
+        try {
+            if (marker.isFile && marker.readText() == modelId) return
+            val removed = GalleryManager.removeDepthCaches(context) { file ->
+                !RelativeDepthMapFile.isFromModel(file, OFFICIAL_MODEL_ID)
+            }
+            marker.writeText(modelId)
+            PLog.d(TAG, "Removed $removed depth caches of former depth models")
+        } catch (e: Exception) {
+            PLog.w(TAG, "Cannot remove depth caches of former depth models", e)
         }
     }
 
@@ -237,69 +253,13 @@ object DepthModelManager {
             )
             validateOfficialModel(modelPartFile)
             installAtomically(modelPartFile, modelFile(context))
+            synchronized(verificationLock) {
+                verifiedModelStamp = modelFile(context).let { it.length() to it.lastModified() }
+            }
             publishInstallation()
             PLog.d(TAG, "Default depth model installed: ${modelFile(context).absolutePath}")
         } finally {
             modelPartFile.deleteIfExistsOrLog()
-        }
-    }
-
-    private fun importAndInstall(context: Context, source: Uri) {
-        val modelDirectory = modelDirectory(context)
-        if (!modelDirectory.isDirectory && !modelDirectory.mkdirs()) {
-            throw IOException("Cannot create depth model directory: ${modelDirectory.absolutePath}")
-        }
-
-        val importPartFile = File(modelDirectory, MODEL_IMPORT_PART_FILE_NAME)
-        val modelPartFile = File(modelDirectory, MODEL_PART_FILE_NAME)
-        importPartFile.deleteIfExistsOrThrow()
-        modelPartFile.deleteIfExistsOrThrow()
-
-        try {
-            copyImportedSource(context, source, importPartFile)
-            when (detectDepthModelImportFormat(importPartFile)) {
-                DepthModelImportFormat.TFLITE -> {
-                    Files.move(
-                        importPartFile.toPath(),
-                        modelPartFile.toPath(),
-                        StandardCopyOption.REPLACE_EXISTING
-                    )
-                }
-                DepthModelImportFormat.ZIP -> extractImportedModel(importPartFile, modelPartFile)
-                null -> throw IOException(
-                    "Selected file is neither a TFLite model nor a ZIP archive"
-                )
-            }
-            validateImportedModel(modelPartFile)
-            installAtomically(modelPartFile, modelFile(context))
-            publishInstallation()
-            PLog.d(TAG, "Compatible depth model imported successfully")
-        } finally {
-            importPartFile.deleteIfExistsOrLog()
-            modelPartFile.deleteIfExistsOrLog()
-        }
-    }
-
-    private fun copyImportedSource(context: Context, source: Uri, target: File) {
-        val input = context.contentResolver.openInputStream(source)
-            ?: throw IOException("Cannot open selected depth model file")
-        input.use {
-            FileOutputStream(target).use { output ->
-                val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
-                var copiedBytes = 0L
-                while (true) {
-                    val read = it.read(buffer)
-                    if (read < 0) {
-                        break
-                    }
-                    copiedBytes += read
-                    if (copiedBytes > MAX_IMPORT_SIZE_BYTES) {
-                        throw IOException("Selected depth model file exceeds import size limit")
-                    }
-                    output.write(buffer, 0, read)
-                }
-                output.fd.sync()
-            }
         }
     }
 
@@ -354,65 +314,12 @@ object DepthModelManager {
         )
     }
 
-    private fun extractImportedModel(archive: File, target: File) {
-        var tfliteEntryFound = false
-        var extractedBytes = 0L
-        var lastCompatibilityError: Exception? = null
-        FileInputStream(archive).use { fileInput ->
-            ZipInputStream(fileInput).use { zipInput ->
-                var entry = zipInput.nextEntry
-                while (entry != null) {
-                    if (!entry.isDirectory) {
-                        target.deleteIfExistsOrThrow()
-                        FileOutputStream(target).use { output ->
-                            val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
-                            while (true) {
-                                val read = zipInput.read(buffer)
-                                if (read < 0) break
-                                extractedBytes += read
-                                if (extractedBytes > MAX_IMPORT_SIZE_BYTES) {
-                                    throw IOException("Depth model ZIP exceeds import size limit")
-                                }
-                                output.write(buffer, 0, read)
-                            }
-                            output.fd.sync()
-                        }
-                        if (detectDepthModelImportFormat(target) == DepthModelImportFormat.TFLITE) {
-                            tfliteEntryFound = true
-                            try {
-                                validateImportedModel(target)
-                                zipInput.closeEntry()
-                                return
-                            } catch (e: Exception) {
-                                lastCompatibilityError = e
-                            }
-                        }
-                    }
-                    zipInput.closeEntry()
-                    entry = zipInput.nextEntry
-                }
-            }
-        }
-        target.deleteIfExistsOrLog()
-        if (!tfliteEntryFound) {
-            throw IOException("Depth model archive does not contain a TFLite model")
-        }
-        throw IOException("Depth model archive has no compatible TFLite model", lastCompatibilityError)
-    }
-
     private fun validateOfficialModel(file: File) {
         if (!hasTfliteHeader(file) || file.length() != EXPECTED_MODEL_SIZE_BYTES) {
             throw IOException("Default depth model has an invalid size or TFLite header")
         }
         if (sha256(file) != OFFICIAL_MODEL_SHA256) {
             throw IOException("Depth model checksum mismatch")
-        }
-        validateImportedModel(file)
-    }
-
-    private fun validateImportedModel(file: File) {
-        if (!hasValidInstalledModelFile(file)) {
-            throw IOException("Depth model has an invalid size or TFLite header")
         }
         try {
             Interpreter(file).use(::inspectDepthModelContract)
@@ -444,11 +351,8 @@ object DepthModelManager {
         }
     }
 
-    private fun hasValidInstalledModelFile(file: File): Boolean {
-        if (!file.isFile || file.length() < TFLITE_HEADER_SIZE || file.length() > MAX_IMPORT_SIZE_BYTES) {
-            return false
-        }
-        return hasTfliteHeader(file)
+    private fun hasOfficialModelShape(file: File): Boolean {
+        return file.isFile && file.length() == EXPECTED_MODEL_SIZE_BYTES && hasTfliteHeader(file)
     }
 
     private fun hasTfliteHeader(file: File): Boolean {

@@ -574,11 +574,6 @@ fun SettingsScreen(
     val isDepthModelInstalled = DepthModelManager.isInstalled(context)
     var showDepthModelDownloadDialog by remember { mutableStateOf(false) }
     var pendingDefaultVirtualAperture by remember { mutableStateOf<Float?>(null) }
-    val depthModelImportLauncher = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.OpenDocument()
-    ) { uri ->
-        uri?.let { DepthModelManager.importModel(context, it) }
-    }
 
     LaunchedEffect(depthModelState, pendingDefaultVirtualAperture) {
         val pendingAperture = pendingDefaultVirtualAperture
@@ -878,7 +873,6 @@ fun SettingsScreen(
             onSourceChange = { depthModelSource = it },
             state = depthModelState,
             onDownload = { DepthModelManager.download(context, depthModelSource) },
-            onImport = { depthModelImportLauncher.launch(arrayOf("*/*")) },
             onDismiss = {
                 showDepthModelDownloadDialog = false
                 pendingDefaultVirtualAperture = null

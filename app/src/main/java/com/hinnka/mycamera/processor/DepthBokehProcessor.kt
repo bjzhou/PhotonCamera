@@ -2,8 +2,8 @@ package com.hinnka.mycamera.processor
 
 import android.content.Context
 import android.graphics.Bitmap
-import android.graphics.BitmapFactory
 import com.hinnka.mycamera.gallery.GalleryManager
+import com.hinnka.mycamera.ml.DepthModelManager
 import com.hinnka.mycamera.ml.RelativeDepthMap
 import com.hinnka.mycamera.ml.RelativeDepthMapFile
 import com.hinnka.mycamera.ml.SharedDepthEstimator
@@ -49,32 +49,15 @@ class DepthBokehProcessor(context: Context) {
         }
 
         var depthMap: RelativeDepthMap? = null
-        var floatDepthFile: java.io.File? = null
-        if (photoId != null) {
-            floatDepthFile = GalleryManager.getFloatDepthFile(context, photoId)
-            if (floatDepthFile.exists()) {
-                depthMap = try {
-                    RelativeDepthMapFile.read(floatDepthFile)
-                } catch (error: Exception) {
-                    PLog.w(TAG, "Unable to read floating-point depth cache", error)
-                    null
-                }
-            }
-
-            // Existing photos may only have the former 8-bit PNG cache. Read it
-            // once and migrate it without changing its already-quantized values.
-            if (depthMap == null) {
-                val legacyDepthFile = GalleryManager.getDepthFile(context, photoId)
-                if (legacyDepthFile.exists()) {
-                    val legacyBitmap = BitmapFactory.decodeFile(legacyDepthFile.absolutePath)
-                    if (legacyBitmap != null) {
-                        try {
-                            depthMap = RelativeDepthMap.fromBitmap(legacyBitmap)
-                        } finally {
-                            legacyBitmap.recycle()
-                        }
-                    }
-                }
+        val floatDepthFile = photoId?.let { GalleryManager.getFloatDepthFile(context, it) }
+        if (floatDepthFile != null && floatDepthFile.exists()) {
+            depthMap = try {
+                RelativeDepthMapFile.read(floatDepthFile, DepthModelManager.OFFICIAL_MODEL_ID)
+            } catch (error: Exception) {
+                // Another depth model's or format's cache: replace it with this model's depth.
+                PLog.w(TAG, "Discarding depth cache: ${error.message}")
+                floatDepthFile.delete()
+                null
             }
         }
 
@@ -83,17 +66,10 @@ class DepthBokehProcessor(context: Context) {
 
             if (depthMap != null && floatDepthFile != null) {
                 try {
-                    RelativeDepthMapFile.write(floatDepthFile, depthMap)
+                    RelativeDepthMapFile.write(floatDepthFile, depthMap, DepthModelManager.OFFICIAL_MODEL_ID)
                 } catch (error: Exception) {
                     PLog.w(TAG, "Unable to write floating-point depth cache", error)
                 }
-            }
-        } else if (floatDepthFile != null && !floatDepthFile.exists()) {
-            // Persist a successfully migrated legacy cache as the new versioned format.
-            try {
-                RelativeDepthMapFile.write(floatDepthFile, depthMap)
-            } catch (error: Exception) {
-                PLog.w(TAG, "Unable to migrate floating-point depth cache", error)
             }
         }
 

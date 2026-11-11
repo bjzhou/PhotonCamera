@@ -916,7 +916,7 @@
     <string name="virtual_aperture">仮想絞り</string>
     <string name="settings_default_virtual_aperture">デフォルト仮想絞り</string>
     <string name="settings_default_virtual_aperture_description">新しい写真で、選択したF値の仮想絞りを自動有効化</string>
-    <string name="virtual_aperture_depth_model_description">インストール済みの対応深度モデルを使用します。初回使用時に既定モデルをダウンロードするか、別の対応TFLiteモデルを読み込んでください。</string>
+    <string name="virtual_aperture_depth_model_description">Depth Anything 3 深度モデルを使用します。初回使用時にダウンロードしてください。</string>
     <string name="gallery_large_aperture_blur_title">大口径ボケ</string>
     <string name="gallery_large_aperture_blur_description">大口径レンズの浅い被写界深度と背景ボケを再現します</string>
     <string name="gallery_bokeh_style_title">ボケ味</string>
@@ -929,15 +929,13 @@
     <string name="edit_panel_expand">編集コントロールを展開</string>
     <string name="edit_panel_minimize">編集コントロールを折りたたむ</string>
     <string name="depth_model_download_title">深度モデル</string>
-    <string name="depth_model_download_description">深度連動ボケには、RGB画像1入力・1ch深度出力の対応TFLite深度モデルが必要です。既定のDepth Anything 3モデル（約55MB）をダウンロードするか、別のTFLiteモデルまたはそれを含むZIPを読み込めます。モデルはアプリ内の非公開領域に保存されます。</string>
+    <string name="depth_model_download_description">深度連動ボケには Depth Anything 3 深度モデル（約55MB）が必要です。モデルはダウンロード・検証後、アプリ内の非公開領域に保存されます。</string>
     <string name="depth_model_download_action">ダウンロード</string>
-    <string name="depth_model_import_action">読み込み</string>
     <string name="depth_model_downloading">モデルをダウンロード中…</string>
     <string name="depth_model_downloading_progress">モデルをダウンロード中… %1$d%%</string>
-    <string name="depth_model_importing">モデルを読み込み・検証中…</string>
     <string name="depth_model_installing">モデルを検証・インストール中…</string>
-    <string name="depth_model_download_failed">モデルを読み込み、ダウンロード、または検証できませんでした。選択したファイルまたは接続を確認して、もう一度お試しください。</string>
-    <string name="depth_model_download_ready">対応深度モデルを利用できます。別のモデルを読み込んで置き換えることもできます。</string>
+    <string name="depth_model_download_failed">モデルをダウンロードまたは検証できませんでした。接続を確認して、もう一度お試しください。</string>
+    <string name="depth_model_download_ready">深度モデルを利用できます。</string>
     <string name="depth_model_retry">再試行</string>
     <string name="depth_model_done">完了</string>
     <string name="ai_denoise_title">AIディープノイズ除去</string>

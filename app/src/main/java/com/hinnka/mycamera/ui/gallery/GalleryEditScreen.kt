@@ -213,11 +213,6 @@ fun GalleryEditScreen(
     val isDepthModelInstalled = DepthModelManager.isInstalled(context)
     var showDepthModelDownloadDialog by remember { mutableStateOf(false) }
     var pendingVirtualAperture by remember { mutableStateOf<Float?>(null) }
-    val depthModelImportLauncher = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.OpenDocument()
-    ) { uri ->
-        uri?.let { DepthModelManager.importModel(context, it) }
-    }
     val colorFmModelState by remember(context.applicationContext) {
         ColorFmModelManager.observe(context)
     }.collectAsState()
@@ -2260,7 +2255,6 @@ fun GalleryEditScreen(
             onSourceChange = { depthModelSource = it },
             state = depthModelState,
             onDownload = { DepthModelManager.download(context, depthModelSource) },
-            onImport = { depthModelImportLauncher.launch(arrayOf("*/*")) },
             onDismiss = {
                 showDepthModelDownloadDialog = false
                 pendingVirtualAperture = null

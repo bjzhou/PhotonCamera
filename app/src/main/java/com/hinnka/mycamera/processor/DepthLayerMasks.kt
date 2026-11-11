@@ -6,6 +6,7 @@ import kotlin.math.ceil
 import kotlin.math.exp
 import kotlin.math.max
 import kotlin.math.roundToInt
+import java.util.concurrent.CompletableFuture
 
 /**
  * CPU-side masks of the layered depth (docs/lrmobile-lens-blur-evidence.md §9).
@@ -47,20 +48,23 @@ internal object DepthLayerMasks {
         val scaleY = lensTexel / texelY
         val edges = CropEdges(region.left > 0f, region.right < 1f, region.top > 0f, region.bottom < 1f)
 
-        val subject = FloatArray(width * height) { if (mask.values[it] > SUBJECT_THRESHOLD) 1f else 0f }
-        val background = FloatArray(width * height) { 1f - subject[it] }
-
-        val subjectInterior = morph(subject, width, height, scaleX, scaleY, SUBJECT_ERODE, false, edges, 0f)
+        // The two layers are independent; the background chain runs on a pool worker.
+        val backgroundInterior = CompletableFuture.supplyAsync {
+            val background = ByteArray(width * height) { if (mask.values[it] > SUBJECT_THRESHOLD) 0 else 1 }
+            morph(background, width, height, scaleX, scaleY, BACKGROUND_ERODE, false, edges, 1)
+                .let { morph(it, width, height, scaleX, scaleY, BACKGROUND_DILATE, true, edges, 1) }
+                .let { morph(it, width, height, scaleX, scaleY, BACKGROUND_ERODE, false, edges, 1) }
+                .let { blur(it, width, height, scaleX, scaleY, edges, 1f) }
+        }
+        val subject = ByteArray(width * height) { if (mask.values[it] > SUBJECT_THRESHOLD) 1 else 0 }
+        val subjectValues = morph(subject, width, height, scaleX, scaleY, SUBJECT_ERODE, false, edges, 0)
             .let { blur(it, width, height, scaleX, scaleY, edges, 0f) }
-        val backgroundInterior = morph(background, width, height, scaleX, scaleY, BACKGROUND_ERODE, false, edges, 1f)
-            .let { morph(it, width, height, scaleX, scaleY, BACKGROUND_DILATE, true, edges, 1f) }
-            .let { morph(it, width, height, scaleX, scaleY, BACKGROUND_ERODE, false, edges, 1f) }
-            .let { blur(it, width, height, scaleX, scaleY, edges, 1f) }
+        val backgroundValues = backgroundInterior.join()
 
         return FloatArray(width * height * 2).also { out ->
             for (index in 0 until width * height) {
-                out[2 * index] = subjectInterior[index]
-                out[2 * index + 1] = backgroundInterior[index]
+                out[2 * index] = subjectValues[index]
+                out[2 * index + 1] = backgroundValues[index]
             }
         }
     }
@@ -151,9 +155,14 @@ internal object DepthLayerMasks {
 
     private class CropEdges(val left: Boolean, val right: Boolean, val top: Boolean, val bottom: Boolean)
 
-    /** Square erosion / dilation by [iterations] Lens Blur texels (3x3 iterated), separable. */
+    /**
+     * Square erosion / dilation by [iterations] Lens Blur texels (3x3 iterated), separable,
+     * of a binary (0 / 1) mask. Each pass slides a count of set samples over the window:
+     * erosion keeps a sample whose whole window is set, dilation one whose window holds any,
+     * so the cost per sample does not depend on the radius.
+     */
     private fun morph(
-        source: FloatArray,
+        source: ByteArray,
         width: Int,
         height: Int,
         scaleX: Float,
@@ -161,40 +170,57 @@ internal object DepthLayerMasks {
         iterations: Int,
         dilate: Boolean,
         edges: CropEdges,
-        outside: Float,
-    ): FloatArray {
+        outside: Byte,
+    ): ByteArray {
         val radiusX = (iterations * scaleX).roundToInt()
         val radiusY = (iterations * scaleY).roundToInt()
-        val horizontal = FloatArray(width * height)
-        val row = FloatArray(width + 2 * radiusX)
+        val windowX = 2 * radiusX + 1
+        val windowY = 2 * radiusY + 1
+        val horizontal = ByteArray(width * height)
         for (y in 0 until height) {
-            padRow(source, width, y, radiusX, edges, outside, row)
+            val rowBase = y * width
+            fun sample(x: Int): Int {
+                if ((x < 0 && edges.left) || (x >= width && edges.right)) return outside.toInt()
+                return source[rowBase + x.coerceIn(0, width - 1)].toInt()
+            }
+            var count = 0
+            for (x in -radiusX..radiusX) count += sample(x)
             for (x in 0 until width) {
-                var value = row[x + radiusX]
-                for (i in x..x + 2 * radiusX) {
-                    value = if (dilate) max(value, row[i]) else minOf(value, row[i])
-                }
-                horizontal[y * width + x] = value
+                horizontal[rowBase + x] = morphValue(count, windowX, dilate)
+                count += sample(x + radiusX + 1) - sample(x - radiusX)
             }
         }
-        val result = FloatArray(width * height)
-        val column = FloatArray(height + 2 * radiusY)
-        for (x in 0 until width) {
-            padColumn(horizontal, width, height, x, radiusY, edges, outside, column)
-            for (y in 0 until height) {
-                var value = column[y + radiusY]
-                for (i in y..y + 2 * radiusY) {
-                    value = if (dilate) max(value, column[i]) else minOf(value, column[i])
-                }
-                result[y * width + x] = value
+
+        // Vertical counts per column, slid row by row so every access stays row-major.
+        val outsideCount = outside.toInt()
+        val counts = IntArray(width)
+        fun accumulate(row: Int, sign: Int) {
+            if ((row < 0 && edges.top) || (row >= height && edges.bottom)) {
+                if (outsideCount != 0) for (x in 0 until width) counts[x] += sign * outsideCount
+                return
+            }
+            val base = row.coerceIn(0, height - 1) * width
+            for (x in 0 until width) counts[x] += sign * horizontal[base + x]
+        }
+        for (row in -radiusY..radiusY) accumulate(row, 1)
+        val result = ByteArray(width * height)
+        for (y in 0 until height) {
+            val rowBase = y * width
+            for (x in 0 until width) result[rowBase + x] = morphValue(counts[x], windowY, dilate)
+            if (y + 1 < height) {
+                accumulate(y + radiusY + 1, 1)
+                accumulate(y - radiusY, -1)
             }
         }
         return result
     }
 
-    /** `cv::GaussianBlur(11x11, sigma 4)` of the Lens Blur grid, separable. */
+    private fun morphValue(setCount: Int, window: Int, dilate: Boolean): Byte =
+        if (dilate) { if (setCount > 0) 1 else 0 } else { if (setCount == window) 1 else 0 }
+
+    /** Separable Gaussian of a binary mask; the vertical pass walks rows to stay row-major. */
     private fun blur(
-        source: FloatArray,
+        source: ByteArray,
         width: Int,
         height: Int,
         scaleX: Float,
@@ -216,7 +242,14 @@ internal object DepthLayerMasks {
         val horizontal = FloatArray(width * height)
         val row = FloatArray(width + 2 * halfX)
         for (y in 0 until height) {
-            padRow(source, width, y, halfX, edges, outside, row)
+            for (i in row.indices) {
+                val x = i - halfX
+                row[i] = if ((x < 0 && edges.left) || (x >= width && edges.right)) {
+                    outside
+                } else {
+                    source[y * width + x.coerceIn(0, width - 1)].toFloat()
+                }
+            }
             for (x in 0 until width) {
                 var sum = 0f
                 for (i in kernelX.indices) sum += kernelX[i] * row[x + i]
@@ -224,62 +257,23 @@ internal object DepthLayerMasks {
             }
         }
         val result = FloatArray(width * height)
-        val column = FloatArray(height + 2 * halfY)
-        for (x in 0 until width) {
-            padColumn(horizontal, width, height, x, halfY, edges, outside, column)
-            for (y in 0 until height) {
-                var sum = 0f
-                for (i in kernelY.indices) sum += kernelY[i] * column[y + i]
-                result[y * width + x] = sum.coerceIn(0f, 1f)
+        val sum = FloatArray(width)
+        for (y in 0 until height) {
+            sum.fill(0f)
+            for (i in kernelY.indices) {
+                val sourceRow = y + i - halfY
+                val weight = kernelY[i]
+                if ((sourceRow < 0 && edges.top) || (sourceRow >= height && edges.bottom)) {
+                    val value = weight * outside
+                    for (x in 0 until width) sum[x] += value
+                } else {
+                    val base = sourceRow.coerceIn(0, height - 1) * width
+                    for (x in 0 until width) sum[x] += weight * horizontal[base + x]
+                }
             }
+            val rowBase = y * width
+            for (x in 0 until width) result[rowBase + x] = sum[x].coerceIn(0f, 1f)
         }
         return result
-    }
-
-    /** Row [y] with [radius] edge-handled samples on each side: `padded[radius + x]` is pixel x. */
-    private fun padRow(
-        values: FloatArray,
-        width: Int,
-        y: Int,
-        radius: Int,
-        edges: CropEdges,
-        outside: Float,
-        padded: FloatArray,
-    ) {
-        for (i in 0 until width + 2 * radius) padded[i] = sampleRow(values, width, y, i - radius, edges, outside)
-    }
-
-    /** Column [x] with [radius] edge-handled samples on each side: `padded[radius + y]` is pixel y. */
-    private fun padColumn(
-        values: FloatArray,
-        width: Int,
-        height: Int,
-        x: Int,
-        radius: Int,
-        edges: CropEdges,
-        outside: Float,
-        padded: FloatArray,
-    ) {
-        for (i in 0 until height + 2 * radius) {
-            padded[i] = sampleColumn(values, width, height, x, i - radius, edges, outside)
-        }
-    }
-
-    private fun sampleRow(values: FloatArray, width: Int, y: Int, x: Int, edges: CropEdges, outside: Float): Float {
-        if ((x < 0 && edges.left) || (x >= width && edges.right)) return outside
-        return values[y * width + x.coerceIn(0, width - 1)]
-    }
-
-    private fun sampleColumn(
-        values: FloatArray,
-        width: Int,
-        height: Int,
-        x: Int,
-        y: Int,
-        edges: CropEdges,
-        outside: Float,
-    ): Float {
-        if ((y < 0 && edges.top) || (y >= height && edges.bottom)) return outside
-        return values[y.coerceIn(0, height - 1) * width + x]
     }
 }

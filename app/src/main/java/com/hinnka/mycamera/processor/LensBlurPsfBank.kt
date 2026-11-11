@@ -431,22 +431,26 @@ internal class LensBlurLayout(
         ).toFloat()
         maxRadius = maxRadiusFull * radiusScale
 
+        // Splat domains in working pixels: level l scatters radii up to
+        // SPLAT_DOMAIN_RADIUS * 2^l at 2^-l resolution, so the radius in domain
+        // pixels, and with it the scatter cost per source, stays bounded
+        // independently of the photo's resolution. The last level is open.
         data class Descriptor(val level: Int, val minRadius: Float, val maxRadius: Float)
-        val descriptors = if (originalLongEdge >= 2017) {
-            val t = ((4032f - originalLongEdge) / 2016f).coerceIn(0f, 1f)
-            val split = t * (maxRadiusFull - 8f) + 8f
-            listOf(Descriptor(0, 0f, split), Descriptor(1, split - 2f, -1f))
-        } else {
-            listOf(Descriptor(0, 0f, -1f))
+        val descriptors = List(SPLAT_LEVELS) { level ->
+            Descriptor(
+                level = level,
+                minRadius = if (level == 0) 0f else SPLAT_DOMAIN_RADIUS * (1 shl (level - 1)) - SPLAT_DOMAIN_OVERLAP,
+                maxRadius = if (level == SPLAT_LEVELS - 1) -1f else SPLAT_DOMAIN_RADIUS * (1 shl level),
+            )
         }
-        val effective = min(params.blurAmount * maxRadiusFull + 1f, maxRadiusFull)
+        val effective = min(params.blurAmount * maxRadiusFull + 1f, maxRadiusFull) * radiusScale
         val active = descriptors.filter { effective >= it.minRadius }.map { descriptor ->
             val clamped = if (descriptor.maxRadius == -1f || effective < descriptor.maxRadius) {
                 effective
             } else {
                 descriptor.maxRadius
             }
-            Descriptor(descriptor.level, descriptor.minRadius * radiusScale, clamped * radiusScale)
+            Descriptor(descriptor.level, descriptor.minRadius, clamped)
         }
         var spread = active.first().maxRadius
         for (descriptor in active.drop(1)) {
@@ -470,6 +474,14 @@ internal class LensBlurLayout(
             LensBlurTent(2f * s, 4f * s, 24f * s, 30f * s),
             LensBlurTent(18f * s, 24f * s, 300f, 300f),
         )
+    }
+
+    private companion object {
+        /** Largest scatter radius of a bounded splat domain, in that domain's pixels. */
+        const val SPLAT_DOMAIN_RADIUS = 16f
+        /** Working-pixel radius range over which adjacent domains cross-fade. */
+        const val SPLAT_DOMAIN_OVERLAP = 2f
+        const val SPLAT_LEVELS = 3
     }
 
     /** `Process_32` band selection: bands whose radius range holds at least one source. */

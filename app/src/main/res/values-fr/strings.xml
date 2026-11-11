@@ -1257,7 +1257,7 @@
     <string name="virtual_aperture_viewfinder_hint">f/%1$s</string>
     <string name="settings_default_virtual_aperture">Ouverture virtuelle par défaut</string>
     <string name="settings_default_virtual_aperture_description">Active automatiquement l\'ouverture virtuelle avec la valeur d\'ouverture choisie pour les nouvelles photos.</string>
-    <string name="virtual_aperture_depth_model_description">Utilise le modèle de profondeur compatible installé. Téléchargez le modèle par défaut ou importez un autre modèle TFLite compatible lors de la première utilisation.</string>
+    <string name="virtual_aperture_depth_model_description">Utilise le modèle de profondeur Depth Anything 3. Téléchargez-le lors de la première utilisation.</string>
     <string name="gallery_large_aperture_blur_title">Flou à grande ouverture</string>
     <string name="gallery_large_aperture_blur_description">Simule la faible profondeur de champ et le flou d\'arrière-plan d\'une grande ouverture</string>
     <string name="gallery_bokeh_style_title">Style de bokeh</string>
@@ -1268,15 +1268,13 @@
     <string name="edit_panel_expand">Développer les commandes de retouche</string>
     <string name="edit_panel_minimize">Réduire les commandes de retouche</string>
     <string name="depth_model_download_title">Modèle de profondeur</string>
-    <string name="depth_model_download_description">Le flou tenant compte de la profondeur nécessite un modèle de profondeur TFLite compatible, avec une entrée image RGB et une sortie de profondeur à un seul canal. Téléchargez le modèle Depth Anything 3 par défaut (environ 55 Mo), ou importez un autre modèle TFLite ou un ZIP en contenant un. Le modèle sera stocké en privé par l\'application.</string>
+    <string name="depth_model_download_description">Le flou tenant compte de la profondeur nécessite le modèle de profondeur Depth Anything 3 (environ 55 Mo). Il sera téléchargé, vérifié et stocké en privé par l\'application.</string>
     <string name="depth_model_download_action">Télécharger</string>
-    <string name="depth_model_import_action">Importer</string>
     <string name="depth_model_downloading">Téléchargement du modèle…</string>
     <string name="depth_model_downloading_progress">Téléchargement du modèle… %1$d %%</string>
-    <string name="depth_model_importing">Importation et vérification du modèle…</string>
     <string name="depth_model_installing">Vérification et installation du modèle…</string>
-    <string name="depth_model_download_failed">Le modèle n\'a pas pu être importé, téléchargé ou vérifié. Vérifiez le fichier sélectionné ou votre connexion, puis réessayez.</string>
-    <string name="depth_model_download_ready">Un modèle de profondeur compatible est prêt. Vous pouvez en importer un autre pour le remplacer.</string>
+    <string name="depth_model_download_failed">Le modèle n\'a pas pu être téléchargé ou vérifié. Vérifiez votre connexion, puis réessayez.</string>
+    <string name="depth_model_download_ready">Le modèle de profondeur est prêt.</string>
     <string name="depth_model_retry">Réessayer</string>
     <string name="depth_model_done">Terminé</string>
     <string name="ai_denoise_title">Réduction du bruit profonde par IA</string>
