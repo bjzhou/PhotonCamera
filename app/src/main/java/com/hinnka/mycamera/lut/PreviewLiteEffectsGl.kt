@@ -29,6 +29,7 @@ internal class PreviewLiteEffectsGl(private val tag: String) {
         sourceTextureId: Int,
         sourceWidth: Int,
         sourceHeight: Int,
+        limitedRange: Boolean,
         drawQuad: (Int) -> Unit,
     ): Int {
         val program = ensureProgram(sourceTarget)
@@ -42,6 +43,7 @@ internal class PreviewLiteEffectsGl(private val tag: String) {
         GLES30.glActiveTexture(GLES30.GL_TEXTURE0)
         GLES30.glBindTexture(sourceTarget, sourceTextureId)
         GLES30.glUniform1i(GLES30.glGetUniformLocation(program, "uSource"), 0)
+        GLES30.glUniform1i(GLES30.glGetUniformLocation(program, "uPreviewLimitedRange"), if (limitedRange) 1 else 0)
         GLES30.glUniform2f(
             GLES30.glGetUniformLocation(program, "uSourceTexel"),
             1f / max(1, sourceWidth),
@@ -140,13 +142,14 @@ internal class PreviewLiteEffectsGl(private val tag: String) {
             out vec4 fragColor;
             uniform ${if (oes) "samplerExternalOES" else "sampler2D"} uSource;
             uniform vec2 uSourceTexel;
+            ${PreviewSignalRange.GLSL}
             void main() {
                 vec2 d = uSourceTexel;
                 vec3 color = texture(uSource, vTexCoord + vec2(-d.x, -d.y)).rgb;
                 color += texture(uSource, vTexCoord + vec2(d.x, -d.y)).rgb;
                 color += texture(uSource, vTexCoord + vec2(-d.x, d.y)).rgb;
                 color += texture(uSource, vTexCoord + vec2(d.x, d.y)).rgb;
-                color = clamp(color * 0.25, 0.0, 1.0);
+                color = expandPreviewRange(clamp(color * 0.25, 0.0, 1.0));
                 float y = dot(color, vec3(0.299, 0.587, 0.114));
                 fragColor = vec4(color, clamp((y - $BLOOM_THRESHOLD) / (1.0 - $BLOOM_THRESHOLD), 0.0, 1.0));
             }

@@ -219,6 +219,13 @@ class CameraGLSurfaceView @JvmOverloads constructor(
         renderer.nightVisionEnabled = enabled
     }
 
+    /** Expands a limited-range preview stream to full range. */
+    fun setPreviewLimitedRange(enabled: Boolean) {
+        if (renderer.previewLimitedRange == enabled) return
+        renderer.previewLimitedRange = enabled
+        requestRender()
+    }
+
     /**
      * 设置 LUT
      * 

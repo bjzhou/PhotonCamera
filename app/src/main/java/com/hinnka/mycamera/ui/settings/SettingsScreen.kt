@@ -330,6 +330,7 @@ fun SettingsScreen(
     val userPreferences by viewModel.userPreferences.collectAsState()
     var showLevelIndicator by rememberPreference(UserPreferences::showLevelIndicator)
     var focusPeakingEnabled by rememberPreference(UserPreferences::focusPeakingEnabled)
+    var previewLimitedRange by rememberPreference(UserPreferences::previewLimitedRange)
     val eyeFocusEnabled by preferenceValue { it.eyeFocusEnabled }
     var showGrid by rememberPreference(UserPreferences::showGrid)
     var shutterSoundEnabled by rememberPreference(UserPreferences::shutterSoundEnabled)
@@ -1151,6 +1152,18 @@ fun SettingsScreen(
                             description = stringResource(R.string.settings_focus_peaking_description),
                             checked = focusPeakingEnabled,
                             onCheckedChange = { focusPeakingEnabled = it }
+                        )
+
+                        HorizontalDivider(
+                            color = Color.White.copy(alpha = 0.1f),
+                            modifier = Modifier.padding(vertical = 8.dp)
+                        )
+
+                        SwitchSettingItem(
+                            title = stringResource(R.string.settings_preview_limited_range),
+                            description = stringResource(R.string.settings_preview_limited_range_description),
+                            checked = previewLimitedRange,
+                            onCheckedChange = { previewLimitedRange = it }
                         )
 
                         HorizontalDivider(

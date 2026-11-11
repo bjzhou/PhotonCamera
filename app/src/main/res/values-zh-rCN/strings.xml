@@ -1492,4 +1492,6 @@
     <string name="aesthetic_show_in_gallery">在相册列表显示评分</string>
     <string name="aesthetic_show_in_gallery_description">浏览时在后台为照片评分。</string>
     <string name="aesthetic_note">评分来自端侧 CLIP 美学模型（LAION Aesthetic Predictor），基于大规模人类审美打分训练，反映大众视觉偏好而非创作意图，仅供参考。</string>
+    <string name="settings_preview_limited_range">修正预览发灰</string>
+    <string name="settings_preview_limited_range_description">预览偏灰、对比度低而成片正常时开启。部分设备的预览信号为有限范围。</string>
 </resources>

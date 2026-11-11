@@ -256,6 +256,7 @@ fun CameraScreen(
     val latestPhoto by galleryViewModel.latestPhoto.collectAsState()
     val showLevelIndicator by preferenceValue { it.showLevelIndicator }
     val focusPeakingEnabled by preferenceValue { it.focusPeakingEnabled }
+    val previewLimitedRange by preferenceValue { it.previewLimitedRange }
     val eyeFocusEnabled by preferenceValue { it.eyeFocusEnabled }
     val keepScreenOn by preferenceValue { it.keepScreenOn }
     val currentLutId by viewModel.currentLutId.collectAsState()
@@ -1351,6 +1352,7 @@ fun CameraScreen(
                             livePhotoRecorder = viewModel.livePhotoRecorder,
                             videoLogProfile = state.videoConfig.logProfile,
                             nightVisionEnabled = state.isNightVisionActive,
+                            previewLimitedRange = previewLimitedRange,
                             isEyeFocusBusy = viewModel.isEyeFocusBusy,
                             isAutoFocus = state.isAutoFocus,
                             focusPeakingEnabled = focusPeakingEnabled && !state.isHyperfocalFocusEnabled,

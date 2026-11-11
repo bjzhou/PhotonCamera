@@ -253,6 +253,10 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
 
     // 相机 SurfaceTexture
     private var surfaceTexture: SurfaceTexture? = null
+
+    /** Expands a limited-range preview stream to full range ([PreviewSignalRange]). */
+    @Volatile
+    var previewLimitedRange: Boolean = false
     private val frameAvailable = AtomicBoolean(false)
     private var stabilizationCoordinator: RealtimeStabilizationCoordinator? = null
     @Volatile
@@ -865,6 +869,7 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
         enableVideoLog: Boolean,
         toneBaseOnly: Boolean = false,
         nightVisionTone: Boolean = false,
+        expandRange: Boolean = false,
     ) {
         val shadowsHighlightsActive =
             ShadowsHighlightsShader.isActive(params.highlights, params.shadows)
@@ -891,6 +896,7 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
                 enableVideoLog = enableVideoLog,
                 toneBaseOnly = true,
                 nightVisionTone = nightVisionTone,
+                expandRange = expandRange,
             )
             toneBase.buildLevels(::drawSimpleQuad)
         }
@@ -901,6 +907,7 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
                 sourceTextureId = sourceTextureId,
                 sourceWidth = if (oesSource) previewWidth else width,
                 sourceHeight = if (oesSource) previewHeight else height,
+                limitedRange = expandRange,
                 drawQuad = ::drawSimpleQuad,
             )
         } else {
@@ -913,6 +920,7 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
         }
         GLES30.glUseProgram(locations.programId)
         GLES30.glUniform1i(locations.uToneBaseOnlyLocation, if (toneBaseOnly) 1 else 0)
+        GLES30.glUniform1i(locations.uPreviewLimitedRangeLocation, if (expandRange) 1 else 0)
         if (locations.previewBlur) {
             GLES30.glActiveTexture(GLES30.GL_TEXTURE0 + PreviewLiteEffectsGl.TEXTURE_UNIT)
             GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, previewBlurTextureId)
@@ -1521,6 +1529,7 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
         suppressNightVisionTone: Boolean = false,
     ) {
         val plan = if (suppressCameraEngine) null else enginePreviewPlan
+        val expandRange = previewLimitedRange
         val nightVisionTone = !suppressNightVisionTone && nightVisionEnabled && nightToneActive &&
             nightToneTextureId != 0
         if (plan != null && !enginePreview.prepare(plan)) return
@@ -1588,6 +1597,7 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
             curveEnabled = layerCurveEnabled,
             enableVideoLog = enableVideoLog,
             nightVisionTone = nightVisionTone,
+            expandRange = expandRange,
         )
 
         // 测光和直方图（按需）

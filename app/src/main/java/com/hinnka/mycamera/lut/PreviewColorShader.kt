@@ -96,6 +96,7 @@ internal object PreviewColorShader {
             ${PreviewColorShaderModules.SANITIZE}
             ${BasicToneLutShader.GLSL}
 
+            ${PreviewSignalRange.GLSL}
             ${if (variant.includeNightVisionTone) NightVisionToneGl.GLSL else ""}
 
             float getLuma(vec3 color) {
@@ -120,6 +121,7 @@ internal object PreviewColorShader {
             ${if (variant.includeEnginePreview) RawEnginePreviewGl.SAMPLING_GLSL else ""}
             vec4 samplePreviewSource(vec2 uv) {
                 vec4 sampled = texture(uCameraTexture, uv);
+                sampled.rgb = expandPreviewRange(sampled.rgb);
                 ${if (variant.includeEnginePreview) "sampled.rgb = sampleEnginePreview(sampled.rgb);" else ""}
                 return sampled;
             }

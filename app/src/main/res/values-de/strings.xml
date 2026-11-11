@@ -487,4 +487,6 @@
     <string name="fotufilm_value_years">%1$s J.</string>
     <!-- /Fotufilm controls -->
     <string name="save_as_preset">Als Preset speichern</string>
+    <string name="settings_preview_limited_range">Blasse Vorschau korrigieren</string>
+    <string name="settings_preview_limited_range_description">Einschalten, wenn die Vorschau grau und kontrastarm wirkt, die Fotos aber normal sind. Manche Geräte liefern ein Vorschausignal mit begrenztem Bereich.</string>
 </resources>

@@ -76,6 +76,7 @@ fun CameraPreviewGL(
     livePhotoRecorder: LivePhotoRecorder? = null,
     videoLogProfile: VideoLogProfile = VideoLogProfile.OFF,
     nightVisionEnabled: Boolean = false,
+    previewLimitedRange: Boolean = false,
     isEyeFocusBusy: Boolean = false,
     onGLSurfaceViewReady: ((CameraGLSurfaceView) -> Unit)? = null,
     isAutoFocus: Boolean = true,
@@ -330,6 +331,7 @@ fun CameraPreviewGL(
                         glSurfaceView.setLivePhotoRecorder(livePhotoRecorder)
                         glSurfaceView.setVideoLogProfile(videoLogProfile)
                         glSurfaceView.setNightVisionEnabled(nightVisionEnabled)
+                        glSurfaceView.setPreviewLimitedRange(previewLimitedRange)
                         glSurfaceView.setAutoFocus(isAutoFocus)
                         glSurfaceView.setFocusPeakingEnabled(focusPeakingEnabled)
                         glSurfaceView.setEyeFocusBusy(isEyeFocusBusy)
