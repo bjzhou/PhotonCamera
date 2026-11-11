@@ -210,6 +210,64 @@ internal object RawHotPixelShaders {
 
     """.trimIndent()
 
+    /**
+     * Second-stage classification against the first-pass isolated-impulse mask. Requires
+     * `uHotPixelMask` as a readonly rgba8ui image packed four sensor pixels per texel.
+     */
+    private val MASK_RESOLUTION = """
+        const int RESOLVE_CLEAN_NEIGHBORHOOD = 0;
+        const int RESOLVE_NOT_HOT = 1;
+        const int RESOLVE_HOT = 2;
+
+        bool maskedAt(ivec2 coord) {
+            ivec2 safe = safeCoord(coord);
+            uvec4 packedMask = imageLoad(
+                uHotPixelMask,
+                ivec2(safe.x / 4, safe.y)
+            );
+            return packedMask[safe.x & 3] != 0u;
+        }
+
+        // RESOLVE_CLEAN_NEIGHBORHOOD leaves the out arrays unwritten: no impulse is near, so the
+        // pixel is ordinary and its RAW neighborhood is neither read nor sorted.
+        int resolveHotPixel(
+            ivec2 coord,
+            float blackLevel,
+            float sensorRange,
+            float center,
+            out float neighbors[NEIGHBOR_COUNT],
+            out bool maskedNeighbors[NEIGHBOR_COUNT]
+        ) {
+            bool hot = maskedAt(coord);
+            int maskedNeighborCount = 0;
+            for (int i = 0; i < NEIGHBOR_COUNT; ++i) {
+                bool neighborMasked = maskedAt(coord + SAME_CFA_OFFSETS[i]);
+                maskedNeighbors[i] = neighborMasked;
+                if (neighborMasked) {
+                    maskedNeighborCount += 1;
+                }
+            }
+            if (!hot && maskedNeighborCount == 0) {
+                return RESOLVE_CLEAN_NEIGHBORHOOD;
+            }
+
+            collectNeighborSignals(coord, blackLevel, sensorRange, neighbors);
+            float baseMedian = median12(neighbors);
+            for (int i = 0; i < NEIGHBOR_COUNT; ++i) {
+                if (maskedNeighbors[i]) {
+                    neighbors[i] = baseMedian;
+                }
+            }
+
+            // This is the Phocus hotPixelPlus role: once an isolated impulse is known, remove it
+            // from the statistics and test the remaining members of a small same-CFA cluster.
+            if (!hot) {
+                hot = isHotFromNeighbors(center, neighbors, sensorRange, colorAt(coord));
+            }
+            return hot ? RESOLVE_HOT : RESOLVE_NOT_HOT;
+        }
+    """.trimIndent()
+
     val DETECT = """
         #version 310 es
         precision highp float;
@@ -259,14 +317,7 @@ internal object RawHotPixelShaders {
 
         $COMMON
 
-        bool maskedAt(ivec2 coord) {
-            ivec2 safe = safeCoord(coord);
-            uvec4 packedMask = imageLoad(
-                uHotPixelMask,
-                ivec2(safe.x / 4, safe.y)
-            );
-            return packedMask[safe.x & 3] != 0u;
-        }
+        $MASK_RESOLUTION
 
         uint repairAt(ivec2 coord) {
             uint original = rawAt(coord);
@@ -274,43 +325,17 @@ internal object RawHotPixelShaders {
             float blackLevel = uBlackLevel[blackChannel];
             float sensorRange = max(uWhiteLevel - blackLevel, 1.0);
             float center = clamp(float(original) - blackLevel, 0.0, sensorRange);
-            bool repairCenter = maskedAt(coord);
-            int maskedNeighborCount = 0;
-            bool maskedNeighbors[NEIGHBOR_COUNT];
-            for (int i = 0; i < NEIGHBOR_COUNT; ++i) {
-                bool neighborMasked = maskedAt(coord + SAME_CFA_OFFSETS[i]);
-                maskedNeighbors[i] = neighborMasked;
-                if (neighborMasked) {
-                    maskedNeighborCount += 1;
-                }
-            }
-
-            // The mask is sparse, so ordinary pixels avoid RAW neighborhood reads and sorting.
-            if (!repairCenter && maskedNeighborCount == 0) {
-                return original;
-            }
-
             float neighbors[NEIGHBOR_COUNT];
-            collectNeighborSignals(coord, blackLevel, sensorRange, neighbors);
-            float baseMedian = median12(neighbors);
-            for (int i = 0; i < NEIGHBOR_COUNT; ++i) {
-                if (maskedNeighbors[i]) {
-                    neighbors[i] = baseMedian;
-                }
-            }
-
-            // This is the Phocus hotPixelPlus role: once an isolated impulse is known, remove it
-            // from the statistics and test the remaining members of a small same-CFA cluster.
-            if (!repairCenter && maskedNeighborCount > 0) {
-                repairCenter = isHotFromNeighbors(
-                    center,
-                    neighbors,
-                    sensorRange,
-                    colorAt(coord)
-                );
-            }
-
-            if (!repairCenter) {
+            bool maskedNeighbors[NEIGHBOR_COUNT];
+            int resolution = resolveHotPixel(
+                coord,
+                blackLevel,
+                sensorRange,
+                center,
+                neighbors,
+                maskedNeighbors
+            );
+            if (resolution != RESOLVE_HOT) {
                 return original;
             }
 
@@ -341,6 +366,138 @@ internal object RawHotPixelShaders {
                 }
             }
             imageStore(uRepairedRawTexture, packedCoord, repaired);
+        }
+    """.trimIndent()
+
+    /**
+     * Folds second-stage cluster members into the isolated-impulse mask, producing the final
+     * sensor-coordinate defect mask that a burst applies to every frame.
+     */
+    val RESOLVE = """
+        #version 310 es
+        precision highp float;
+        precision highp int;
+        precision highp uimage2D;
+
+        layout(local_size_x = 8, local_size_y = 8) in;
+
+        uniform highp usampler2D uRawTexture;
+        layout(rgba8ui, binding = 0) readonly uniform highp uimage2D uHotPixelMask;
+        layout(rgba8ui, binding = 1) writeonly uniform highp uimage2D uResolvedHotPixelMask;
+
+        $COMMON
+
+        $MASK_RESOLUTION
+
+        void main() {
+            ivec2 packedCoord = ivec2(gl_GlobalInvocationID.xy);
+            int packedWidth = (uImageSize.x + 3) / 4;
+            if (packedCoord.x >= packedWidth || packedCoord.y >= uImageSize.y) return;
+
+            uvec4 mask = uvec4(0u);
+            for (int lane = 0; lane < 4; ++lane) {
+                ivec2 coord = ivec2(packedCoord.x * 4 + lane, packedCoord.y);
+                if (coord.x >= uImageSize.x) continue;
+                int blackChannel = blackChannelAt(coord);
+                float blackLevel = uBlackLevel[blackChannel];
+                float sensorRange = max(uWhiteLevel - blackLevel, 1.0);
+                float center = signalAt(coord, blackLevel, sensorRange);
+                float neighbors[NEIGHBOR_COUNT];
+                bool maskedNeighbors[NEIGHBOR_COUNT];
+                int resolution = resolveHotPixel(
+                    coord,
+                    blackLevel,
+                    sensorRange,
+                    center,
+                    neighbors,
+                    maskedNeighbors
+                );
+                mask[lane] = resolution == RESOLVE_HOT ? 255u : 0u;
+            }
+            imageStore(uResolvedHotPixelMask, packedCoord, mask);
+        }
+    """.trimIndent()
+
+    /**
+     * Applies a resolved sensor-coordinate defect mask to one RAW frame (MGC SuppressHotPixels).
+     * Masked samples take the median of their unmasked same-CFA cardinal neighbors, falling back
+     * to the outer same-CFA ring when all four cardinals are defective. The pass is integer-only:
+     * the replacement is a same-channel median of codes, independent of black level and gain, and
+     * no 16-bit sampler value is converted to float.
+     */
+    val SUPPRESS = """
+        #version 300 es
+        precision highp float;
+        precision highp int;
+        precision highp usampler2D;
+
+        uniform highp usampler2D uRaw;
+        uniform highp usampler2D uHotPixelMask;
+        uniform ivec2 uImageSize;
+        layout(location = 0) out highp uint oRaw;
+
+        const int NEIGHBOR_COUNT = 12;
+        const int CARDINAL_COUNT = 4;
+        const ivec2 SAME_CFA_OFFSETS[NEIGHBOR_COUNT] = ivec2[NEIGHBOR_COUNT](
+            ivec2(-2,  0), ivec2( 2,  0),
+            ivec2( 0, -2), ivec2( 0,  2),
+            ivec2(-2, -2), ivec2( 2, -2),
+            ivec2(-2,  2), ivec2( 2,  2),
+            ivec2(-4,  0), ivec2( 4,  0),
+            ivec2( 0, -4), ivec2( 0,  4)
+        );
+
+        bool inside(ivec2 coord) {
+            return all(greaterThanEqual(coord, ivec2(0))) && all(lessThan(coord, uImageSize));
+        }
+
+        bool maskedAt(ivec2 coord) {
+            uvec4 packedMask = texelFetch(uHotPixelMask, ivec2(coord.x >> 2, coord.y), 0);
+            return packedMask[coord.x & 3] != 0u;
+        }
+
+        uint medianOf(inout uint values[NEIGHBOR_COUNT], int count) {
+            for (int i = 1; i < count; ++i) {
+                uint value = values[i];
+                int j = i - 1;
+                while (j >= 0 && values[j] > value) {
+                    values[j + 1] = values[j];
+                    j -= 1;
+                }
+                values[j + 1] = value;
+            }
+            int middle = count / 2;
+            if ((count & 1) != 0) return values[middle];
+            return (values[middle - 1] + values[middle] + 1u) >> 1;
+        }
+
+        void main() {
+            ivec2 coord = ivec2(gl_FragCoord.xy);
+            uint original = texelFetch(uRaw, coord, 0).r;
+            if (!maskedAt(coord)) {
+                oRaw = original;
+                return;
+            }
+
+            uint values[NEIGHBOR_COUNT];
+            int count = 0;
+            for (int i = 0; i < CARDINAL_COUNT; ++i) {
+                ivec2 neighbor = coord + SAME_CFA_OFFSETS[i];
+                if (inside(neighbor) && !maskedAt(neighbor)) {
+                    values[count] = texelFetch(uRaw, neighbor, 0).r;
+                    count += 1;
+                }
+            }
+            if (count == 0) {
+                for (int i = CARDINAL_COUNT; i < NEIGHBOR_COUNT; ++i) {
+                    ivec2 neighbor = coord + SAME_CFA_OFFSETS[i];
+                    if (inside(neighbor) && !maskedAt(neighbor)) {
+                        values[count] = texelFetch(uRaw, neighbor, 0).r;
+                        count += 1;
+                    }
+                }
+            }
+            oRaw = count == 0 ? original : medianOf(values, count);
         }
     """.trimIndent()
 }

@@ -13,6 +13,7 @@ import android.util.Half
 import com.hinnka.mycamera.camera.MultiFrameConfig
 import com.hinnka.mycamera.model.SafeImage
 import com.hinnka.mycamera.raw.MgcSpatialStrengthMap
+import com.hinnka.mycamera.raw.RawHotPixelShaders
 import com.hinnka.mycamera.raw.RawSceneAERawStats
 import com.hinnka.mycamera.utils.DngCaptureDiagnostics
 import com.hinnka.mycamera.utils.DirectBufferPixelPacker
@@ -230,6 +231,16 @@ internal class GlesMgcRawSpatialStacker(
             entries.clear()
         }
     }
+
+    /**
+     * MGC ProcessCaptureBaseFrame detects sensor defects once on the base frame; the burst then
+     * suppresses that list in every frame before alignment and merge.
+     */
+    private class HotPixelReference(
+        val image: SafeImage,
+        val blackLevel: FloatArray,
+        val noiseModel: RawNoiseModel,
+    )
 
     private data class FrameCalibration(
         val blackLevels: FloatArray,
@@ -484,6 +495,19 @@ internal class GlesMgcRawSpatialStacker(
     private var strengthFloatPackProgram = 0
     private var strengthUnorm8PackProgram = 0
     private var strengthSint16PackProgram = 0
+    private var hotPixelDetectProgram = 0
+    private var hotPixelResolveProgram = 0
+    private var hotPixelSuppressProgram = 0
+    private var hotPixelReference: HotPixelReference? = null
+    /** Resolved sensor-coordinate defect mask of [hotPixelReference], applied to every frame. */
+    private var hotPixelMask = 0
+    /**
+     * Two upload slots, alternated per frame like the temporal RAW textures: re-uploading into
+     * the slot the previous frame's suppression pass still samples would stall the CPU until
+     * the GPU drains every pass queued ahead of that read.
+     */
+    private val hotPixelStagingRaw = IntArray(2)
+    private var hotPixelStagingSlot = 0
     private var supportsComputePrograms = false
     private var supportsComputeReadback = false
     private var maxShaderStorageBlockBytes = 0L
@@ -583,6 +607,7 @@ internal class GlesMgcRawSpatialStacker(
                 includeReferenceHighlightMask = hasBentoCandidate || hasShadowLongFrame,
                 includeTemporalProcessing = hasAuxiliaryFrames,
             )
+            beginHotPixelSuppression(frames.first(), resolvedNoiseModels.first().model)
             val programInitMs = (System.nanoTime() - programInitStartNs) / 1_000_000L
             renderFbo = createFramebuffer()
             applyRawRenderState()
@@ -2135,6 +2160,7 @@ internal class GlesMgcRawSpatialStacker(
             if (useCurrentGlContext) attachCurrentEgl() else initEgl()
             ensureGles3()
             initSabrePrograms()
+            beginHotPixelSuppression(frames.first(), resolvedNoiseModels.first().model)
             renderFbo = createFramebuffer()
             applyRawRenderState()
 
@@ -7242,7 +7268,154 @@ internal class GlesMgcRawSpatialStacker(
         return output
     }
 
+    /**
+     * Uploads one RAW frame with sensor defects suppressed. The first upload of a run must be the
+     * reference frame: it produces the defect mask that every later upload, including the
+     * reference itself, is repaired with before any alignment, rejection or merge reads it.
+     */
     private fun uploadRaw(image: SafeImage, texture: Int, label: String) {
+        // Both slots are allocated with the reference upload, ahead of every per-frame transient
+        // texture range, so index-based transient releases can never reclaim a staging slot.
+        if (hotPixelStagingRaw[0] == 0) {
+            for (index in hotPixelStagingRaw.indices) {
+                hotPixelStagingRaw[index] = allocateTexture(
+                    TextureSpec(
+                        width = width,
+                        height = height,
+                        internalFormat = GLES30.GL_R16UI,
+                        filter = GLES30.GL_NEAREST,
+                    ),
+                )
+            }
+        }
+        val slot = hotPixelStagingSlot
+        hotPixelStagingSlot = 1 - slot
+        val staging = hotPixelStagingRaw[slot]
+        uploadRawPlane(image, staging, label)
+        if (hotPixelMask == 0) {
+            detectHotPixels(image, staging, label)
+        }
+        GLES30.glUseProgram(hotPixelSuppressProgram)
+        bindTexture(hotPixelSuppressProgram, "uRaw", 0, staging)
+        bindTexture(hotPixelSuppressProgram, "uHotPixelMask", 1, hotPixelMask)
+        uniform2i(hotPixelSuppressProgram, "uImageSize", width, height)
+        draw(hotPixelSuppressProgram, width, height, intArrayOf(texture))
+    }
+
+    private fun beginHotPixelSuppression(reference: RawStackFrame, noiseModel: RawNoiseModel) {
+        check(supportsComputePrograms) {
+            "MGC RAW hot-pixel detection requires the GLES 3.1 compute baseline"
+        }
+        if (hotPixelDetectProgram == 0) {
+            hotPixelDetectProgram = linkComputeProgram(
+                RawHotPixelShaders.DETECT,
+                "mgc_raw_hot_pixel_detect",
+            )
+            hotPixelResolveProgram = linkComputeProgram(
+                RawHotPixelShaders.RESOLVE,
+                "mgc_raw_hot_pixel_resolve",
+            )
+            hotPixelSuppressProgram = linkProgram(
+                RawHotPixelShaders.SUPPRESS,
+                "mgc_raw_hot_pixel_suppress",
+            )
+        }
+        hotPixelReference = HotPixelReference(
+            image = reference.image,
+            blackLevel = canonicalBlackLevelForFrame(reference),
+            noiseModel = noiseModel,
+        )
+        hotPixelMask = 0
+    }
+
+    /** Run-scoped textures that phase arenas must keep while RAW frames can still be uploaded. */
+    private fun hotPixelSuppressionTextures(): IntArray =
+        (hotPixelStagingRaw + hotPixelMask).filter { it != 0 }.toIntArray()
+
+    /**
+     * Called by the final arena handoffs, which delete every texture but their output: no RAW
+     * upload follows, so the mask and staging ids die with the arena and a late upload fails the
+     * reference check instead of touching a deleted texture.
+     */
+    private fun endHotPixelSuppression() {
+        check(hotPixelSuppressionTextures().none(textures::contains)) {
+            "Hot-pixel suppression textures must be released with the final arena"
+        }
+        hotPixelReference = null
+        hotPixelMask = 0
+        hotPixelStagingRaw.fill(0)
+        hotPixelStagingSlot = 0
+    }
+
+    private fun detectHotPixels(image: SafeImage, rawTexture: Int, label: String) {
+        val reference = checkNotNull(hotPixelReference) {
+            "$label: hot-pixel suppression was not started for this run"
+        }
+        check(image === reference.image) {
+            "$label: the hot-pixel mask must be detected on the reference frame"
+        }
+        val packedWidth = ceilDiv(width, 4)
+        val maskSpec = TextureSpec(
+            width = packedWidth,
+            height = height,
+            internalFormat = GLES30.GL_RGBA8UI,
+            filter = GLES30.GL_NEAREST,
+        )
+        val isolatedMask = allocateTexture(maskSpec)
+        val resolvedMask = allocateTexture(maskSpec)
+        val groupsX = GlesComputeWorkGroup.imageGroupCount(packedWidth)
+        val groupsY = GlesComputeWorkGroup.imageGroupCount(height)
+        val shot = reference.noiseModel.normalizedShotNoiseForShader(cfaPattern)
+        val read = reference.noiseModel.normalizedReadNoiseForShader(cfaPattern)
+
+        fun bindDetectionInputs(program: Int) {
+            GLES30.glUseProgram(program)
+            bindTexture(program, "uRawTexture", 0, rawTexture)
+            uniform2i(program, "uImageSize", width, height)
+            uniform2i(program, "uGlobalOrigin", 0, 0)
+            uniform1i(program, "uCfaPattern", cfaPattern.mod(4))
+            uniform4fv(program, "uBlackLevel", reference.blackLevel)
+            uniform1f(program, "uWhiteLevel", sensorWhiteLevel)
+            // Canonical R, Gr, Gb, B -> the shader's per-color R, G, B model.
+            uniform3f(program, "uNoiseSlope", shot[0], 0.5f * (shot[1] + shot[2]), shot[3])
+            uniform3f(program, "uNoiseOffset", read[0], 0.5f * (read[1] + read[2]), read[3])
+        }
+
+        bindDetectionInputs(hotPixelDetectProgram)
+        GLES31.glBindImageTexture(
+            0, isolatedMask, 0, false, 0, GLES31.GL_WRITE_ONLY, GLES30.GL_RGBA8UI,
+        )
+        GLES31.glDispatchCompute(groupsX, groupsY, 1)
+        GLES31.glMemoryBarrier(GLES31.GL_SHADER_IMAGE_ACCESS_BARRIER_BIT)
+
+        bindDetectionInputs(hotPixelResolveProgram)
+        GLES31.glBindImageTexture(
+            0, isolatedMask, 0, false, 0, GLES31.GL_READ_ONLY, GLES30.GL_RGBA8UI,
+        )
+        GLES31.glBindImageTexture(
+            1, resolvedMask, 0, false, 0, GLES31.GL_WRITE_ONLY, GLES30.GL_RGBA8UI,
+        )
+        GLES31.glDispatchCompute(groupsX, groupsY, 1)
+        // The suppression pass consumes the resolved mask through a sampler.
+        GLES31.glMemoryBarrier(GLES31.GL_TEXTURE_FETCH_BARRIER_BIT)
+        for (unit in 0..1) {
+            GLES31.glBindImageTexture(
+                unit, 0, 0, false, 0, GLES31.GL_READ_ONLY, GLES30.GL_RGBA8UI,
+            )
+        }
+        checkGlError("$label hot-pixel detection")
+        releaseOwnedTexture(isolatedMask, "hot-pixel isolated mask")
+        hotPixelMask = resolvedMask
+        PLog.i(
+            TAG,
+            "MGC RAW hot-pixel mask detected on $label size=${width}x$height " +
+                "cfa=${cfaPattern.mod(4)} black=${reference.blackLevel.contentToString()} " +
+                "white=$sensorWhiteLevelCode shot=${shot.contentToString()} " +
+                "read=${read.contentToString()}",
+        )
+    }
+
+    private fun uploadRawPlane(image: SafeImage, texture: Int, label: String) {
         val plane = image.planes.firstOrNull()
             ?: throw IllegalArgumentException("$label has no RAW plane")
         require(plane.pixelStride == RAW_BYTES_PER_PIXEL) {
@@ -7502,6 +7675,7 @@ internal class GlesMgcRawSpatialStacker(
                 textureSpecs.remove(texture)
             }
         }
+        endHotPixelSuppression()
         checkGlError("release MGC Sabre merge texture arena")
         PLog.i(
             SABRE_TAG,
@@ -7571,6 +7745,7 @@ internal class GlesMgcRawSpatialStacker(
                 textureSpecs.remove(texture)
             }
         }
+        endHotPixelSuppression()
         checkGlError("release MGC Spatial RGB $label fusion texture arena")
         PLog.i(
             TAG,
@@ -7601,6 +7776,9 @@ internal class GlesMgcRawSpatialStacker(
             retained += capture.alignmentAtlas
             retained += capture.rejectionAtlas
         }
+        // The RGB merge re-uploads every frame after this boundary, so the run's defect mask and
+        // its upload staging stay alive until the fusion output handoff.
+        hotPixelSuppressionTextures().forEach(retained::add)
         retained.remove(0)
         check(retained.all(textures::contains)) {
             "RGB persistent temporal resource is not owned by the stacker"
@@ -7667,6 +7845,7 @@ internal class GlesMgcRawSpatialStacker(
             GLES30.GL_R16UI -> 2
             GLES30.GL_R32F,
             GLES30.GL_RG16F,
+            GLES30.GL_RGBA8UI,
             GLES30.GL_RGB10_A2 -> 4
             GLES30.GL_RGB16UI -> 6
             GLES30.GL_RGBA16F,
@@ -8096,6 +8275,13 @@ internal class GlesMgcRawSpatialStacker(
         ownsEglContext = false
         supportsComputePrograms = false
         supportsComputeReadback = false
+        hotPixelDetectProgram = 0
+        hotPixelResolveProgram = 0
+        hotPixelSuppressProgram = 0
+        hotPixelReference = null
+        hotPixelMask = 0
+        hotPixelStagingRaw.fill(0)
+        hotPixelStagingSlot = 0
     }
 
     private fun canonicalChannelAtPhase(phase: Int): Int {
