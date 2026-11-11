@@ -35,8 +35,12 @@ internal object GlesMgcGreenDemosaicShaders {
 
         int s16(int v) { return (v << 16) >> 16; }
         int u16(int v) { return v & 0xffff; }
-        int clz16(int x) { return x == 0 ? 16 : 15 - findMSB(x); }
-        int clz32(uint x) { return x == 0u ? 32 : 31 - findMSB(x); }
+        // findMSB never receives 0: Adreno lowers `x == 0u ? 32 : 31 - findMSB(x)` to a
+        // count-leading-zeros whose zero result is 0, folding the guard away (see
+        // docs/gles-driver-compatibility.md). x | 1 keeps the leading one of every non-zero x,
+        // and the zero case adds the missing bit position explicitly.
+        int clz16(int x) { return 15 - findMSB(x | 1) + (x == 0 ? 1 : 0); }
+        int clz32(uint x) { return 31 - findMSB(x | 1u) + (x == 0u ? 1 : 0); }
 
         // SSHL .8h: the shift is the signed low byte of the lane; negative shifts are arithmetic.
         int sshl16(int x, int lane) {

@@ -19,6 +19,7 @@
 | `RGBA16UI` attachment 回读 | 跨驱动约束 | 以 RGBA16 回读，在 native 层批量移除 Alpha |
 | MRT attachment 残留 | 已确认，Adreno | render-target 数减少时显式 detach 尾部 attachment |
 | `uint16 -> float` | 已确认，Mali | 首次转换走 compute image load/store，不走 fragment sampler 直接转换 |
+| 前导零计数的零值保护 | 已确认，Adreno 660 | 不写 `x == 0u ? 32 : 31 - findMSB(x)`；`findMSB` 只接收 `x \| 1`，零值单独补位 |
 | 纹理/sampler 状态 | 跨驱动约束 | 每次 draw 显式绑定 program、framebuffer、texture unit 和所有 sampler |
 | sampler 未赋值落 unit 0 | 已确认，Adreno 840 | 首个 draw 前显式赋 unit；不能绑定真实纹理时用 1x1 占位，避免读到 unit 0 的外部纹理 |
 | 浮点纹理 sampler 精度 | 规范约束 | 线性 RGB 与浮点曲线/增益纹理显式声明 `highp` sampler；`highp float` 不覆盖 sampler |
@@ -292,6 +293,20 @@ unsupported format on read/write image
 - 使用 `GL_RGBA_INTEGER + GL_UNSIGNED_SHORT` 回读 RGBA16。
 - 在 native 层批量执行 RGBA16 -> RGB16，只改变内存布局，不改变通道值或图像语义。
 - 不在 Kotlin 中用 `ShortBuffer.get/put` 逐像素移除 Alpha；高分辨率 direct-buffer 边界检查成本过高。
+
+## 前导零计数：零值保护被编译器折叠
+
+**证据**：Xiaomi M2011K2C（Mi 11），Adreno 660，`OpenGL ES 3.2 V@0530.49`；用户设备 Redmi K60（Adreno 730）现象一致。
+
+`int clz32(uint x) { return x == 0u ? 32 : 31 - findMSB(x); }` 对 `x = 0` 返回错误值：同一驱动下，compute 中得到 `-1`，MGC 绿色去马赛克的 fragment 中得到 `0`（GLSL 语义应为 32）。`findMSB` 本身正确（`findMSB(0u) == -1`），错误来自编译器把整个表达式降为硬件前导零计数并折叠掉零值分支，结果与上下文和内联方式有关。
+
+后果：`GlesMgcGreenDemosaicShaders` 的 `ig2` 在方向代价为 0 时（暗部平坦区很常见）把右移变成左移 15 位，绿色回绕到约 −32768，经色度插值、多帧合并与降噪扩散成暗部“单通道饱和、G=0”的彩色冲击。Sabre 与 Spatial 共用此段，二者都受影响，单帧路径不受影响。
+
+实现契约：
+
+- 前导零计数不让 `findMSB` 接收 0：`31 - findMSB(x | 1u) + (x == 0u ? 1 : 0)`（16 位同理）。`x | 1` 不改变非零值的最高位，零值的结果不依赖驱动对 `findMSB(0)` 或硬件前导零计数的处理。
+- 只在参数可证明非零时直接使用 `findMSB`（例如 `GlesSpatialGlobalAlignment` 中先排除了 `total == 0` 的长除法）。
+- 验证必须在真实 fragment/compute 上下文中进行：独立的小 compute 测试曾得到与 app 内着色器不同的结果。用设备 GPU 运行 app 的着色器原文、输入真实中间平面，再与原版 AOT 逐比特比较（`tools/mgc_demosaic_green` 的 `green_oracle`）。
 
 ## 16-bit 整数纹理转浮点
 
