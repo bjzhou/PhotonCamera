@@ -629,6 +629,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     val state: StateFlow<CameraState> = cameraController.state
     val livePhotoRecorder get() = cameraController.livePhotoRecorder
     val realtimeStabilizationCoordinator get() = cameraController.realtimeStabilizationCoordinator
+    val previewYuvChannel get() = cameraController.previewYuvChannel
     val isAlgorithmicStabilizationSupported: Boolean
         get() = cameraController.realtimeStabilizationCoordinator.isGyroscopeAvailable
 

@@ -487,6 +487,4 @@
     <string name="fotufilm_value_years">%1$s thn</string>
     <!-- /Fotufilm controls -->
     <string name="save_as_preset">Simpan sebagai preset</string>
-    <string name="settings_preview_limited_range">Perbaiki pratinjau pudar</string>
-    <string name="settings_preview_limited_range_description">Aktifkan jika pratinjau tampak abu-abu dan kontrasnya rendah, sedangkan foto normal. Beberapa perangkat mengeluarkan sinyal pratinjau rentang terbatas.</string>
 </resources>

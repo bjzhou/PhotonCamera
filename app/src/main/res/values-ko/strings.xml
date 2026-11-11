@@ -488,6 +488,4 @@
     <string name="fotufilm_value_years">%1$s년</string>
     <!-- /Fotufilm controls -->
     <string name="save_as_preset">프리셋으로 저장</string>
-    <string name="settings_preview_limited_range">흐린 미리보기 보정</string>
-    <string name="settings_preview_limited_range_description">사진은 정상인데 미리보기가 회색빛이고 대비가 낮으면 켜세요. 일부 기기는 제한 범위 미리보기 신호를 출력합니다.</string>
 </resources>

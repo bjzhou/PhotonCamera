@@ -1,5 +1,6 @@
 package com.hinnka.mycamera.ui.camera
 
+import com.hinnka.mycamera.camera.PreviewYuvFrameChannel
 import android.graphics.SurfaceTexture
 import android.util.Size
 import androidx.compose.foundation.background
@@ -76,12 +77,12 @@ fun CameraPreviewGL(
     livePhotoRecorder: LivePhotoRecorder? = null,
     videoLogProfile: VideoLogProfile = VideoLogProfile.OFF,
     nightVisionEnabled: Boolean = false,
-    previewLimitedRange: Boolean = false,
     isEyeFocusBusy: Boolean = false,
     onGLSurfaceViewReady: ((CameraGLSurfaceView) -> Unit)? = null,
     isAutoFocus: Boolean = true,
     focusPeakingEnabled: Boolean = true,
     stabilizationCoordinator: RealtimeStabilizationCoordinator? = null,
+    previewYuvChannel: PreviewYuvFrameChannel? = null,
     stabilizationInputSize: Size = previewSize,
     photoPreviewStabilizationEnabled: Boolean = false,
     videoPreviewStabilizationEnabled: Boolean = false,
@@ -251,6 +252,7 @@ fun CameraPreviewGL(
                             stabilizationInputSize.height,
                         )
                         glSurfaceView.setStabilizationCoordinator(stabilizationCoordinator)
+                        glSurfaceView.setPreviewYuvChannel(previewYuvChannel)
                         val previewStabilizationUseCase = when {
                             captureMode == CaptureMode.VIDEO &&
                                 videoPreviewStabilizationEnabled -> StabilizationUseCase.VIDEO
@@ -331,7 +333,6 @@ fun CameraPreviewGL(
                         glSurfaceView.setLivePhotoRecorder(livePhotoRecorder)
                         glSurfaceView.setVideoLogProfile(videoLogProfile)
                         glSurfaceView.setNightVisionEnabled(nightVisionEnabled)
-                        glSurfaceView.setPreviewLimitedRange(previewLimitedRange)
                         glSurfaceView.setAutoFocus(isAutoFocus)
                         glSurfaceView.setFocusPeakingEnabled(focusPeakingEnabled)
                         glSurfaceView.setEyeFocusBusy(isEyeFocusBusy)

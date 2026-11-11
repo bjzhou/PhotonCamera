@@ -156,7 +156,6 @@ class UserPreferences internal constructor(
     var deletedBuiltInIds by string("deleted_built_in_ids", "")
     var showLevelIndicator by bool("show_level_indicator", false)  // 水平仪显示
     var focusPeakingEnabled by bool("focus_peaking_enabled", true)  // 手动对焦峰值显示
-    var previewLimitedRange by bool("preview_limited_range", false)  // 预览流为有限范围 YUV 时展开到全范围
     var showHistogram by bool("show_histogram", true)
     var showGrid by bool("show_grid", false)  // 网格线显示
     var eyeFocusEnabled by bool("eye_focus_enabled", false)  // MediaPipe 人眼对焦

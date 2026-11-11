@@ -488,6 +488,4 @@
     <string name="fotufilm_value_years">%1$s anos</string>
     <!-- /Fotufilm controls -->
     <string name="save_as_preset">Salvar como predefinição</string>
-    <string name="settings_preview_limited_range">Corrigir prévia desbotada</string>
-    <string name="settings_preview_limited_range_description">Ative se a prévia parecer acinzentada e com pouco contraste enquanto as fotos ficam normais. Alguns aparelhos geram sinal de prévia em faixa limitada.</string>
 </resources>

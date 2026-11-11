@@ -2,7 +2,6 @@ package com.hinnka.mycamera.camera
 
 import android.content.Context
 import android.graphics.ImageFormat
-import android.graphics.SurfaceTexture
 import android.hardware.camera2.CameraCharacteristics
 import android.hardware.camera2.CameraManager
 import android.hardware.camera2.params.StreamConfigurationMap
@@ -17,7 +16,7 @@ import kotlin.math.abs
 object CameraUtils {
 
     /**
-     * 获取固定的预览尺寸
+     * 获取拍照模式的固定预览尺寸（YUV_420_888 预览流）
      * 使用固定尺寸可以避免切换画面比例时频繁重新配置相机会话，
      * 不同的画面比例通过 UI 裁切实现
      */
@@ -44,55 +43,45 @@ object CameraUtils {
             val map = characteristics.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP)
                 ?: return Size(1440, 1080)
 
-            // 首先获取最大的拍照尺寸，以此作为传感器的原生比例
             val sensorRatio = aspectRatio.getValue(true)
+            // Mandatory stream combinations only guarantee PREVIEW-bounded sizes:
+            // long side <= 1920 and short side <= 1080 (CameraDevice#createCaptureSession).
+            // Photo mode's viewfinder is a YUV_420_888 ImageReader (PreviewYuvImageReader).
+            val previewSizes = map.getOutputSizes(ImageFormat.YUV_420_888)
+                ?.filter { isWithinPreviewBound(it) }
+                .orEmpty()
 
-            val previewSizes = map.getOutputSizes(SurfaceTexture::class.java)?.toList() ?: emptyList()
+            largestWithRatio(previewSizes, sensorRatio)?.let { return it }
 
-            // 寻找比例最匹配传感器原生比例且高度不超过 1080 的预览尺寸
-            val matchingSizes = previewSizes.filter {
-                val ratio = it.width.toFloat() / it.height
-                abs(ratio - sensorRatio) < 0.01
-            }
-
-            // 优先选择匹配比例中，高度最接近 1080 的尺寸
-            val bestMatching = matchingSizes.filter { it.height <= 1080 }.maxByOrNull { it.width * it.height }
-                ?: matchingSizes.minByOrNull { it.width * it.height }
-
-            if (bestMatching != null) return bestMatching
-
-            // 没有精确匹配的比例时（如 XPAN 65:24），需要选择一个能覆盖目标比例的预览尺寸。
-            // 关键：必须与 getBestCaptureSize 使用相同的选择策略（选择最宽的尺寸），
+            // 没有该比例的 PREVIEW 尺寸时（如 XPAN 65:24），用拍照会选择的基础比例的预览尺寸，
+            // 再由 UI 裁切到目标比例。必须与 getBestCaptureSize 的基础比例一致（选择最宽的尺寸），
             // 否则预览和拍摄从不同基础比例裁切到目标比例时，FOV 会不一致。
-            // 
-            // 例如 XPAN (2.708:1)：如果预览选了 1:1 (1080x1080)，拍照选了 4:3 (4096x3072)，
-            // 两者裁切到 65:24 时，4:3 的水平 FOV 更大，导致拍到的画面比预览多。
-            //
-            // 策略：找到 getBestCaptureSize 会选择的比例，然后选择该比例的预览尺寸
             val captureSizes = map.getOutputSizes(ImageFormat.YUV_420_888)?.toList().orEmpty() +
                     getHighResolutionOutputSizes(map, ImageFormat.YUV_420_888)
-            val bestCaptureSize = captureSizes.maxByOrNull { it.width.toLong() * it.height }
-            
-            if (bestCaptureSize != null) {
+            captureSizes.maxByOrNull { it.width.toLong() * it.height }?.let { bestCaptureSize ->
                 val captureRatio = bestCaptureSize.width.toFloat() / bestCaptureSize.height
-                val captureMatchingSizes = previewSizes.filter {
-                    val ratio = it.width.toFloat() / it.height
-                    abs(ratio - captureRatio) < 0.01
-                }
-                val bestCaptureMatching = captureMatchingSizes
-                    .filter { it.height <= 1080 }
-                    .maxByOrNull { it.width * it.height }
-                    ?: captureMatchingSizes.minByOrNull { it.width * it.height }
-                
-                if (bestCaptureMatching != null) return bestCaptureMatching
+                largestWithRatio(previewSizes, captureRatio)?.let { return it }
             }
 
-            // 最终回退：选择高度 >= 1080 中最小的一个
-            return previewSizes.filter { it.height >= 1080 }.minByOrNull { it.width } ?: Size(1440, 1080)
+            previewSizes.maxByOrNull { it.width * it.height } ?: Size(1440, 1080)
         } catch (e: Exception) {
             PLog.d("CameraUtils", "getFixedPreviewSize: ${e.message}")
-            return Size(1440, 1080)
+            Size(1440, 1080)
         }
+    }
+
+    private const val PREVIEW_BOUND_LONG = 1920
+    private const val PREVIEW_BOUND_SHORT = 1080
+
+    private fun isWithinPreviewBound(size: Size): Boolean {
+        return maxOf(size.width, size.height) <= PREVIEW_BOUND_LONG &&
+                minOf(size.width, size.height) <= PREVIEW_BOUND_SHORT
+    }
+
+    private fun largestWithRatio(sizes: List<Size>, ratio: Float): Size? {
+        return sizes
+            .filter { abs(it.width.toFloat() / it.height - ratio) < 0.01f }
+            .maxByOrNull { it.width * it.height }
     }
 
     /**

@@ -275,6 +275,9 @@ class Camera2Controller(private val context: Context) {
 
     private var previewSurface: Surface? = null
     private var previewSurfaceTexture: SurfaceTexture? = null
+    /** Photo-mode viewfinder stream; when set, [previewSurface] is its surface. */
+    private var previewYuvReader: PreviewYuvImageReader? = null
+    val previewYuvChannel = PreviewYuvFrameChannel()
     private var imageReader: ImageReader? = null
     private var stabilizationImageReader: StabilizationImageReader? = null
 
@@ -2181,12 +2184,28 @@ class Camera2Controller(private val context: Context) {
 
     private fun safeReleasePreviewSurface(reason: String) {
         val surface = previewSurface
+        val yuvReader = previewYuvReader
         previewSurface = null
         previewSurfaceTexture = null
+        previewYuvReader = null
         try {
-            surface?.release()
+            // The reader owns its surface and outlives frames still leased to the renderer.
+            if (yuvReader != null) yuvReader.close() else surface?.release()
         } catch (e: Exception) {
             PLog.w(TAG, "Ignoring error while releasing preview surface ($reason): ${e.message}")
+        }
+    }
+
+    private fun createPreviewYuvReader(size: Size): PreviewYuvImageReader {
+        previewYuvReader?.close()
+        return PreviewYuvImageReader(
+            width = size.width,
+            height = size.height,
+            handler = checkNotNull(cameraHandler) { "Camera thread is not running" },
+            channel = previewYuvChannel,
+        ).also {
+            previewYuvReader = it
+            PLog.i(TAG, "Preview YUV stream configured: ${size.width}x${size.height}")
         }
     }
 
@@ -2783,9 +2802,11 @@ class Camera2Controller(private val context: Context) {
                 return
             }
 
-            // 配置 SurfaceTexture
+            // 拍照模式的预览 Surface 是 YUV ImageReader，在下面确定最终预览尺寸后创建
             previewSurfaceTexture = surfaceTexture
-            previewSurface = Surface(surfaceTexture)
+            if (captureMode != CaptureMode.PHOTO) {
+                previewSurface = Surface(surfaceTexture)
+            }
 
             if (captureMode == CaptureMode.PHOTO) {
                 val aspectRatio = state.value.aspectRatio
@@ -2830,6 +2851,7 @@ class Camera2Controller(private val context: Context) {
                 }
                 previewSize = CameraUtils.getFixedPreviewSize(outputCharacteristicsForStreams, aspectRatio)
                 surfaceTexture.setDefaultBufferSize(previewSize.width, previewSize.height)
+                previewSurface = createPreviewYuvReader(previewSize).surface
                 val highResolutionProfile = "$outputCameraIdForStreams:$captureFormat"
                 val captureSizeSelection = if (rawOutput != null) {
                     null

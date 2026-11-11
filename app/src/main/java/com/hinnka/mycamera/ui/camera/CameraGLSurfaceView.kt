@@ -1,5 +1,6 @@
 package com.hinnka.mycamera.ui.camera
 
+import com.hinnka.mycamera.camera.PreviewYuvFrameChannel
 import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.PointF
@@ -170,6 +171,17 @@ class CameraGLSurfaceView @JvmOverloads constructor(
         }
     }
 
+    private var currentPreviewYuvChannel: PreviewYuvFrameChannel? = null
+
+    fun setPreviewYuvChannel(channel: PreviewYuvFrameChannel?) {
+        if (currentPreviewYuvChannel === channel) return
+        currentPreviewYuvChannel = channel
+        queueEvent {
+            renderer.setPreviewYuvChannel(channel)
+            requestRender()
+        }
+    }
+
     fun setStabilizationCoordinator(coordinator: RealtimeStabilizationCoordinator?) {
         if (currentStabilizationCoordinator === coordinator) return
         currentStabilizationCoordinator = coordinator
@@ -217,13 +229,6 @@ class CameraGLSurfaceView @JvmOverloads constructor(
 
     fun setNightVisionEnabled(enabled: Boolean) {
         renderer.nightVisionEnabled = enabled
-    }
-
-    /** Expands a limited-range preview stream to full range. */
-    fun setPreviewLimitedRange(enabled: Boolean) {
-        if (renderer.previewLimitedRange == enabled) return
-        renderer.previewLimitedRange = enabled
-        requestRender()
     }
 
     /**

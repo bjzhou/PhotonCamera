@@ -15,6 +15,8 @@ import com.hinnka.mycamera.preview.EyeFocusProcessingTiming
 import com.hinnka.mycamera.raw.ColorSpace
 import com.hinnka.mycamera.screencapture.PhantomPipCrop
 import com.hinnka.mycamera.camera.MeteringMode
+import com.hinnka.mycamera.camera.PreviewYuvFrame
+import com.hinnka.mycamera.camera.PreviewYuvFrameChannel
 import com.hinnka.mycamera.stabilization.DEFAULT_VIDEO_STABILIZATION_LOOKAHEAD
 import com.hinnka.mycamera.stabilization.RealtimeStabilizationCoordinator
 import com.hinnka.mycamera.stabilization.StabilizationUseCase
@@ -78,6 +80,9 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
     private val enginePreview = RawEnginePreviewGl()
     private val mgcEisHardwareBufferRenderer = MgcEisHardwareBufferRenderer(TAG)
     private val mgcEisYuvRenderer = MgcEisYuvRenderer(TAG)
+    private val previewYuvRenderer = PreviewYuvRenderer(TAG)
+    private var previewYuvChannel: PreviewYuvFrameChannel? = null
+    private val previewYuvMatrix = FloatArray(16).apply { Matrix.setIdentityM(this, 0) }
 
     private data class PreviewCaptureRequest(
         val width: Int,
@@ -254,9 +259,6 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
     // 相机 SurfaceTexture
     private var surfaceTexture: SurfaceTexture? = null
 
-    /** Expands a limited-range preview stream to full range ([PreviewSignalRange]). */
-    @Volatile
-    var previewLimitedRange: Boolean = false
     private val frameAvailable = AtomicBoolean(false)
     private var stabilizationCoordinator: RealtimeStabilizationCoordinator? = null
     @Volatile
@@ -624,6 +626,7 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
         enginePreview.reset()
         mgcEisHardwareBufferRenderer.resetAfterContextLoss()
         mgcEisYuvRenderer.resetAfterContextLoss()
+        previewYuvRenderer.resetAfterContextLoss()
         cameraTextureId = 0
         currentCameraTextureId = 0
         currentCameraTextureSource = PreviewColorTextureSource.EXTERNAL_OES
@@ -869,7 +872,6 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
         enableVideoLog: Boolean,
         toneBaseOnly: Boolean = false,
         nightVisionTone: Boolean = false,
-        expandRange: Boolean = false,
     ) {
         val shadowsHighlightsActive =
             ShadowsHighlightsShader.isActive(params.highlights, params.shadows)
@@ -896,7 +898,6 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
                 enableVideoLog = enableVideoLog,
                 toneBaseOnly = true,
                 nightVisionTone = nightVisionTone,
-                expandRange = expandRange,
             )
             toneBase.buildLevels(::drawSimpleQuad)
         }
@@ -907,7 +908,6 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
                 sourceTextureId = sourceTextureId,
                 sourceWidth = if (oesSource) previewWidth else width,
                 sourceHeight = if (oesSource) previewHeight else height,
-                limitedRange = expandRange,
                 drawQuad = ::drawSimpleQuad,
             )
         } else {
@@ -920,7 +920,6 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
         }
         GLES30.glUseProgram(locations.programId)
         GLES30.glUniform1i(locations.uToneBaseOnlyLocation, if (toneBaseOnly) 1 else 0)
-        GLES30.glUniform1i(locations.uPreviewLimitedRangeLocation, if (expandRange) 1 else 0)
         if (locations.previewBlur) {
             GLES30.glActiveTexture(GLES30.GL_TEXTURE0 + PreviewLiteEffectsGl.TEXTURE_UNIT)
             GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, previewBlurTextureId)
@@ -1150,6 +1149,20 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
         }
         val oesFrameUpdated = frameAvailable.getAndSet(false) && acquireLatestCameraFrame()
         var cameraFrameUpdated = oesFrameUpdated
+        var yuvFrameUpdated = false
+        previewYuvChannel?.take()?.let { frame ->
+            if (delayedStabilizationEnabled) {
+                // Stabilized frames come from the MGC reader; this stream only proves the
+                // orientation, which no OES frame provides while the viewfinder is a YUV reader.
+                frame.close()
+                if (!mgcEisPresentationTransform.captureFromSensorOrientation(sensorOrientation)) {
+                    PLog.w(TAG, "MGC cannot derive presentation from sensor orientation $sensorOrientation")
+                }
+            } else if (usePreviewYuvFrame(frame)) {
+                yuvFrameUpdated = true
+                cameraFrameUpdated = true
+            }
+        }
 
         if (delayedStabilizationEnabled) {
             val session = stabilizationSession
@@ -1194,7 +1207,7 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
                 GLES30.glClear(GLES30.GL_COLOR_BUFFER_BIT)
                 return
             }
-        } else if (cameraFrameUpdated) {
+        } else if (oesFrameUpdated && !yuvFrameUpdated) {
             useCurrentOesFrame()
         }
 
@@ -1438,6 +1451,34 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
         }
     }
 
+    /** Converts a viewfinder YUV frame and makes it the camera texture. Always closes [frame]. */
+    private fun usePreviewYuvFrame(frame: PreviewYuvFrame): Boolean {
+        val timestampNs = frame.timestampNs
+        val textureId = previewYuvRenderer.render(frame)
+        if (textureId == 0) return false
+        val matrix = resolvePreviewYuvPresentationMatrix(sensorOrientation, lensFacing == 0) ?: run {
+            PLog.w(TAG, "Preview YUV frame has non-cardinal sensor orientation $sensorOrientation")
+            return false
+        }
+        System.arraycopy(matrix, 0, previewYuvMatrix, 0, previewYuvMatrix.size)
+        currentCameraTextureSource = PreviewColorTextureSource.TEXTURE_2D
+        currentCameraTextureTarget = GLES30.GL_TEXTURE_2D
+        currentCameraTextureId = textureId
+        currentCameraTextureMatrix = previewYuvMatrix
+        currentFrameTimestampNs = timestampNs
+        return true
+    }
+
+    fun setPreviewYuvChannel(channel: PreviewYuvFrameChannel?) {
+        if (previewYuvChannel === channel) return
+        previewYuvChannel?.let { previous ->
+            previous.onFrameAvailable = null
+            previous.take()?.close()
+        }
+        previewYuvChannel = channel
+        channel?.onFrameAvailable = { onRequestRender?.invoke() }
+    }
+
     private fun useCurrentOesFrame() {
         currentCameraTextureSource = PreviewColorTextureSource.EXTERNAL_OES
         currentCameraTextureTarget = GLES11Ext.GL_TEXTURE_EXTERNAL_OES
@@ -1529,7 +1570,6 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
         suppressNightVisionTone: Boolean = false,
     ) {
         val plan = if (suppressCameraEngine) null else enginePreviewPlan
-        val expandRange = previewLimitedRange
         val nightVisionTone = !suppressNightVisionTone && nightVisionEnabled && nightToneActive &&
             nightToneTextureId != 0
         if (plan != null && !enginePreview.prepare(plan)) return
@@ -1597,7 +1637,6 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
             curveEnabled = layerCurveEnabled,
             enableVideoLog = enableVideoLog,
             nightVisionTone = nightVisionTone,
-            expandRange = expandRange,
         )
 
         // 测光和直方图（按需）
@@ -3502,6 +3541,8 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
         basicToneTextures.release()
         mgcEisHardwareBufferRenderer.release()
         mgcEisYuvRenderer.release()
+        previewYuvChannel?.take()?.close()
+        previewYuvRenderer.release()
         // 删除程序
         colorProgramCache.release()
         enginePreview.release()

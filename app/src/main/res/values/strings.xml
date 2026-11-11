@@ -1515,6 +1515,4 @@
     <string name="aesthetic_show_in_gallery">Show scores in gallery</string>
     <string name="aesthetic_show_in_gallery_description">Scores photos in the background as you browse.</string>
     <string name="aesthetic_note">Scored by an on-device CLIP aesthetic model (LAION Aesthetic Predictor) trained on large-scale human ratings. It reflects broad visual appeal rather than artistic intent, so use it as a reference.</string>
-    <string name="settings_preview_limited_range">Fix Washed-out Preview</string>
-    <string name="settings_preview_limited_range_description">Turn on if the preview looks grey with weak contrast while photos look normal. Some devices output a limited-range preview signal.</string>
 </resources>

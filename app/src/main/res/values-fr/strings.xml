@@ -1472,6 +1472,4 @@
     <string name="aesthetic_show_in_gallery">Afficher les scores dans la galerie</string>
     <string name="aesthetic_show_in_gallery_description">Évalue les photos en arrière-plan pendant la navigation.</string>
     <string name="aesthetic_note">Évalué par un modèle esthétique CLIP sur l\'appareil (LAION Aesthetic Predictor), entraîné sur un grand nombre de notes humaines. Il reflète l\'attrait visuel général plutôt que l\'intention artistique : à utiliser comme référence.</string>
-    <string name="settings_preview_limited_range">Corriger l\'aperçu délavé</string>
-    <string name="settings_preview_limited_range_description">À activer si l\'aperçu paraît gris et peu contrasté alors que les photos sont normales. Certains appareils fournissent un signal d\'aperçu à plage limitée.</string>
 </resources>
