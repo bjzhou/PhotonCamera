@@ -205,7 +205,8 @@ object AiDenoiser {
                 modelSizeBytes = file.length().toInt(),
                 modelFingerprint = AiDenoiseModelManager.sha256,
             )
-            // FP16 is safe: LayerNorm is pre-scaled so its variance stays within FP16 range.
+            // FP16 is safe: LayerNorm is range-normalised so neither its squares overflow nor its
+            // variance / eps fall into the subnormals that some GPUs flush to zero.
             val gpu = LiteRtGpuModel.fromFile(
                 file = file,
                 cache = cache,
