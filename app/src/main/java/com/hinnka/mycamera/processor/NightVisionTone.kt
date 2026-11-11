@@ -90,8 +90,10 @@ internal data class NightVisionDenoiseStrength(val luma: Float, val chroma: Floa
  *
  * Curve construction, on the model's 256x256 input and output:
  * 1. Bin the input luma, average the output luma per bin, force monotone, smooth.
- * 2. Gate by scene brightness: full strength at mean luma <= [GATE_FULL_LUMA], identity at
- *    >= [GATE_OFF_LUMA]. The model brightens every image, daylight included.
+ * 2. Gate by scene brightness: the geometric mean of the per-pixel max channel (as the RAW scene
+ *    brightness measurement uses, on encoded values here). Full strength at <= [GATE_FULL_SIGNAL],
+ *    identity at >= [GATE_OFF_SIGNAL], smoothstep between. The model brightens every image,
+ *    daylight included.
  * 3. Cap each tone so it uses at most [HIGHLIGHT_HEADROOM] of its headroom relative to the
  *    image white point; an underexposed frame keeps a white paper white.
  * 4. A shadow-only toe below the median output luma restores the contrast the lift removes.
@@ -107,8 +109,14 @@ internal object NightVisionTone {
     private const val BIN_COUNT = 64
     private const val MIN_BIN_SAMPLES = 20
     private const val SMOOTH_RADIUS = 7
-    private const val GATE_FULL_LUMA = 0.35f
-    private const val GATE_OFF_LUMA = 0.65f
+    /**
+     * Calibrated on 87 camera JPEGs labelled by EXIF EV100 (docs/night-vision-mode.md): night
+     * scenes (EV < 5) sit at 0.16-0.23, daylight (EV >= 10) mostly above 0.30.
+     */
+    private const val GATE_FULL_SIGNAL = 0.18f
+    private const val GATE_OFF_SIGNAL = 0.30f
+    /** Floor of the log average: one 8-bit code value, so black pixels do not dominate. */
+    private const val GATE_SIGNAL_FLOOR = 1f / 255f
     private const val TOE_AMOUNT = 0.8f
     private const val MIN_TOE_PIVOT = 0.25f
     private const val MAX_TOE_PIVOT = 0.75f
@@ -155,7 +163,7 @@ internal object NightVisionTone {
         val maxChannel = FloatArray(pixelCount)
         val binSum = DoubleArray(BIN_COUNT)
         val binCount = IntArray(BIN_COUNT)
-        var lumaSum = 0.0
+        var logSignalSum = 0.0
         for (i in 0 until pixelCount) {
             val o = i * 3
             val r = input[o].coerceIn(0f, 1f)
@@ -164,7 +172,7 @@ internal object NightVisionTone {
             val y = luma(r, g, b)
             inputLuma[i] = y
             maxChannel[i] = max(max(r, g), b)
-            lumaSum += y
+            logSignalSum += ln(maxChannel[i] + GATE_SIGNAL_FLOOR)
             val outY = luma(
                 output[o].coerceIn(0f, 1f),
                 output[o + 1].coerceIn(0f, 1f),
@@ -175,7 +183,8 @@ internal object NightVisionTone {
             binCount[bin]++
         }
 
-        val strength = gate((lumaSum / pixelCount).toFloat())
+        val signal = exp(logSignalSum / pixelCount).toFloat() - GATE_SIGNAL_FLOOR
+        val strength = gate(signal)
         val whitePoint = percentile(maxChannel, WHITE_POINT_PERCENTILE).coerceIn(MIN_WHITE_POINT, 1f)
         if (strength <= 0f) {
             return NightVisionToneCurve(NightVisionToneCurve.IDENTITY.values.copyOf(), whitePoint, 0f)
@@ -276,8 +285,8 @@ internal object NightVisionTone {
         return DenoiseStrength.clamp(maxStrength * fraction)
     }
 
-    private fun gate(meanLuma: Float): Float {
-        val t = ((GATE_OFF_LUMA - meanLuma) / (GATE_OFF_LUMA - GATE_FULL_LUMA)).coerceIn(0f, 1f)
+    private fun gate(signal: Float): Float {
+        val t = ((GATE_OFF_SIGNAL - signal) / (GATE_OFF_SIGNAL - GATE_FULL_SIGNAL)).coerceIn(0f, 1f)
         return t * t * (3f - 2f * t)
     }
 
