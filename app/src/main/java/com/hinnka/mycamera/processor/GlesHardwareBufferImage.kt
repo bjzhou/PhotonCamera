@@ -14,6 +14,9 @@ internal object GlesHardwareBufferImage {
     /** The texture must be GL_TEXTURE_EXTERNAL_OES. Does not wait for GPU completion. */
     external fun bind(handle: Long, textureId: Int): Boolean
 
+    /** RGBA HardwareBuffers can be sampled and attached to FBOs as GL_TEXTURE_2D. */
+    external fun bind2D(handle: Long, textureId: Int): Boolean
+
     /** Call after the consumer has finished sampling, before destroying the EGL display. */
     external fun destroy(handle: Long)
 }

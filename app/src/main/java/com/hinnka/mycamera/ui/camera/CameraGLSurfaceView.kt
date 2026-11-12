@@ -1,5 +1,6 @@
 package com.hinnka.mycamera.ui.camera
 
+import com.hinnka.mycamera.lut.SharedEisRgbFrameChannel
 import com.hinnka.mycamera.camera.PreviewYuvFrameChannel
 import android.content.Context
 import android.graphics.Bitmap
@@ -168,6 +169,17 @@ class CameraGLSurfaceView @JvmOverloads constructor(
     fun setCaptureAspectRatio(aspectRatio: Float) {
         queueEvent {
             renderer.setCaptureAspectRatio(aspectRatio)
+        }
+    }
+
+    private var currentSharedEisRgbFrames: SharedEisRgbFrameChannel? = null
+
+    fun setSharedEisRgbFrames(channel: SharedEisRgbFrameChannel?) {
+        if (currentSharedEisRgbFrames === channel) return
+        currentSharedEisRgbFrames = channel
+        queueEvent {
+            renderer.setSharedEisRgbFrames(channel)
+            requestRender()
         }
     }
 
@@ -471,8 +483,10 @@ class CameraGLSurfaceView @JvmOverloads constructor(
     }
 
     override fun onPause() {
-        renderer.setRenderingPaused(true)
         super.onPause()
+        // Stop consumers after the last draw has completed, so an in-flight draw cannot
+        // re-register a stabilization session after it has been stopped.
+        renderer.setRenderingPaused(true)
         PLog.d(TAG, "onPause")
     }
 
@@ -503,9 +517,9 @@ class CameraGLSurfaceView @JvmOverloads constructor(
         currentSurface?.release()
         currentSurface = null
 
-        // 在 GL 线程中释放资源
-        queueEvent {
-            renderer.release()
-        }
+        // super has joined the GL thread and destroyed its EGL context. Queuing cleanup
+        // now would never run, leaving the old EIS consumer holding every future image.
+        // GL objects are owned by that destroyed context; release CPU/native ownership here.
+        renderer.releaseAfterGlThreadExit()
     }
 }

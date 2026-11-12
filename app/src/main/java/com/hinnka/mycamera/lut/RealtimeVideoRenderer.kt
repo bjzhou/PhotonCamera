@@ -1,14 +1,15 @@
 package com.hinnka.mycamera.lut
 
 import android.content.Context
+import android.media.Image
 import android.graphics.SurfaceTexture
+import android.opengl.GLES11Ext
 import android.opengl.EGL14
 import android.opengl.EGLConfig
 import android.opengl.EGLContext
 import android.opengl.EGLDisplay
 import android.opengl.EGLExt
 import android.opengl.EGLSurface
-import android.opengl.GLES11Ext
 import android.opengl.GLES30
 import android.opengl.Matrix
 import android.util.Size
@@ -20,6 +21,7 @@ import com.hinnka.mycamera.stabilization.StabilizationUseCase
 import com.hinnka.mycamera.utils.PLog
 import com.hinnka.mycamera.video.VideoEncoderColorConfig
 import com.hinnka.mycamera.video.VideoEncodedColorPipeline
+import com.hinnka.mycamera.video.VideoInputMode
 import com.hinnka.mycamera.video.VideoLogProfile
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
@@ -32,8 +34,8 @@ import kotlin.math.max
 /**
  * Camera2 录像专用实时渲染器。
  *
- * 普通录像从独立 [SurfaceTexture] 取 OES 帧；MGC 防抖录像改取与 CaptureResult 精确
- * 对时的共享 YUV 图像。两条路径最终都在专用 EGL context 中写入 MediaCodec surface，
+ * OES 录像使用独立 SurfaceTexture；YUV 录像消费共享 FIFO，EIS+ 消费防抖 YUV。
+ * 普通 YUV 和防抖 YUV 共用颜色转换器；所有输入在专用 EGL context 中写入 MediaCodec surface，
  * 因而录像帧率不受 GLSurfaceView 调度影响。
  */
 class RealtimeVideoRenderer(
@@ -50,6 +52,8 @@ class RealtimeVideoRenderer(
     private val enhancedStabilizationEnabled: Boolean,
     private val enhancedStabilizationStrength: Float,
     private val enhancedStabilizationLookahead: Int = DEFAULT_VIDEO_STABILIZATION_LOOKAHEAD,
+    private val inputMode: VideoInputMode = VideoInputMode.YUV,
+    private val sharedEisRgbFrames: SharedEisRgbFrameChannel? = null,
 ) {
     companion object {
         private const val TAG = "RealtimeVideoRenderer"
@@ -84,8 +88,9 @@ class RealtimeVideoRenderer(
     private val toneBase = ToneBaseGl(TAG)
     private val basicToneTextures = BasicToneGlTextures()
     private val filmGrainGl = FilmGrainGl(TAG)
-    private val mgcEisRenderer = MgcEisRenderer(TAG)
-    private val previewYuvRenderer = PreviewYuvRenderer(TAG)
+    private val timing = VideoRenderTiming.create("record")
+    private val mgcEisRenderer = MgcEisRenderer(TAG, timing)
+    private val previewYuvRenderer = PreviewYuvRenderer(TAG, timing)
     private val filmGrainAmount: Float
         get() = layers.lastOrNull { it.params.filmGrain > 0.001f }?.params?.filmGrain ?: 0f
     private val finalFilmGrainEnabled: Boolean
@@ -123,15 +128,17 @@ class RealtimeVideoRenderer(
     private val fullCropRect = floatArrayOf(0f, 0f, 1f, 1f)
     private var cameraCropRect = fullCropRect
     private var cameraTransformAxesSwapped: Boolean? = null
-    private val stMatrix = FloatArray(16).also { Matrix.setIdentityM(it, 0) }
     private val mgcEisPresentationTransform = MgcEisPresentationTransform()
 
     private var eglDisplay: EGLDisplay = EGL14.EGL_NO_DISPLAY
     private var eglContext: EGLContext = EGL14.EGL_NO_CONTEXT
     private var encoderEglSurface: EGLSurface = EGL14.EGL_NO_SURFACE
+    private val stMatrix = FloatArray(16).also { Matrix.setIdentityM(it, 0) }
     private var cameraTextureId = 0
     private var cameraSurfaceTexture: SurfaceTexture? = null
     private var cameraSurface: Surface? = null
+    private val cameraFramePending = AtomicBoolean(false)
+    val inputSurface: Surface? get() = cameraSurface
     private var intermediateTextureId = 0
     private var intermediateFboId = 0
     private var finalColorTextureId = 0
@@ -140,14 +147,14 @@ class RealtimeVideoRenderer(
     private var textureCoordinateBuffer: FloatBuffer? = null
     private var indexBuffer: ShortBuffer? = null
     private var initialized = false
-    private val cameraFramePending = AtomicBoolean(false)
     @Volatile
     private var stabilizationSession: RealtimeStabilizationCoordinator.Session? = null
     @Volatile
     private var stabilizationSessionStarted = false
+    @Volatile
+    private var sharedRgbProducer: SharedEisRgbFrameChannel.Producer? = null
+    private var sharedRgbPool: SharedEisRgbOutputPool? = null
 
-    val inputSurface: Surface?
-        get() = cameraSurface
 
     fun initialize(
         encoderSurface: Surface,
@@ -176,29 +183,25 @@ class RealtimeVideoRenderer(
             check(highlightDiffusionGl.prepare()) { "Cannot create realtime video highlight diffusion programs" }
         }
 
-        cameraTextureId = GlUtils.createOESTexture()
-        check(cameraTextureId != 0) { "Cannot create realtime video OES texture" }
-        cameraSurfaceTexture = SurfaceTexture(cameraTextureId).apply {
-            setDefaultBufferSize(cameraInputSize.width, cameraInputSize.height)
-            setOnFrameAvailableListener {
-                cameraFramePending.set(true)
-                if (!enhancedStabilizationEnabled ||
-                    stabilizationCoordinator?.isCurrentCameraSupported != true
-                ) {
+        check(!enhancedStabilizationEnabled || inputMode == VideoInputMode.YUV)
+        if (inputMode == VideoInputMode.OES) {
+            cameraTextureId = GlUtils.createOESTexture()
+            check(cameraTextureId != 0) { "Cannot create realtime video OES texture" }
+            cameraSurfaceTexture = SurfaceTexture(cameraTextureId).apply {
+                setDefaultBufferSize(cameraInputSize.width, cameraInputSize.height)
+                setOnFrameAvailableListener {
+                    cameraFramePending.set(true)
                     onFrameAvailable()
                 }
             }
-        }
-        cameraSurface = Surface(cameraSurfaceTexture)
-        if (enhancedStabilizationEnabled) {
-            check(
-                mgcEisPresentationTransform.captureFromSensorOrientation(
-                    sensorOrientationDegrees,
-                )
-            ) {
+            cameraSurface = Surface(cameraSurfaceTexture)
+        } else {
+            check(mgcEisPresentationTransform.captureFromSensorOrientation(sensorOrientationDegrees)) {
                 "Camera reported non-cardinal sensor orientation $sensorOrientationDegrees"
             }
             updateCameraTransformGeometry(mgcEisPresentationTransform.matrix)
+        }
+        if (enhancedStabilizationEnabled) {
             stabilizationSession = stabilizationCoordinator?.createSession(
                 useCase = StabilizationUseCase.VIDEO,
                 strength = enhancedStabilizationStrength,
@@ -223,7 +226,7 @@ class RealtimeVideoRenderer(
     }
 
     /**
-     * 消费 SurfaceTexture 中最新的一帧并写入编码器。必须在初始化所用的录像 GL 线程调用。
+     * 消费一帧 OES、共享 YUV 或防抖输出并写入编码器。必须在录像 GL 线程调用。
      *
      * [mapPresentationTimeNs] 将相机时间轴映射到编码器使用的公共时间轴。
      *
@@ -231,95 +234,124 @@ class RealtimeVideoRenderer(
      */
     fun renderLatestFrame(
         mapPresentationTimeNs: (cameraTimestampNs: Long) -> Long,
+        yuvImage: Image? = null,
     ): Long? {
         if (!initialized || !makeCurrent()) return null
-        val surfaceTexture = cameraSurfaceTexture ?: return null
-        val cameraFrameUpdated = cameraFramePending.getAndSet(false) &&
-            acquireLatestCameraFrame(surfaceTexture)
-        val cameraTimestampNs = surfaceTexture.timestamp
+        timing?.beginFrame()
+        try {
+            return renderCurrentFrame(mapPresentationTimeNs, yuvImage)
+        } finally {
+            timing?.endFrame()
+        }
+    }
 
-        var sourceTextureSource = PreviewColorTextureSource.EXTERNAL_OES
-        var sourceTextureTarget = GLES11Ext.GL_TEXTURE_EXTERNAL_OES
-        var sourceTextureId = cameraTextureId
-        var sourceStMatrix = stMatrix
+    private fun renderCurrentFrame(
+        mapPresentationTimeNs: (Long) -> Long,
+        yuvImage: Image?,
+    ): Long? {
+        var sourceTextureSource = PreviewColorTextureSource.TEXTURE_2D
+        var sourceTextureTarget = GLES30.GL_TEXTURE_2D
+        val sourceTextureId: Int
+        var sourceStMatrix = mgcEisPresentationTransform.matrix
         var sourceCropRect = cameraCropRect
-        var timestampNs = cameraTimestampNs
+        val timestampNs: Long
 
         val session = stabilizationSession
         val stabilizationOperational = enhancedStabilizationEnabled &&
             stabilizationSessionStarted && session?.isOperational == true
         if (stabilizationSessionStarted && !stabilizationOperational) {
+            sharedRgbProducer?.close()
+            sharedRgbProducer = null
             session?.stop()
             stabilizationSessionStarted = false
             mgcEisPresentationTransform.reset()
         }
         if (stabilizationOperational) {
-            val frame = session.dequeueFrame() ?: return null
+            val frame = timing.cpu("source.dequeue") { session.dequeueFrame() } ?: return null
             val rendered = renderMgcEisFrame(frame) ?: return null
-            sourceTextureSource = PreviewColorTextureSource.TEXTURE_2D
-            sourceTextureTarget = GLES30.GL_TEXTURE_2D
             sourceTextureId = rendered.textureId
-            sourceStMatrix = mgcEisPresentationTransform.matrix
-            sourceCropRect = cameraCropRect
             timestampNs = rendered.timestampNs
+        } else if (inputMode == VideoInputMode.OES) {
+            val surfaceTexture = cameraSurfaceTexture ?: return null
+            if (!cameraFramePending.getAndSet(false)) return null
+            timing.cpu("source.dequeue") {
+                surfaceTexture.updateTexImage()
+                surfaceTexture.getTransformMatrix(stMatrix)
+            }
+            updateCameraTransformGeometry(stMatrix)
+            sourceTextureSource = PreviewColorTextureSource.EXTERNAL_OES
+            sourceTextureTarget = GLES11Ext.GL_TEXTURE_EXTERNAL_OES
+            sourceTextureId = cameraTextureId
+            sourceStMatrix = stMatrix
+            sourceCropRect = cameraCropRect
+            timestampNs = surfaceTexture.timestamp
         } else {
-            if (!cameraFrameUpdated || cameraTimestampNs <= 0L) return null
+            if (enhancedStabilizationEnabled) return null
+            val image = yuvImage ?: return null
+            sourceTextureId = timing.cpu("yuv.total") { previewYuvRenderer.render(image) }
+            if (sourceTextureId == 0) return null
+            timestampNs = image.timestamp
         }
         if (timestampNs <= 0L) return null
         val presentationTimeNs = mapPresentationTimeNs(timestampNs)
         if (presentationTimeNs <= 0L) return null
 
-        val firstLayer = layers.first()
-        val postProcess = postProcessEnabled
-        val firstTargetFbo = if (layers.size > 1 || postProcess) intermediateFboId else 0
-        drawLayer(
-            layer = firstLayer,
-            targetFboId = firstTargetFbo,
-            textureSource = sourceTextureSource,
-            textureTarget = sourceTextureTarget,
-            textureId = sourceTextureId,
-            sourceStMatrix = sourceStMatrix,
-            cropRect = sourceCropRect,
-            mvpMatrix = firstPassMvpMatrix,
-            enableVideoLog = videoLogProfile.isEnabled,
-            presentationTimeNs = timestampNs,
-        )
+        timing.gpu("color.draw") {
+            val firstLayer = layers.first()
+            val postProcess = postProcessEnabled
+            val firstTargetFbo = if (layers.size > 1 || postProcess) intermediateFboId else 0
+            drawLayer(
+                layer = firstLayer,
+                targetFboId = firstTargetFbo,
+                textureSource = sourceTextureSource,
+                textureTarget = sourceTextureTarget,
+                textureId = sourceTextureId,
+                sourceStMatrix = sourceStMatrix,
+                cropRect = sourceCropRect,
+                mvpMatrix = firstPassMvpMatrix,
+                enableVideoLog = videoLogProfile.isEnabled,
+                presentationTimeNs = timestampNs,
+            )
 
-        if (layers.size > 1) {
-            layers.drop(1).forEachIndexed { index, layer ->
-                val isLast = index == layers.lastIndex - 1
-                drawLayer(
-                    layer = layer,
-                    targetFboId = if (isLast) {
-                        if (postProcess) finalColorFboId else 0
-                    } else {
-                        intermediateFboId
-                    },
-                    textureSource = PreviewColorTextureSource.TEXTURE_2D,
-                    textureTarget = GLES30.GL_TEXTURE_2D,
-                    textureId = intermediateTextureId,
-                    sourceStMatrix = identityMatrix,
-                    cropRect = fullCropRect,
-                    mvpMatrix = identityMatrix,
-                    enableVideoLog = false,
-                    presentationTimeNs = timestampNs,
+            if (layers.size > 1) {
+                layers.drop(1).forEachIndexed { index, layer ->
+                    val isLast = index == layers.lastIndex - 1
+                    drawLayer(
+                        layer = layer,
+                        targetFboId = if (isLast) {
+                            if (postProcess) finalColorFboId else 0
+                        } else {
+                            intermediateFboId
+                        },
+                        textureSource = PreviewColorTextureSource.TEXTURE_2D,
+                        textureTarget = GLES30.GL_TEXTURE_2D,
+                        textureId = intermediateTextureId,
+                        sourceStMatrix = identityMatrix,
+                        cropRect = fullCropRect,
+                        mvpMatrix = identityMatrix,
+                        enableVideoLog = false,
+                        presentationTimeNs = timestampNs,
+                    )
+                }
+            }
+
+            if (postProcess) {
+                drawPostProcess(
+                    colorTextureId = if (layers.size > 1) finalColorTextureId else intermediateTextureId,
+                    colorFramebufferId = if (layers.size > 1) finalColorFboId else intermediateFboId,
+                    timestampNs = timestampNs,
                 )
             }
+
         }
 
-        if (postProcess) {
-            drawPostProcess(
-                colorTextureId = if (layers.size > 1) finalColorTextureId else intermediateTextureId,
-                colorFramebufferId = if (layers.size > 1) finalColorFboId else intermediateFboId,
-                timestampNs = timestampNs,
-            )
-        }
-
-        EGLExt.eglPresentationTimeANDROID(eglDisplay, encoderEglSurface, presentationTimeNs)
-        if (!EGL14.eglSwapBuffers(eglDisplay, encoderEglSurface)) {
-            throw IllegalStateException(
-                "Realtime video eglSwapBuffers failed: 0x${Integer.toHexString(EGL14.eglGetError())}"
-            )
+        timing.cpu("encoder.submit") {
+            EGLExt.eglPresentationTimeANDROID(eglDisplay, encoderEglSurface, presentationTimeNs)
+            if (!EGL14.eglSwapBuffers(eglDisplay, encoderEglSurface)) {
+                throw IllegalStateException(
+                    "Realtime video eglSwapBuffers failed: 0x${Integer.toHexString(EGL14.eglGetError())}"
+                )
+            }
         }
         return presentationTimeNs
     }
@@ -373,42 +405,43 @@ class RealtimeVideoRenderer(
         check(error == GLES30.GL_NO_ERROR) { "Realtime video post-process output glError=$error" }
     }
 
-    private fun acquireLatestCameraFrame(surfaceTexture: SurfaceTexture): Boolean {
-        return try {
-            surfaceTexture.updateTexImage()
-            surfaceTexture.getTransformMatrix(stMatrix)
-            if (enhancedStabilizationEnabled &&
-                !mgcEisPresentationTransform.captureFromOes(stMatrix)
-            ) {
-                PLog.w(TAG, "MGC cannot derive a cardinal presentation orientation yet")
-            }
-            updateCameraTransformGeometry(
-                if (enhancedStabilizationEnabled) {
-                    mgcEisPresentationTransform.matrix
-                } else {
-                    stMatrix
-                },
-            )
-            true
-        } catch (error: RuntimeException) {
-            PLog.e(TAG, "Failed to acquire realtime video frame", error)
-            false
-        }
-    }
-
     private fun renderMgcEisFrame(
         frame: com.hinnka.mycamera.stabilization.StabilizationFrame,
     ): MgcEisRenderer.Frame? {
         return frame.image.use { image ->
-            val textureId = previewYuvRenderer.render(image.image)
+            val textureId = timing.cpu("yuv.total") { previewYuvRenderer.render(image.image) }
             if (textureId == 0) return null
-            mgcEisRenderer.render(
-                textureId = textureId,
-                width = image.width,
-                height = image.height,
-                timestampNs = frame.timestampNs,
-                rowHomographies = frame.transform?.rowHomographies,
-            )
+            val producer = sharedRgbProducer
+            val output = timing.cpu("geometry.target") {
+                val pool = if (producer != null) {
+                    sharedRgbPool ?: SharedEisRgbOutputPool(image.width, image.height).also {
+                        sharedRgbPool = it
+                        PLog.i(TAG, "Shared EIS RGB producer configured: ${image.width}x${image.height}, slots=3")
+                    }
+                } else null
+                var lease = pool?.acquire()
+                if (lease == null && pool != null) {
+                    producer?.discardPendingFrame()
+                    lease = pool.acquire()
+                }
+                lease
+            }
+            output.use { lease ->
+                val rendered = timing.cpu("geometry.total") {
+                    mgcEisRenderer.render(
+                        textureId = textureId,
+                        width = image.width,
+                        height = image.height,
+                        timestampNs = frame.timestampNs,
+                        rowHomographies = frame.transform?.rowHomographies,
+                        target = lease?.target,
+                    )
+                }
+                if (rendered != null && lease != null) {
+                    timing.cpu("shared.publish") { producer?.publish(lease.finish(frame.timestampNs)) }
+                }
+                rendered
+            }
         }
     }
 
@@ -949,6 +982,8 @@ class RealtimeVideoRenderer(
 
     @Synchronized
     fun pauseStabilization() {
+        sharedRgbProducer?.close()
+        sharedRgbProducer = null
         stabilizationSession?.stop()
         stabilizationSessionStarted = false
     }
@@ -957,9 +992,12 @@ class RealtimeVideoRenderer(
     fun resumeStabilization() {
         if (!enhancedStabilizationEnabled || stabilizationSessionStarted) return
         stabilizationSessionStarted = stabilizationSession?.start() == true
+        if (stabilizationSessionStarted) sharedRgbProducer = sharedEisRgbFrames?.openProducer()
     }
 
     fun release() {
+        sharedRgbProducer?.close()
+        sharedRgbProducer = null
         stabilizationSession?.stop()
         stabilizationSession = null
         stabilizationSessionStarted = false
@@ -974,7 +1012,14 @@ class RealtimeVideoRenderer(
         cameraSurface = null
         cameraSurfaceTexture?.release()
         cameraSurfaceTexture = null
-
+        if (cameraTextureId != 0) {
+            GLES30.glDeleteTextures(1, intArrayOf(cameraTextureId), 0)
+            cameraTextureId = 0
+        }
+        cameraFramePending.set(false)
+        timing?.closeGl()
+        sharedRgbPool?.close()
+        sharedRgbPool = null
         layers.forEach { layer ->
             if (layer.lutTextureId != 0) {
                 GLES30.glDeleteTextures(1, intArrayOf(layer.lutTextureId), 0)
@@ -984,10 +1029,6 @@ class RealtimeVideoRenderer(
                 GLES30.glDeleteTextures(1, intArrayOf(layer.curveTextureId), 0)
                 layer.curveTextureId = 0
             }
-        }
-        if (cameraTextureId != 0) {
-            GLES30.glDeleteTextures(1, intArrayOf(cameraTextureId), 0)
-            cameraTextureId = 0
         }
         if (intermediateTextureId != 0) {
             GLES30.glDeleteTextures(1, intArrayOf(intermediateTextureId), 0)

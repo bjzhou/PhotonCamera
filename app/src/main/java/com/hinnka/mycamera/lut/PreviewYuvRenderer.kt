@@ -23,7 +23,7 @@ import java.nio.ByteOrder
  * Shared by ordinary preview and EIS; stabilization operates only on this converter's RGB output.
  * Readers retain their default usage: GPU_SAMPLED_IMAGE caused swapped Cb/Cr on Xiaomi 11.
  */
-internal class PreviewYuvRenderer(private val tag: String) {
+internal class PreviewYuvRenderer(private val tag: String, private val timing: VideoRenderTiming? = null) {
     private enum class Path { RAW_YUV, PLANES }
 
     private var y2yProgram: Program? = null
@@ -46,10 +46,11 @@ internal class PreviewYuvRenderer(private val tag: String) {
     private val offset = FloatArray(3)
 
     /** Borrows [image] through GPU sampling completion; the caller retains ownership. */
-    fun render(image: Image): Int {
+    fun render(image: Image, width: Int = image.width, height: Int = image.height): Int {
         try {
             if (image.width <= 0 || image.height <= 0) return 0
-            if (!ensureTarget(image.width, image.height)) return 0
+            require(width > 0 && height > 0)
+            if (!ensureTarget(width, height)) return 0
             resolveConversion(if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) image.dataSpace else 0)
             val drawn = (!importDisabled && drawImported(image)) || drawPlanes(image)
             return if (drawn) outputTextureId else 0
@@ -64,28 +65,30 @@ internal class PreviewYuvRenderer(private val tag: String) {
         val rawYuv = yuvTargetSupported ?: queryYuvTarget().also { yuvTargetSupported = it }
         if (!rawYuv) return disableImport("GL_EXT_YUV_target unavailable")
         val buffer = image.hardwareBuffer ?: return disableImport("Image has no HardwareBuffer")
-        val handle = buffer.use { GlesHardwareBufferImage.create(it) }
+        val handle = timing.cpu("yuv.import") { buffer.use { GlesHardwareBufferImage.create(it) } }
         if (handle == 0L) return disableImport("EGLImage import failed")
         try {
             if (externalTextureId == 0) externalTextureId = GlUtils.createOESTexture()
-            if (!GlesHardwareBufferImage.bind(handle, externalTextureId)) {
+            if (!timing.cpu("yuv.bind") { GlesHardwareBufferImage.bind(handle, externalTextureId) }) {
                 return disableImport("EGLImage bind failed")
             }
             val program = y2yProgram ?: buildProgram(Y2Y_FRAGMENT_SHADER)?.also { y2yProgram = it }
                 ?: return disableImport("External program unavailable")
-            beginDraw(program)
-            GLES30.glActiveTexture(GLES30.GL_TEXTURE0)
-            GLES30.glBindTexture(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, externalTextureId)
-            GLES30.glUniform1i(program.samplers[0], 0)
-            drawQuad(program)
+            timing.gpu("yuv.draw") {
+                beginDraw(program)
+                GLES30.glActiveTexture(GLES30.GL_TEXTURE0)
+                GLES30.glBindTexture(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, externalTextureId)
+                GLES30.glUniform1i(program.samplers[0], 0)
+                drawQuad(program)
+            }
             // The camera recycles the buffer once the Image is closed; sampling must complete first.
-            awaitGpu()
+            timing.cpu("yuv.wait") { awaitGpu() }
             GLES30.glBindTexture(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, 0)
             endDraw()
             reportPath(Path.RAW_YUV)
             return true
         } finally {
-            GlesHardwareBufferImage.destroy(handle)
+            timing.cpu("yuv.release") { GlesHardwareBufferImage.destroy(handle) }
         }
     }
 
@@ -107,15 +110,17 @@ internal class PreviewYuvRenderer(private val tag: String) {
         }
         val program = planeProgram ?: buildProgram(PLANE_FRAGMENT_SHADER)?.also { planeProgram = it }
             ?: return false
-        beginDraw(program)
-        for (index in 0..2) {
-            GLES30.glActiveTexture(GLES30.GL_TEXTURE0 + index)
-            GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, planeTextureIds[index])
-            GLES30.glUniform1i(program.samplers[index], index)
+        timing.gpu("yuv.draw") {
+            beginDraw(program)
+            for (index in 0..2) {
+                GLES30.glActiveTexture(GLES30.GL_TEXTURE0 + index)
+                GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, planeTextureIds[index])
+                GLES30.glUniform1i(program.samplers[index], index)
+            }
+            GLES30.glUniform2i(program.imageSizeLocation, image.width, image.height)
+            GLES30.glUniform2i(program.chromaStepLocation, image.planes[1].pixelStride, image.planes[2].pixelStride)
+            drawQuad(program)
         }
-        GLES30.glUniform2i(program.imageSizeLocation, image.width, image.height)
-        GLES30.glUniform2i(program.chromaStepLocation, image.planes[1].pixelStride, image.planes[2].pixelStride)
-        drawQuad(program)
         for (index in 2 downTo 0) {
             GLES30.glActiveTexture(GLES30.GL_TEXTURE0 + index)
             GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, 0)

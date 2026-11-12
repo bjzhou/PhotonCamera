@@ -324,6 +324,7 @@ fun CameraScreen(
     }
     LifecycleEventEffect(Lifecycle.Event.ON_PAUSE) {
         lensSwitchTransition.cancel()
+        viewModel.pauseCameraScreen()
         viewModel.setLocationTrackingForeground(false)
     }
 
@@ -1356,6 +1357,7 @@ fun CameraScreen(
                             focusPeakingEnabled = focusPeakingEnabled && !state.isHyperfocalFocusEnabled,
                             stabilizationCoordinator = viewModel.realtimeStabilizationCoordinator,
                             previewYuvChannel = viewModel.previewYuvChannel,
+                            sharedEisRgbFrames = viewModel.sharedEisRgbFrames,
                             stabilizationInputSize = if (
                                 state.captureMode == CaptureMode.VIDEO &&
                                 state.videoConfig.stabilizationMode ==

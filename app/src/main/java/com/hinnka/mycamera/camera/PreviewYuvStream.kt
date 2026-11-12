@@ -3,12 +3,16 @@ package com.hinnka.mycamera.camera
 import com.hinnka.mycamera.stabilization.StabilizationImageReader
 import java.util.concurrent.atomic.AtomicReference
 
-/** Latest-frame-wins hand-off for the shared photo YUV stream when stabilization is off. */
+/** Latest-frame-wins preview lease from the shared photo/video YUV input. */
 class PreviewYuvFrameChannel {
     private val latest = AtomicReference<StabilizationImageReader.AcquiredImage?>(null)
 
-    @Volatile
-    var onFrameAvailable: (() -> Unit)? = null
+    private val listener = AtomicReference<(() -> Unit)?>(null)
+    var onFrameAvailable: (() -> Unit)?
+        get() = listener.get()
+        set(value) { listener.set(value) }
+
+    internal fun clearListener(expected: () -> Unit): Boolean = listener.compareAndSet(expected, null)
 
     internal fun publish(frame: StabilizationImageReader.AcquiredImage) {
         latest.getAndSet(frame)?.close()

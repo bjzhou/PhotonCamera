@@ -79,8 +79,13 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
     private val colorProgramCache = PreviewColorProgramCache()
     private val enginePreview = RawEnginePreviewGl()
     private val mgcEisRenderer = MgcEisRenderer(TAG)
-    private val previewYuvRenderer = PreviewYuvRenderer(TAG)
+    private val previewTiming = VideoRenderTiming.create("viewfinder")
+    private val previewYuvRenderer = PreviewYuvRenderer(TAG, previewTiming)
+    private val sharedRgbPreviewRenderer = SharedEisRgbPreviewRenderer(TAG)
+    private var sharedRgbChannel: SharedEisRgbFrameChannel? = null
+    private var sharedRgbConsumer: SharedEisRgbFrameChannel.Consumer? = null
     private var previewYuvChannel: PreviewYuvFrameChannel? = null
+    private val previewYuvFrameAvailable: () -> Unit = { onRequestRender?.invoke() }
     private val previewYuvMatrix = FloatArray(16).apply { Matrix.setIdentityM(this, 0) }
 
     private data class PreviewCaptureRequest(
@@ -625,6 +630,8 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
         enginePreview.reset()
         mgcEisRenderer.resetAfterContextLoss()
         previewYuvRenderer.resetAfterContextLoss()
+        previewTiming?.resetAfterContextLoss()
+        sharedRgbPreviewRenderer.resetAfterContextLoss()
         cameraTextureId = 0
         currentCameraTextureId = 0
         currentCameraTextureSource = PreviewColorTextureSource.EXTERNAL_OES
@@ -1133,16 +1140,33 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
     override fun onDrawFrame(gl: GL10?) {
         if (renderingPaused) return
         if (viewportWidth <= 0 || viewportHeight <= 0) return
+        previewTiming?.beginFrame()
+        try {
+            drawPreviewFrame()
+        } finally {
+            previewTiming?.endFrame()
+        }
+    }
+
+    private fun drawPreviewFrame() {
 
         val delayedStabilizationRequested = previewStabilizationUseCase != null
         val delayedStabilizationEnabled = delayedStabilizationRequested &&
             stabilizationCoordinator?.isCurrentCameraSupported == true
+        val sharedVideoPreview = delayedStabilizationEnabled &&
+            previewStabilizationUseCase == StabilizationUseCase.VIDEO &&
+            sharedRgbConsumer?.isActive == true
+        if (sharedVideoPreview && stabilizationSessionStarted) {
+            stabilizationSession?.stop()
+            stabilizationSessionStarted = false
+            PLog.i(TAG, "Video preview switched to shared recording EIS RGB")
+        }
         if (!delayedStabilizationEnabled && stabilizationSessionStarted) {
             stabilizationSession?.stop()
             stabilizationSessionStarted = false
             mgcEisPresentationTransform.reset()
         }
-        if (delayedStabilizationEnabled && !stabilizationSessionStarted) {
+        if (delayedStabilizationEnabled && !sharedVideoPreview && !stabilizationSessionStarted) {
             stabilizationSessionStarted = stabilizationSession?.start() == true
         }
         val oesFrameUpdated = frameAvailable.getAndSet(false) && acquireLatestCameraFrame()
@@ -1164,13 +1188,22 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
                 PLog.w(TAG, "MGC cannot derive presentation from sensor orientation $sensorOrientation")
             }
             val session = stabilizationSession
-            if (!stabilizationSessionStarted) {
+            if (sharedVideoPreview) {
+                sharedRgbConsumer?.take()?.use { frame ->
+                    currentCameraTextureId = sharedRgbPreviewRenderer.render(frame)
+                    currentCameraTextureSource = PreviewColorTextureSource.TEXTURE_2D
+                    currentCameraTextureTarget = GLES30.GL_TEXTURE_2D
+                    currentCameraTextureMatrix = mgcEisPresentationTransform.matrix
+                    currentFrameTimestampNs = frame.timestampNs
+                    cameraFrameUpdated = true
+                }
+            } else if (!stabilizationSessionStarted) {
                 stabilizationSessionStarted = session?.start() == true
             }
             if (stabilizationSessionStarted) {
-                val completedFrame = if (previewStabilizationUseCase == StabilizationUseCase.PHOTO_PREVIEW &&
-                    livePhotoRecorder == null
-                ) {
+                // Video has its own FIFO recording consumer. Preview may skip completed
+                // frames independently; Live Photo still records through this renderer.
+                val completedFrame = if (livePhotoRecorder == null) {
                     session?.dequeueLatestFrame()
                 } else {
                     session?.dequeueFrame()
@@ -1452,7 +1485,12 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
     /** Converts a viewfinder YUV frame and makes it the camera texture. Always closes [frame]. */
     private fun usePreviewYuvFrame(frame: StabilizationImageReader.AcquiredImage): Boolean {
         val timestampNs = frame.timestampNs
-        val textureId = frame.use { previewYuvRenderer.render(it.image) }
+        val textureId = previewTiming.cpu("yuv.total") {
+            frame.use {
+                val size = cameraPreviewTextureSize(it.width, it.height)
+                previewYuvRenderer.render(it.image, size.width, size.height)
+            }
+        }
         if (textureId == 0) return false
         val matrix = resolvePreviewYuvPresentationMatrix(sensorOrientation, lensFacing == 0) ?: run {
             PLog.w(TAG, "Preview YUV frame has non-cardinal sensor orientation $sensorOrientation")
@@ -1470,11 +1508,20 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
     fun setPreviewYuvChannel(channel: PreviewYuvFrameChannel?) {
         if (previewYuvChannel === channel) return
         previewYuvChannel?.let { previous ->
-            previous.onFrameAvailable = null
-            previous.take()?.close()
+            // A replacement view may already own this shared channel.
+            if (previous.clearListener(previewYuvFrameAvailable)) {
+                previous.take()?.close()
+            }
         }
         previewYuvChannel = channel
-        channel?.onFrameAvailable = { onRequestRender?.invoke() }
+        channel?.onFrameAvailable = previewYuvFrameAvailable
+    }
+
+    fun setSharedEisRgbFrames(channel: SharedEisRgbFrameChannel?) {
+        if (sharedRgbChannel === channel) return
+        sharedRgbConsumer?.close()
+        sharedRgbChannel = channel
+        sharedRgbConsumer = channel?.openConsumer { onRequestRender?.invoke() }
     }
 
     private fun useCurrentOesFrame() {
@@ -2612,7 +2659,10 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
                 onFrameAvailable = { onRequestRender?.invoke() },
             )
         }
-        stabilizationSessionStarted = stabilizationSession?.start() == true
+        val sharedVideoPreview = previewStabilizationUseCase == StabilizationUseCase.VIDEO &&
+            sharedRgbConsumer?.isActive == true
+        stabilizationSessionStarted = !renderingPaused && !sharedVideoPreview &&
+            stabilizationSession?.start() == true
         currentCameraTextureSource = PreviewColorTextureSource.EXTERNAL_OES
         currentCameraTextureTarget = GLES11Ext.GL_TEXTURE_EXTERNAL_OES
         currentCameraTextureId = cameraTextureId
@@ -2625,12 +2675,13 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
         frame: com.hinnka.mycamera.stabilization.StabilizationFrame,
     ): MgcEisRenderer.Frame? {
         return frame.image.use { image ->
-            val textureId = previewYuvRenderer.render(image.image)
+            val size = cameraPreviewTextureSize(image.width, image.height)
+            val textureId = previewYuvRenderer.render(image.image, size.width, size.height)
             if (textureId == 0) return null
             mgcEisRenderer.render(
                 textureId = textureId,
-                width = image.width,
-                height = image.height,
+                width = size.width,
+                height = size.height,
                 timestampNs = frame.timestampNs,
                 rowHomographies = frame.transform?.rowHomographies,
             )
@@ -3406,10 +3457,19 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
      */
     fun getSurfaceTexture(): SurfaceTexture? = surfaceTexture
 
-    /**
-     * 释放资源
-     */
-    fun release() {
+    /** Called only after GLSurfaceView has joined its GL thread and destroyed its EGL context. */
+    fun releaseAfterGlThreadExit() {
+        releaseNonGlResources()
+        resetGlResourceState()
+        PLog.d(TAG, "Released preview consumers after GL thread exit")
+    }
+
+    private fun releaseNonGlResources() {
+        renderingPaused = true
+        setPreviewYuvChannel(null)
+        sharedRgbConsumer?.close()
+        sharedRgbConsumer = null
+        sharedRgbChannel = null
         stabilizationSession?.stop()
         stabilizationSession = null
         stabilizationCoordinator = null
@@ -3420,6 +3480,28 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
         } catch (e: Exception) {
             PLog.e(TAG, "Error shutting down metering executor", e)
         }
+        nightVisionEstimator.close()
+        // 释放 SurfaceTexture
+        surfaceTexture?.release()
+        surfaceTexture = null
+        frameAvailable.set(false)
+
+        // 重置状态
+        surfaceReady = false
+        pendingLutConfig = null
+        pendingBaselineLutConfig = null
+        currentLutConfig = null
+        currentBaselineLutConfig = null
+        onEyeFocusInputAvailable = null
+        isEyeFocusBusy = false
+        resetEyeFocusTiming()
+        onRequestRender = null
+        onSurfaceTextureAvailable = null
+    }
+
+    fun release() {
+        releaseNonGlResources()
+        previewTiming?.closeGl()
         // 删除纹理
         if (cameraTextureId != 0) {
             GlUtils.deleteTexture(cameraTextureId)
@@ -3499,7 +3581,6 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
         }
         releasePixelPackPbos(meteringPboIds, meteringPboFences)
         releaseNightVisionGl()
-        nightVisionEstimator.close()
 
         if (meteringFboId != 0) {
             GLES30.glDeleteFramebuffers(1, intArrayOf(meteringFboId), 0)
@@ -3535,8 +3616,8 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
         }
         basicToneTextures.release()
         mgcEisRenderer.release()
-        previewYuvChannel?.take()?.close()
         previewYuvRenderer.release()
+        sharedRgbPreviewRenderer.release()
         // 删除程序
         colorProgramCache.release()
         enginePreview.release()
@@ -3545,20 +3626,7 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
         GlUtils.deleteProgram(copyProgramId)
         copyProgramId = 0
 
-        // 释放 SurfaceTexture
-        surfaceTexture?.release()
-        surfaceTexture = null
-        frameAvailable.set(false)
 
-        // 重置状态
-        surfaceReady = false
-        pendingLutConfig = null
-        pendingBaselineLutConfig = null
-        currentLutConfig = null
-        currentBaselineLutConfig = null
-        onEyeFocusInputAvailable = null
-        isEyeFocusBusy = false
-        resetEyeFocusTiming()
     }
 
     /**

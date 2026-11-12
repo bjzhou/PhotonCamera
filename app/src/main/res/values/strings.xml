@@ -1515,4 +1515,11 @@
     <string name="aesthetic_show_in_gallery">Show scores in gallery</string>
     <string name="aesthetic_show_in_gallery_description">Scores photos in the background as you browse.</string>
     <string name="aesthetic_note">Scored by an on-device CLIP aesthetic model (LAION Aesthetic Predictor) trained on large-scale human ratings. It reflects broad visual appeal rather than artistic intent, so use it as a reference.</string>
+    <string name="settings_video_input_mode">Video processing</string>
+    <string name="settings_video_input_mode_description">Choose who converts video colors: the system or the app. Both modes support filters; EIS+ requires App processing.</string>
+    <string name="settings_video_input_eis_required">EIS+ is enabled, so App processing is required. Turn off EIS+ to choose another mode.</string>
+    <string name="settings_video_input_oes">System processing</string>
+    <string name="settings_video_input_yuv">App processing</string>
+    <string name="settings_video_nr_yuv_description">App processing does not support High quality noise reduction. Fast is used instead when High quality is selected.</string>
+    <string name="settings_oppo_super_stabilization_yuv_disabled">Unavailable with App processing. Switch to System processing to use Ultra Steady.</string>
 </resources>

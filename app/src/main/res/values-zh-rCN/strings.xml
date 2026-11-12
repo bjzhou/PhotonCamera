@@ -1490,4 +1490,11 @@
     <string name="aesthetic_show_in_gallery">在相册列表显示评分</string>
     <string name="aesthetic_show_in_gallery_description">浏览时在后台为照片评分。</string>
     <string name="aesthetic_note">评分来自端侧 CLIP 美学模型（LAION Aesthetic Predictor），基于大规模人类审美打分训练，反映大众视觉偏好而非创作意图，仅供参考。</string>
+    <string name="settings_video_input_mode">视频处理方式</string>
+    <string name="settings_video_input_mode_description">选择由系统或应用进行画面色彩转换。两种方式均支持滤镜；EIS+ 需要使用应用处理。</string>
+    <string name="settings_video_input_eis_required">EIS+ 已启用，固定使用应用处理。关闭 EIS+ 后可切换。</string>
+    <string name="settings_video_input_oes">系统处理</string>
+    <string name="settings_video_input_yuv">应用处理</string>
+    <string name="settings_video_nr_yuv_description">应用处理不支持高质量降噪；原设置为高质量时，改用快速模式。</string>
+    <string name="settings_oppo_super_stabilization_yuv_disabled">应用处理下不可用，切换至系统处理后可使用超级防抖。</string>
 </resources>

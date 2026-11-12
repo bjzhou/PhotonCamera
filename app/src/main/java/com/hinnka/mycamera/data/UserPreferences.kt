@@ -59,6 +59,8 @@ import com.hinnka.mycamera.video.VideoLogProfile
 import com.hinnka.mycamera.video.VideoRecordingPath
 import com.hinnka.mycamera.video.VideoResolutionPreset
 import com.hinnka.mycamera.video.VideoStabilizationMode
+import com.hinnka.mycamera.video.VideoInputMode
+import com.hinnka.mycamera.video.VideoPipelineSettings
 import kotlin.properties.ReadOnlyProperty
 import kotlin.properties.ReadWriteProperty
 import kotlin.reflect.KProperty
@@ -522,6 +524,18 @@ class UserPreferences internal constructor(
         p[K.VIDEO_STABILIZATION_MODE] = v.name
         p.remove(K.VIDEO_ENHANCED_STABILIZATION_ENABLED)
     }
+    var videoInputMode by enum("video_input_mode", VideoInputMode.OES)
+    val effectiveVideoInputMode: VideoInputMode
+        get() = videoInputMode.withStabilization(videoStabilizationMode)
+    val effectiveVideoNrLevel: Int
+        get() = effectiveVideoInputMode.resolveNoiseReduction(videoNrLevel)
+    val effectiveOppoSuperStabilizationEnabled: Boolean
+        get() = effectiveVideoInputMode.allowsOppoSuperStabilization() && oppoSuperStabilizationEnabled
+    val videoPipelineSettings: VideoPipelineSettings
+        get() = VideoPipelineSettings(
+            videoInputMode, videoStabilizationMode, videoNrLevel, videoEdgeLevel,
+            oppoSuperStabilizationEnabled,
+        )
     var videoEnhancedStabilizationStrength: Float by stored({ p ->
         normalizeStabilizationStrength(p[K.VIDEO_ENHANCED_STABILIZATION_STRENGTH] ?: DEFAULT_VIDEO_STABILIZATION_STRENGTH)
     }) { p, v -> p[K.VIDEO_ENHANCED_STABILIZATION_STRENGTH] = normalizeStabilizationStrength(v) }

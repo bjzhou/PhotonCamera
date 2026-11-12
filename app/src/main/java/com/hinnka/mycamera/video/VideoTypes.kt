@@ -134,6 +134,7 @@ enum class VideoLogLutMode {
 }
 
 data class VideoConfig(
+    val inputMode: VideoInputMode = VideoInputMode.OES,
     val resolution: VideoResolutionPreset = VideoResolutionPreset.FHD_1080P,
     val fps: VideoFpsPreset = VideoFpsPreset.FPS_30,
     val aspectRatio: VideoAspectRatio = VideoAspectRatio.RATIO_16_9,
@@ -151,6 +152,9 @@ data class VideoConfig(
     val lensLockEnabled: Boolean = false,
     val whiteBalanceLockEnabled: Boolean = false
 ) {
+    val effectiveInputMode: VideoInputMode
+        get() = inputMode.withStabilization(stabilizationMode)
+
     fun resolveOutputSize(openGatePortraitAspectRatio: Float, cameraInputSize: Size): Size {
         if (aspectRatio == VideoAspectRatio.OPEN_GATE) {
             // Keep the full-sensor input aspect, scaled down to the selected preset.

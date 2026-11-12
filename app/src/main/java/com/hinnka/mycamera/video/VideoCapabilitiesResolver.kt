@@ -4,7 +4,6 @@ import android.graphics.ImageFormat
 import android.graphics.SurfaceTexture
 import android.hardware.camera2.CameraCharacteristics
 import android.hardware.camera2.CaptureRequest
-import android.media.MediaRecorder
 import android.os.Build
 import android.util.Range
 import android.util.Size
@@ -15,7 +14,6 @@ import kotlin.math.abs
 object VideoCapabilitiesResolver {
 
     private const val TAG = "VideoCapabilitiesResolver"
-    private const val VIDEO_PREVIEW_SHORT_EDGE = 1080
     private const val VIDEO_PREVIEW_ASPECT_TOLERANCE = 0.01f
     private const val EIGHT_MP_SOURCE_MIN_PIXELS = 7_500_000L
     private const val EIGHT_MP_SOURCE_MAX_PIXELS = 12_000_000L
@@ -36,39 +34,24 @@ object VideoCapabilitiesResolver {
         ) ?: intArrayOf()
         val isFlashSupported = characteristics.get(CameraCharacteristics.FLASH_INFO_AVAILABLE) ?: false
         val streamConfigMap = characteristics.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP)
-        val previewOutputSizes = streamConfigMap?.getOutputSizes(SurfaceTexture::class.java)?.toList().orEmpty()
         val yuvOutputSizes = streamConfigMap?.getOutputSizes(ImageFormat.YUV_420_888)?.toList().orEmpty()
-        // Dedicated recording uses a SurfaceTexture input, including full-sensor sizes
-        // that may not be advertised for MediaRecorder.
-        // 无原生 4K 录制流但存在 8MP 级 4:3 源时，同样以 SurfaceTexture 流作为录制门控。
-        val advertisedRecordingSizes = resolveRecordingOutputSizes(characteristics)
-        val hasNativeUhdRecordingSize = advertisedRecordingSizes.any {
-            maxOf(it.width, it.height) >= VideoResolutionPreset.UHD_2160P.longEdge
-        }
-        val recordingOutputSizes = when {
-            requestedConfig.aspectRatio == VideoAspectRatio.OPEN_GATE -> previewOutputSizes
-            !hasNativeUhdRecordingSize && previewOutputSizes.any(::isEightMpFourThreeSource) ->
-                previewOutputSizes
-            else -> advertisedRecordingSizes
-        }
+        val usesYuv = requestedConfig.effectiveInputMode == VideoInputMode.YUV
+        val oesOutputSizes = streamConfigMap?.getOutputSizes(SurfaceTexture::class.java)?.toList().orEmpty()
+        val inputOutputSizes = if (usesYuv) yuvOutputSizes else oesOutputSizes
         val sensorOrientation = characteristics.get(CameraCharacteristics.SENSOR_ORIENTATION) ?: 0
         val activeArray = characteristics.get(CameraCharacteristics.SENSOR_INFO_ACTIVE_ARRAY_SIZE)
         val openGateAspect = resolveOpenGatePortraitAspectRatio(activeArray, sensorOrientation)
 
         val availableResolutions = VideoResolutionPreset.entries.filter { preset ->
             preset.isAvailableFor(requestedConfig.aspectRatio) &&
-            findBestOutputSize(recordingOutputSizes, preset, requestedConfig.aspectRatio, openGateAspect) != null &&
-                findBestOutputSize(previewOutputSizes, preset, requestedConfig.aspectRatio, openGateAspect) != null
+                findBestOutputSize(inputOutputSizes, preset, requestedConfig.aspectRatio, openGateAspect) != null
         }
 
-        val recordingSizesByResolution = availableResolutions.mapNotNull { preset ->
-            findBestOutputSize(recordingOutputSizes, preset, requestedConfig.aspectRatio, openGateAspect)
-                ?.let { preset to it }
-        }.toMap()
         val cameraInputSizesByResolution = availableResolutions.mapNotNull { preset ->
-            findBestOutputSize(previewOutputSizes, preset, requestedConfig.aspectRatio, openGateAspect)
+            findBestOutputSize(inputOutputSizes, preset, requestedConfig.aspectRatio, openGateAspect)
                 ?.let { preset to it }
         }.toMap()
+        val recordingSizesByResolution = cameraInputSizesByResolution
         val enhancedStabilizationInputSizesByResolution = availableResolutions.mapNotNull { preset ->
             findBestOutputSize(yuvOutputSizes, preset, requestedConfig.aspectRatio, openGateAspect)
                 ?.let { preset to it }
@@ -83,19 +66,19 @@ object VideoCapabilitiesResolver {
                 requestedConfig.aspectRatio.getPortraitAspectRatio(openGateAspect)
             )
 
-        val previewSize = findFixedPreviewOutputSize(
-            outputSizes = previewOutputSizes,
-            aspectRatio = requestedConfig.aspectRatio,
-            openGatePortraitAspectRatio = openGateAspect
-        ) ?: VideoResolutionPreset.FHD_1080P.resolveOutputSize(
-            requestedConfig.aspectRatio.getPortraitAspectRatio(openGateAspect)
-        )
-        val cameraInputSize = cameraInputSizesByResolution[resolvedResolution] ?: previewSize
+        val cameraInputSize = cameraInputSizesByResolution[resolvedResolution]
+            ?: inputOutputSizes.maxByOrNull { it.width.toLong() * it.height }
+            ?: recordingSize
+        val previewSize = if (usesYuv) cameraInputSize else {
+            findFixedPreviewOutputSize(oesOutputSizes, requestedConfig.aspectRatio, openGateAspect)
+                ?: cameraInputSize
+        }
 
         val availableFps = resolveAvailableFps(
             characteristics = characteristics,
             cameraInputSize = cameraInputSize,
-            previewSize = previewSize
+            previewSize = previewSize,
+            usesYuv = usesYuv,
         )
         val resolvedFps = requestedConfig.fps.takeIf { availableFps.contains(it) }
             ?: availableFps.firstOrNull()
@@ -137,6 +120,13 @@ object VideoCapabilitiesResolver {
             else VideoStabilizationMode.OFF
         }
 
+        // A rejected EIS+ request must also resolve sizes for the restored input format.
+        if (requestedConfig.inputMode.withStabilization(resolvedStabilizationMode) !=
+            requestedConfig.effectiveInputMode
+        ) {
+            return resolve(characteristics, requestedConfig.copy(stabilizationMode = resolvedStabilizationMode),
+                algorithmicStabilizationSupported = false)
+        }
         return VideoCapabilitySnapshot(
             config = requestedConfig.copy(
                 resolution = resolvedResolution,
@@ -256,7 +246,7 @@ object VideoCapabilitiesResolver {
         }
         val candidates = aspectMatchedSizes.ifEmpty { validSizes }
         val sizesWithinLimit = candidates.filter {
-            minOf(it.width, it.height) <= VIDEO_PREVIEW_SHORT_EDGE
+            minOf(it.width, it.height) <= 1080 && maxOf(it.width, it.height) <= 1920
         }
 
         return if (sizesWithinLimit.isNotEmpty()) {
@@ -277,12 +267,13 @@ object VideoCapabilitiesResolver {
     private fun resolveAvailableFps(
         characteristics: CameraCharacteristics,
         cameraInputSize: Size,
-        previewSize: Size
+        previewSize: Size,
+        usesYuv: Boolean,
     ): List<VideoFpsPreset> {
         val outputRanges = characteristics.readMetadataOrNull(CameraCharacteristics.CONTROL_AE_AVAILABLE_TARGET_FPS_RANGES)
             ?: return emptyList()
         if (outputRanges.isEmpty()) return emptyList()
-        val minFrameDurationNs = resolveMinFrameDurationNs(characteristics, cameraInputSize, previewSize)
+        val minFrameDurationNs = resolveMinFrameDurationNs(characteristics, cameraInputSize, previewSize, usesYuv)
         val maxFpsByDuration = if (minFrameDurationNs > 0) {
             (1_000_000_000.0 / minFrameDurationNs.toDouble()).toInt()
         } else {
@@ -321,51 +312,26 @@ object VideoCapabilitiesResolver {
         return range.upper >= fps && range.lower <= fps
     }
 
-    private fun resolveRecordingOutputSizes(characteristics: CameraCharacteristics): List<Size> {
-        val streamConfigMap = characteristics.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP)
-        return try {
-            streamConfigMap?.getOutputSizes(MediaRecorder::class.java)?.toList().orEmpty()
-        } catch (e: Exception) {
-            PLog.w(TAG, "Failed to query MediaRecorder output sizes: ${e.message}")
-            emptyList()
-        }.ifEmpty {
-            streamConfigMap?.getOutputSizes(SurfaceTexture::class.java)?.toList().orEmpty()
-        }
-    }
-
     private fun resolveMinFrameDurationNs(
         characteristics: CameraCharacteristics,
         cameraInputSize: Size,
-        previewSize: Size
+        previewSize: Size,
+        usesYuv: Boolean,
     ): Long {
         val streamConfigMap = characteristics.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP)
         if (streamConfigMap == null) return 0L
 
-        val cameraInputDurationNs = queryMinFrameDurationNs(
-            streamConfigMap = streamConfigMap,
-            outputClass = SurfaceTexture::class.java,
-            outputSize = cameraInputSize,
-            label = "recording SurfaceTexture"
-        )
-        val previewDurationNs = queryMinFrameDurationNs(
-            streamConfigMap = streamConfigMap,
-            outputClass = SurfaceTexture::class.java,
-            outputSize = previewSize,
-            label = "preview SurfaceTexture"
-        )
-        return maxOf(cameraInputDurationNs, previewDurationNs)
-    }
-
-    private fun <T> queryMinFrameDurationNs(
-        streamConfigMap: android.hardware.camera2.params.StreamConfigurationMap,
-        outputClass: Class<T>,
-        outputSize: Size,
-        label: String
-    ): Long {
         return try {
-            streamConfigMap.getOutputMinFrameDuration(outputClass, outputSize)
+            if (usesYuv) {
+                streamConfigMap.getOutputMinFrameDuration(ImageFormat.YUV_420_888, cameraInputSize)
+            } else {
+                maxOf(
+                    streamConfigMap.getOutputMinFrameDuration(SurfaceTexture::class.java, cameraInputSize),
+                    streamConfigMap.getOutputMinFrameDuration(SurfaceTexture::class.java, previewSize),
+                )
+            }
         } catch (e: Exception) {
-            PLog.w(TAG, "Failed to query $label min frame duration for $outputSize: ${e.message}")
+            PLog.w(TAG, "Failed to query video input min frame duration for $cameraInputSize: ${e.message}")
             0L
         }
     }

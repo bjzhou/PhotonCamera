@@ -1,5 +1,6 @@
 package com.hinnka.mycamera.video
 
+import com.hinnka.mycamera.lut.SharedEisRgbFrameChannel
 import android.Manifest
 import android.content.Context
 import android.content.pm.PackageManager
@@ -23,6 +24,7 @@ import com.hinnka.mycamera.lut.VideoColorEffectLayer
 import com.hinnka.mycamera.stabilization.DEFAULT_VIDEO_STABILIZATION_LOOKAHEAD
 import com.hinnka.mycamera.stabilization.DEFAULT_VIDEO_STABILIZATION_STRENGTH
 import com.hinnka.mycamera.stabilization.RealtimeStabilizationCoordinator
+import com.hinnka.mycamera.stabilization.StabilizationImageReader
 import com.hinnka.mycamera.stabilization.normalizeStabilizationLookahead
 import com.hinnka.mycamera.stabilization.normalizeStabilizationStrength
 import com.hinnka.mycamera.utils.PLog
@@ -38,11 +40,13 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
 import java.nio.ByteBuffer
+import java.util.ArrayDeque
 import java.util.concurrent.Executors
 
 class VideoRecorder(
     private val context: Context,
     private val stabilizationCoordinator: RealtimeStabilizationCoordinator? = null,
+    private val sharedEisRgbFrames: SharedEisRgbFrameChannel? = null,
 ) {
 
     companion object {
@@ -125,6 +129,7 @@ class VideoRecorder(
     private var requestedOutputSize = Size(1080, 1920)
     private var requestedCameraInputSize = Size(1920, 1080)
     private var requestedColorLayers: List<VideoColorEffectLayer> = emptyList()
+    private var requestedInputMode = VideoInputMode.OES
     private var requestedEnhancedStabilization = false
     private var requestedEnhancedStabilizationStrength = DEFAULT_VIDEO_STABILIZATION_STRENGTH
     private var requestedEnhancedStabilizationLookahead = DEFAULT_VIDEO_STABILIZATION_LOOKAHEAD
@@ -161,11 +166,11 @@ class VideoRecorder(
     private var lastMuxedVideoPresentationTimeUs = Long.MIN_VALUE
     private var lastMuxedAudioPresentationTimeUs = Long.MIN_VALUE
     private var pendingRealtimeFrameCount = 0
+    private val pendingYuvFrames = ArrayDeque<StabilizationImageReader.AcquiredImage>()
     private var renderLoopRunning = false
     private var statsWindowStartMs: Long = 0L
     private var statsIncomingFrames: Int = 0
     private var statsAcceptedFrames: Int = 0
-    private var statsReplacedPendingFrames: Int = 0
     private var statsRenderedFrames: Int = 0
     private var statsRenderTimeTotalMs: Long = 0L
     private var statsRenderTimeMaxMs: Long = 0L
@@ -174,13 +179,24 @@ class VideoRecorder(
     private var audioDrainJob: Job? = null
     private var audioRecordJob: Job? = null
 
-    val usesDedicatedCameraInput: Boolean
-        get() = isRecording
-
     val cameraInputSurface: Surface?
-        get() = renderer?.inputSurface.takeIf {
-            isRecording && !stopRequested
+        get() = renderer?.inputSurface.takeIf { isRecording && !stopRequested }
+
+    internal val acceptsYuvFrames: Boolean
+        get() = isRecording && cameraInputStarted && !stopRequested && !isPaused &&
+            requestedInputMode == VideoInputMode.YUV && !requestedEnhancedStabilization
+
+    /** Takes ownership of a recording lease; preview has an independent latest-only lease. */
+    internal fun submitYuvFrame(frame: StabilizationImageReader.AcquiredImage) {
+        synchronized(realtimeFrameLock) {
+            if (!acceptsYuvFrames) {
+                frame.close()
+                return
+            }
+            pendingYuvFrames.addLast(frame)
+            enqueueRealtimeFrameLocked()
         }
+    }
 
     fun startRecording(
         size: Size,
@@ -194,6 +210,7 @@ class VideoRecorder(
         sensorOrientationDegrees: Int = 0,
         orientationHintDegrees: Int = 0,
         flipEncodedFrame: Boolean = false,
+        inputMode: VideoInputMode = VideoInputMode.OES,
         enhancedStabilization: Boolean = false,
         enhancedStabilizationStrength: Float = DEFAULT_VIDEO_STABILIZATION_STRENGTH,
         enhancedStabilizationLookahead: Int = DEFAULT_VIDEO_STABILIZATION_LOOKAHEAD,
@@ -207,8 +224,8 @@ class VideoRecorder(
         requestedOrientationHintDegrees = normalizeOrientationHint(orientationHintDegrees)
         requestedOutputSize = Size(size.width.align16(), size.height.align16())
         requestedCameraInputSize = cameraInputSize
-        // SurfaceTexture 变换后的 OES 内容已经处于自然显示方向，编码画布必须继续使用
-        // 已解析的显示尺寸（片门全开使用最大相机输入尺寸）。设备横竖屏差异只通过容器 rotation metadata 表达。
+        // YUV 经传感器方向矩阵呈现到自然显示方向；编码画布使用解析后的显示尺寸。
+        // 片门全开使用最大相机输入尺寸，设备横竖屏差异通过容器 rotation metadata 表达。
         requestedSize = requestedOutputSize
         requestedFps = fps
         requestedBitrateMbps = bitrateMbps
@@ -218,6 +235,7 @@ class VideoRecorder(
         requestedCameraTimestampSource = cameraTimestampSource
         requestedSensorOrientationDegrees = sensorOrientationDegrees
         requestedFlipEncodedFrame = flipEncodedFrame
+        requestedInputMode = if (enhancedStabilization) VideoInputMode.YUV else inputMode
         requestedEnhancedStabilization = enhancedStabilization
         requestedEnhancedStabilizationStrength =
             normalizeStabilizationStrength(enhancedStabilizationStrength)
@@ -233,7 +251,6 @@ class VideoRecorder(
         statsWindowStartMs = 0L
         statsIncomingFrames = 0
         statsAcceptedFrames = 0
-        statsReplacedPendingFrames = 0
         statsRenderedFrames = 0
         statsRenderTimeTotalMs = 0L
         statsRenderTimeMaxMs = 0L
@@ -262,7 +279,7 @@ class VideoRecorder(
                 "sensorOrientation=$requestedSensorOrientationDegrees, " +
                 "enhancedStabilization=$requestedEnhancedStabilization, " +
                 "stabilizationStrength=$requestedEnhancedStabilizationStrength, " +
-                "input=${if (requestedEnhancedStabilization) "timestamped-yuv" else "dedicated-surface-texture"}, " +
+                "input=${if (requestedEnhancedStabilization) "stabilized-shared-yuv" else requestedInputMode.name}, " +
                 "cameraTimestampSource=$requestedCameraTimestampSource, " +
                 "path=${requestedRecordingPath.name}, uri=${requestedRecordingTreeUri?.take(48)}"
         )
@@ -276,7 +293,7 @@ class VideoRecorder(
         if (audioEnabled) {
             startAudioLoop()
         }
-        PLog.d(TAG, "Dedicated Camera2 recording input started")
+        PLog.d(TAG, "Camera2 recording input started: $requestedInputMode")
         return true
     }
 
@@ -289,7 +306,7 @@ class VideoRecorder(
             try {
                 audioRecordJob?.join()
                 withContext(renderDispatcher) {
-                    drainRealtimeFrames(allowWhenStopping = true)
+                    drainRealtimeFrames()
                     renderer?.pauseStabilization()
                     signalVideoEndOfInputStream()
                 }
@@ -368,6 +385,8 @@ class VideoRecorder(
                 requestedFlipEncodedFrame && requestedOrientationHintDegrees % 180 != 0,
             encoderColorConfig = encoderColorConfig,
             stabilizationCoordinator = stabilizationCoordinator,
+            sharedEisRgbFrames = sharedEisRgbFrames,
+            inputMode = requestedInputMode,
             enhancedStabilizationEnabled = requestedEnhancedStabilization,
             enhancedStabilizationStrength = requestedEnhancedStabilizationStrength,
             enhancedStabilizationLookahead = requestedEnhancedStabilizationLookahead,
@@ -384,24 +403,21 @@ class VideoRecorder(
     }
 
     private fun onRealtimeFrameAvailable() {
-        if (!isRecording || stopRequested || isPaused) return
-        statsIncomingFrames += 1
         synchronized(realtimeFrameLock) {
-            if (pendingRealtimeFrameCount > 0) {
-                statsReplacedPendingFrames += 1
-            }
-            pendingRealtimeFrameCount = if (requestedEnhancedStabilization) {
-                pendingRealtimeFrameCount + 1
-            } else {
-                // SurfaceTexture itself is latest-only; multiple callbacks before the GL
-                // consumer runs therefore represent one materializable OES frame.
-                1
-            }
-            if (!renderLoopRunning) {
-                renderLoopRunning = true
-                scope.launch(renderDispatcher) {
-                    drainRealtimeFrames(allowWhenStopping = false)
-                }
+            if (!isRecording || stopRequested || isPaused) return
+            enqueueRealtimeFrameLocked()
+        }
+    }
+
+    private fun enqueueRealtimeFrameLocked() {
+        statsIncomingFrames += 1
+        // SurfaceTexture exposes only its newest frame; YUV leases and EIS results are FIFO.
+        pendingRealtimeFrameCount = if (requestedInputMode == VideoInputMode.OES) 1
+            else pendingRealtimeFrameCount + 1
+        if (!renderLoopRunning) {
+            renderLoopRunning = true
+            scope.launch(renderDispatcher) {
+                drainRealtimeFrames()
             }
         }
     }
@@ -870,31 +886,38 @@ class VideoRecorder(
         }
     }
 
-    private fun drainRealtimeFrames(allowWhenStopping: Boolean) {
+    private fun drainRealtimeFrames() {
         while (true) {
-            val hasFrame = synchronized(realtimeFrameLock) {
+            val yuvFrame = synchronized(realtimeFrameLock) {
                 if (pendingRealtimeFrameCount <= 0) {
                     renderLoopRunning = false
                     return
                 }
                 pendingRealtimeFrameCount -= 1
-                true
+                if (requestedInputMode == VideoInputMode.OES || requestedEnhancedStabilization) null else pendingYuvFrames.removeFirst()
             }
 
-            if (!hasFrame ||
-                !isRecording ||
-                (stopRequested && !allowWhenStopping) ||
-                isPaused
-            ) {
+            // Ordinary FIFO leases were captured before stop and must be drained. EIS
+            // notifications are wake-ups: consuming them after stop can select newer frames
+            // still being produced for preview and accidentally extend the recording.
+            if (!isRecording || isPaused || (stopRequested && (requestedEnhancedStabilization || requestedInputMode == VideoInputMode.OES))) {
+                yuvFrame?.close()
                 continue
             }
 
             try {
-                val videoRenderer = renderer ?: continue
+                val videoRenderer = renderer
+                if (videoRenderer == null) {
+                    yuvFrame?.close()
+                    continue
+                }
                 val renderStartMs = SystemClock.elapsedRealtime()
-                val presentationTimeNs = videoRenderer.renderLatestFrame(
-                    mapPresentationTimeNs = ::mapCameraTimestampToBoottimeNs,
-                ) ?: continue
+                val presentationTimeNs = yuvFrame.use { frame ->
+                    videoRenderer.renderLatestFrame(
+                        mapPresentationTimeNs = ::mapCameraTimestampToBoottimeNs,
+                        yuvImage = frame?.image,
+                    )
+                } ?: continue
                 establishTimelineOrigin(presentationTimeNs / 1_000L)
                 val renderCostMs = (SystemClock.elapsedRealtime() - renderStartMs).coerceAtLeast(0L)
                 statsAcceptedFrames += 1
@@ -940,14 +963,13 @@ class VideoRecorder(
             TAG,
             "Video encoder stats: requested=${requestedFps}, incomingFps=${"%.1f".format(incomingFps)}, " +
                 "acceptedFps=${"%.1f".format(acceptedFps)}, renderedFps=${"%.1f".format(renderedFps)}, " +
-                "pendingDrops=$statsReplacedPendingFrames, avgRenderMs=${"%.1f".format(avgRenderMs)}, " +
+                "pendingFrames=$pendingRealtimeFrameCount, avgRenderMs=${"%.1f".format(avgRenderMs)}, " +
                 "maxRenderMs=$statsRenderTimeMaxMs"
         )
 
         statsWindowStartMs = nowMs
         statsIncomingFrames = 0
         statsAcceptedFrames = 0
-        statsReplacedPendingFrames = 0
         statsRenderedFrames = 0
         statsRenderTimeTotalMs = 0L
         statsRenderTimeMaxMs = 0L
@@ -1411,6 +1433,8 @@ class VideoRecorder(
             activePauseStartTimeUs = UNSET_TIMESTAMP
         }
         synchronized(realtimeFrameLock) {
+            pendingYuvFrames.forEach { it.close() }
+            pendingYuvFrames.clear()
             pendingRealtimeFrameCount = 0
             renderLoopRunning = false
         }

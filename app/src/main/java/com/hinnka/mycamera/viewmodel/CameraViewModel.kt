@@ -630,6 +630,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     val livePhotoRecorder get() = cameraController.livePhotoRecorder
     val realtimeStabilizationCoordinator get() = cameraController.realtimeStabilizationCoordinator
     val previewYuvChannel get() = cameraController.previewYuvChannel
+    val sharedEisRgbFrames get() = cameraController.sharedEisRgbFrames
     val isAlgorithmicStabilizationSupported: Boolean
         get() = cameraController.realtimeStabilizationCoordinator.isGyroscopeAvailable
 
@@ -1588,6 +1589,8 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
 
     // 保存当前的 SurfaceTexture 以便切换摄像头时重用
     private var currentSurfaceTexture: SurfaceTexture? = null
+    private var cameraScreenResumed = false
+    private var cameraNeedsResume = false
     private var cameraOpenInFlight = false
     private var cameraReopenJob: Job? = null
     private var cameraErrorRecoveryJob: Job? = null
@@ -1844,10 +1847,6 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             if (cameraController.state.value.nrLevel != level) cameraController.setNRLevel(level)
         }
         syncPreference({ it.edgeLevel }, cameraController::setEdgeLevel)
-        viewModelScope.launch {
-            userPreferencesRepository.flow { it.videoNrLevel to it.videoEdgeLevel }
-                .collect { (nr, edge) -> cameraController.setVideoImageQualitySettings(nr, edge) }
-        }
         syncPreference({ it.rawMinShutterSpeedNs }) { value ->
             if (cameraController.state.value.rawMinShutterSpeedNs != value) {
                 cameraController.setRawMinShutterSpeedNs(value)
@@ -1966,6 +1965,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 if (cameraController.state.value.meteringMode != it.meteringMode) {
                     cameraController.setMeteringMode(it.meteringMode)
                 }
+                cameraController.setVideoPipelineSettings(it.videoPipelineSettings)
                 cameraController.setCaptureMode(it.captureMode)
                 cameraController.setVideoResolution(it.videoResolution)
                 cameraController.setVideoFps(it.videoFps)
@@ -1974,10 +1974,6 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 cameraController.setVideoLogLutMode(it.videoLogLutMode)
                 cameraController.setVideoBitrate(it.videoBitrate)
                 cameraController.setVideoRecordingPath(it.videoRecordingPath, it.videoRecordingTreeUri)
-                cameraController.setVideoStabilizationMode(it.videoStabilizationMode)
-                cameraController.setOppoSuperStabilizationEnabled(
-                    it.oppoSuperStabilizationEnabled
-                )
                 cameraController.setVideoEnhancedStabilizationStrength(
                     it.videoEnhancedStabilizationStrength
                 )
@@ -2141,6 +2137,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 } catch (e: IllegalArgumentException) {
                     // 如果保存的值无效，使用默认值
                 }
+                cameraController.setVideoPipelineSettings(prefs.videoPipelineSettings)
                 cameraController.setCaptureMode(prefs.captureMode)
                 cameraController.setVideoResolution(prefs.videoResolution)
                 cameraController.setVideoFps(prefs.videoFps)
@@ -2150,7 +2147,6 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 cameraController.setVideoBitrate(prefs.videoBitrate)
                 cameraController.setVideoAudioInputId(userPreferencesRepository.latest().videoAudioInputId)
                 cameraController.setVideoRecordingPath(prefs.videoRecordingPath, prefs.videoRecordingTreeUri)
-                cameraController.setVideoStabilizationMode(prefs.videoStabilizationMode)
                 cameraController.setVideoEnhancedStabilizationStrength(
                     prefs.videoEnhancedStabilizationStrength
                 )
@@ -2483,6 +2479,11 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
      */
     fun openCamera(surfaceTexture: SurfaceTexture) {
         PLog.d(TAG, "openCamera")
+        if (!cameraScreenResumed) {
+            currentSurfaceTexture = surfaceTexture
+            PLog.d(TAG, "Deferring camera open while camera screen is paused")
+            return
+        }
         if (currentSurfaceTexture === surfaceTexture && (state.value.isPreviewActive || cameraOpenInFlight)) {
             PLog.d(
                 TAG,
@@ -2498,12 +2499,14 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         surfaceTexture: SurfaceTexture,
         preserveVideoRecording: Boolean = false,
     ) {
+        if (!cameraScreenResumed) return
         cameraReopenJob?.cancel()
         cameraOpenInFlight = true
         cameraReopenJob = viewModelScope.launch {
             isInitialized.first { it }
-            if (currentSurfaceTexture !== surfaceTexture) return@launch
+            if (!cameraScreenResumed || currentSurfaceTexture !== surfaceTexture) return@launch
             syncVendorCaptureSettingsToController()
+            cameraNeedsResume = false
             cameraController.openCamera(
                 surfaceTexture = surfaceTexture,
                 preserveVideoRecording = preserveVideoRecording,
@@ -2662,14 +2665,27 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     /**
      * 检查相机状态并在必要时恢复
      */
+    fun pauseCameraScreen() {
+        cameraScreenResumed = false
+        cameraNeedsResume = true
+        cameraReopenJob?.cancel()
+        cameraOpenInFlight = false
+        // Keep the texture identity for a retained GL surface, but release the Camera2 device.
+        // A texture replacement on resume will supersede it through openCamera().
+        PLog.i(TAG, "Camera screen paused: releasing Camera2 device")
+        cameraController.closeCamera()
+    }
+
     fun checkAndRecoverCamera() {
+        cameraScreenResumed = true
         if (!state.value.isPreviewActive) {
             resetExposureCompensationForCameraRestart()
         }
 
         // 如果有保存的 SurfaceTexture，重新打开相机
         currentSurfaceTexture?.let { texture ->
-            if (!state.value.isPreviewActive && !cameraOpenInFlight) {
+            if ((cameraNeedsResume || !state.value.isPreviewActive) && !cameraOpenInFlight) {
+                PLog.i(TAG, "Camera screen resumed: reopening Camera2 device")
                 requestCameraOpen(texture)
             } else {
                 PLog.d(
@@ -3647,21 +3663,9 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     fun setVideoStabilizationMode(mode: com.hinnka.mycamera.video.VideoStabilizationMode) {
-        val previousConfig = state.value.videoConfig
-        cameraController.setVideoStabilizationMode(mode)
-        val resolvedConfig = state.value.videoConfig
-        if (state.value.captureMode == CaptureMode.VIDEO &&
-            (previousConfig.resolution != resolvedConfig.resolution ||
-                previousConfig.fps != resolvedConfig.fps)
-        ) {
-            reopenCamera()
-        }
+        if (state.value.videoRecordingState.isRecording || state.value.videoRecordingState.isProcessing) return
         viewModelScope.launch {
-            userPreferencesRepository.update {
-                videoStabilizationMode = resolvedConfig.stabilizationMode
-                videoResolution = resolvedConfig.resolution
-                videoFps = resolvedConfig.fps
-            }
+            userPreferencesRepository.update { videoStabilizationMode = mode }
         }
     }
 
@@ -3674,7 +3678,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     fun setOppoSuperStabilizationEnabled(enabled: Boolean) {
-        cameraController.setOppoSuperStabilizationEnabled(enabled)
+        if (state.value.videoRecordingState.isRecording || state.value.videoRecordingState.isProcessing) return
         viewModelScope.launch {
             userPreferencesRepository.update { oppoSuperStabilizationEnabled = enabled }
         }

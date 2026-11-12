@@ -31,6 +31,25 @@ jlong toHardwareBufferImageJlong(HardwareBufferEglImage *value) {
   return static_cast<jlong>(reinterpret_cast<uintptr_t>(value));
 }
 
+bool bindHardwareBufferImage(jlong image_handle, jint texture_id, GLenum target) {
+  auto *source = fromHardwareBufferImageJlong(image_handle);
+  if (!source || source->display != eglGetCurrentDisplay() || texture_id == 0) {
+    return false;
+  }
+  const auto bind_image =
+      eglProcedure<PFNGLEGLIMAGETARGETTEXTURE2DOESPROC>("glEGLImageTargetTexture2DOES");
+  if (!bind_image) return false;
+  glBindTexture(target, static_cast<GLuint>(texture_id));
+  bind_image(target, source->image);
+  const GLenum error = glGetError();
+  if (error != GL_NO_ERROR) {
+    __android_log_print(ANDROID_LOG_WARN, kLogTag,
+                        "EGLImage texture bind failed: target=0x%x, error=0x%x", target, error);
+    return false;
+  }
+  return true;
+}
+
 } // namespace
 
 extern "C" JNIEXPORT jlong JNICALL
@@ -88,27 +107,13 @@ Java_com_hinnka_mycamera_processor_GlesHardwareBufferImage_create(
 extern "C" JNIEXPORT jboolean JNICALL
 Java_com_hinnka_mycamera_processor_GlesHardwareBufferImage_bind(
     JNIEnv *, jobject, jlong image_handle, jint texture_id) {
-  auto *source = fromHardwareBufferImageJlong(image_handle);
-  if (!source || source->display != eglGetCurrentDisplay() || texture_id == 0) {
-    return JNI_FALSE;
-  }
-  const auto bind_image = eglProcedure<PFNGLEGLIMAGETARGETTEXTURE2DOESPROC>(
-      "glEGLImageTargetTexture2DOES");
-  if (!bind_image) {
-    __android_log_print(ANDROID_LOG_WARN, kLogTag,
-                        "glEGLImageTargetTexture2DOES unavailable");
-    return JNI_FALSE;
-  }
-  glBindTexture(GL_TEXTURE_EXTERNAL_OES, static_cast<GLuint>(texture_id));
-  bind_image(GL_TEXTURE_EXTERNAL_OES, source->image);
-  const GLenum error = glGetError();
-  if (error != GL_NO_ERROR) {
-    __android_log_print(ANDROID_LOG_WARN, kLogTag,
-                        "EGLImage external texture bind failed: 0x%x",
-                        error);
-    return JNI_FALSE;
-  }
-  return JNI_TRUE;
+  return bindHardwareBufferImage(image_handle, texture_id, GL_TEXTURE_EXTERNAL_OES);
+}
+
+extern "C" JNIEXPORT jboolean JNICALL
+Java_com_hinnka_mycamera_processor_GlesHardwareBufferImage_bind2D(
+    JNIEnv *, jobject, jlong image_handle, jint texture_id) {
+  return bindHardwareBufferImage(image_handle, texture_id, GL_TEXTURE_2D);
 }
 
 extern "C" JNIEXPORT void JNICALL

@@ -1,5 +1,6 @@
 package com.hinnka.mycamera.ui.camera
 
+import com.hinnka.mycamera.lut.SharedEisRgbFrameChannel
 import com.hinnka.mycamera.camera.PreviewYuvFrameChannel
 import android.graphics.SurfaceTexture
 import android.util.Size
@@ -83,6 +84,7 @@ fun CameraPreviewGL(
     focusPeakingEnabled: Boolean = true,
     stabilizationCoordinator: RealtimeStabilizationCoordinator? = null,
     previewYuvChannel: PreviewYuvFrameChannel? = null,
+    sharedEisRgbFrames: SharedEisRgbFrameChannel? = null,
     stabilizationInputSize: Size = previewSize,
     photoPreviewStabilizationEnabled: Boolean = false,
     videoPreviewStabilizationEnabled: Boolean = false,
@@ -253,6 +255,7 @@ fun CameraPreviewGL(
                         )
                         glSurfaceView.setStabilizationCoordinator(stabilizationCoordinator)
                         glSurfaceView.setPreviewYuvChannel(previewYuvChannel)
+                        glSurfaceView.setSharedEisRgbFrames(sharedEisRgbFrames)
                         val previewStabilizationUseCase = when {
                             captureMode == CaptureMode.VIDEO &&
                                 videoPreviewStabilizationEnabled -> StabilizationUseCase.VIDEO
@@ -330,7 +333,9 @@ fun CameraPreviewGL(
                             )
                         })
                         glSurfaceView.setMeteringMode(meteringMode)
-                        glSurfaceView.setLivePhotoRecorder(livePhotoRecorder)
+                        glSurfaceView.setLivePhotoRecorder(
+                            livePhotoRecorder.takeIf { captureMode == CaptureMode.PHOTO }
+                        )
                         glSurfaceView.setVideoLogProfile(videoLogProfile)
                         glSurfaceView.setNightVisionEnabled(nightVisionEnabled)
                         glSurfaceView.setAutoFocus(isAutoFocus)
