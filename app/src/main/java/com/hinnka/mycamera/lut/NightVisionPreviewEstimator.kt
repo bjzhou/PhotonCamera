@@ -33,6 +33,7 @@ internal class NightVisionPreviewEstimator(
     @Volatile
     private var smoothed: NightVisionToneCurve? = null
     private var lastUpdateNanos = 0L
+    private var lastDiagnosticLogNanos = 0L
 
     fun submit(rgba: ByteArray) {
         if (!busy.compareAndSet(false, true)) return
@@ -43,6 +44,10 @@ internal class NightVisionPreviewEstimator(
                 val target = NightVisionToneModel.estimate(appContext, input) ?: return@launch
                 if (requestGeneration != generation.get()) return@launch
                 val now = SystemClock.elapsedRealtimeNanos()
+                if (now - lastDiagnosticLogNanos >= DIAGNOSTIC_LOG_INTERVAL_NANOS) {
+                    PLog.d(TAG, "Estimated curve strength=${target.strength} whitePoint=${target.whitePoint}")
+                    lastDiagnosticLogNanos = now
+                }
                 val previous = smoothed
                 val next = if (previous == null) {
                     target
@@ -77,5 +82,6 @@ internal class NightVisionPreviewEstimator(
     private companion object {
         const val TAG = "NightVisionPreview"
         const val SMOOTHING_TIME_CONSTANT_SECONDS = 0.4f
+        const val DIAGNOSTIC_LOG_INTERVAL_NANOS = 2_000_000_000L
     }
 }

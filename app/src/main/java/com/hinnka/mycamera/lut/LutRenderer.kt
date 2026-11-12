@@ -3117,12 +3117,18 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
         if (now - lastNightVisionSampleTime < NIGHT_VISION_SAMPLE_INTERVAL_MS) return
         if (!isPixelPackBufferWritable(nightVisionPboFences, writeIndex)) return
         lastNightVisionSampleTime = now
+        // Crop the capture composition first, then sample its central 2/3 in each dimension.
+        // The square viewport resizes that region to the same MODEL_SIZE² as capture input.
+        val samplingMatrix = buildMvpMatrix(captureWidth, captureHeight).apply {
+            val scale = 1f / NightVisionTone.SAMPLE_FRAME_FRACTION
+            Matrix.scaleM(this, 0, scale, scale, 1f)
+        }
         try {
             drawInternal(
                 fboId = nightVisionFboId,
                 width = size,
                 height = size,
-                targetMvpMatrix = buildMvpMatrix(size, size),
+                targetMvpMatrix = samplingMatrix,
                 suppressBaselineLayer = true,
                 suppressCreativeLayer = true,
                 suppressCameraEngine = true,

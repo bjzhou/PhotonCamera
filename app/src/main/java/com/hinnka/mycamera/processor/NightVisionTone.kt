@@ -1,6 +1,11 @@
 package com.hinnka.mycamera.processor
 
 import android.graphics.Bitmap
+import android.graphics.Canvas
+import android.graphics.ColorSpace
+import android.graphics.Matrix
+import android.graphics.Paint
+import android.graphics.RectF
 import java.nio.ByteBuffer
 import kotlin.math.abs
 import kotlin.math.exp
@@ -103,6 +108,8 @@ internal data class NightVisionDenoiseStrength(val luma: Float, val chroma: Floa
  */
 internal object NightVisionTone {
     const val MODEL_SIZE = 256
+    /** Central fraction of the capture width and height sampled by both preview and capture. */
+    const val SAMPLE_FRAME_FRACTION = 2f / 3f
     const val CURVE_SIZE = 256
     const val HIGHLIGHT_HEADROOM = 0.55f
 
@@ -246,21 +253,35 @@ internal object NightVisionTone {
         )
     }
 
-    /** Resizes [bitmap] to the model input, HWC RGB floats of its encoded values (no color conversion). */
+    /**
+     * Resizes the central [SAMPLE_FRAME_FRACTION] of each capture dimension to [MODEL_SIZE]².
+     * Matches the preview sampling matrix; the fitted curve is still applied to the whole image.
+     * Returns HWC RGB floats in the bitmap's encoded color space.
+     */
     fun modelInputFrom(bitmap: Bitmap): FloatArray {
-        val scaled = Bitmap.createScaledBitmap(bitmap, MODEL_SIZE, MODEL_SIZE, true)
+        val scaled = Bitmap.createBitmap(
+            MODEL_SIZE,
+            MODEL_SIZE,
+            Bitmap.Config.ARGB_8888,
+            bitmap.hasAlpha(),
+            bitmap.colorSpace ?: ColorSpace.get(ColorSpace.Named.SRGB),
+        )
         try {
-            val argb = if (scaled.config == Bitmap.Config.ARGB_8888) {
-                scaled
-            } else {
-                scaled.copy(Bitmap.Config.ARGB_8888, false)
+            val insetX = bitmap.width * (1f - SAMPLE_FRAME_FRACTION) * 0.5f
+            val insetY = bitmap.height * (1f - SAMPLE_FRAME_FRACTION) * 0.5f
+            val matrix = Matrix().apply {
+                setRectToRect(
+                    RectF(insetX, insetY, bitmap.width - insetX, bitmap.height - insetY),
+                    RectF(0f, 0f, MODEL_SIZE.toFloat(), MODEL_SIZE.toFloat()),
+                    Matrix.ScaleToFit.FILL,
+                )
             }
-            val bytes = ByteBuffer.allocate(argb.rowBytes * argb.height)
-            argb.copyPixelsToBuffer(bytes)
-            if (argb !== scaled) argb.recycle()
-            return modelInputFromRgba(bytes.array(), argb.rowBytes)
+            Canvas(scaled).drawBitmap(bitmap, matrix, Paint(Paint.FILTER_BITMAP_FLAG))
+            val bytes = ByteBuffer.allocate(scaled.rowBytes * scaled.height)
+            scaled.copyPixelsToBuffer(bytes)
+            return modelInputFromRgba(bytes.array(), scaled.rowBytes)
         } finally {
-            if (scaled !== bitmap) scaled.recycle()
+            scaled.recycle()
         }
     }
 
