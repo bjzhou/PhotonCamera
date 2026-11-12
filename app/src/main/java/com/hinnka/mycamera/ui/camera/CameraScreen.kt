@@ -2386,7 +2386,7 @@ fun CaptureButton(
     val rotation by infiniteTransition.animateFloat(
         initialValue = 0f,
         targetValue = 360f,
-        animationSpec = infiniteRepeatable(tween(1500)),
+        animationSpec = infiniteRepeatable(tween(1500, easing = LinearEasing)),
         label = "captureProgressRotation"
     )
 
@@ -2531,11 +2531,19 @@ fun CaptureButton(
             )
         }
         if (showActivityProgress) {
-            val isIndeterminate = isBurstCapturing || showVideoProcessingProgress
+            // The estimated capture duration can elapse before the capture actually finishes.
+            val isWaitingForCapture = showCaptureProgress && !isBurstCapturing &&
+                captureProgress.value >= 0.95f
+            val isIndeterminate = isBurstCapturing || showVideoProcessingProgress ||
+                isWaitingForCapture
             CaptureProgressRing(
                 color = progressColor,
                 startAngle = if (isIndeterminate) rotation - 90f else -90f,
-                sweepAngle = if (isIndeterminate) 90f else 360f * captureProgress.value,
+                sweepAngle = when {
+                    isWaitingForCapture -> 360f * 0.95f
+                    isIndeterminate -> 90f
+                    else -> 360f * captureProgress.value
+                },
                 inset = CaptureProgressRingDefaults.OuterInset +
                     if (showMultipleExposureProgress) CaptureProgressRingDefaults.RingSpacing else 0.dp,
                 modifier = if (isIndeterminate) Modifier.progressSemantics()
