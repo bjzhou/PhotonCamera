@@ -3737,9 +3737,9 @@ class Camera2Controller(private val context: Context) {
             null
         }
 
-        val shouldApplyVideoQualitySessionParameters = state.captureMode == CaptureMode.VIDEO &&
+        val shouldApplyQualitySessionParameters =
             sessionKeys?.contains(CaptureRequest.NOISE_REDUCTION_MODE) == true
-        val shouldApplyStandardSessionParameters = shouldApplyVideoQualitySessionParameters ||
+        val shouldApplyStandardSessionParameters = shouldApplyQualitySessionParameters ||
             sessionKeys?.contains(CaptureRequest.CONTROL_VIDEO_STABILIZATION_MODE) == true ||
                 sessionKeys?.contains(CaptureRequest.LENS_OPTICAL_STABILIZATION_MODE) == true
         val vendorSessionValues = if (includeVendorSessionParameters) {
@@ -3766,8 +3766,8 @@ class Camera2Controller(private val context: Context) {
             if (shouldApplyStandardSessionParameters) {
                 applyStabilizationSettings(builder, state)
             }
-            if (shouldApplyVideoQualitySessionParameters) {
-                applyImageQualitySettings(builder, state)
+            if (shouldApplyQualitySessionParameters && state.captureMode == CaptureMode.VIDEO) {
+                applyEdgeSettings(builder, state)
             }
             if (vendorSessionValues.isNotEmpty()) {
                 applyVendorCaptureSettings(
@@ -3783,6 +3783,9 @@ class Camera2Controller(private val context: Context) {
                 keys = customVendorSessionKeys,
                 target = "session"
             )
+            if (shouldApplyQualitySessionParameters) {
+                applyNoiseReductionSettings(builder, state, isCapture = false)
+            }
             sessionConfig.setSessionParameters(builder.build())
             PLog.d(
                 TAG,
@@ -4079,7 +4082,10 @@ class Camera2Controller(private val context: Context) {
 
         if (!isRawCapture) {
             // 6. 图像质量设置（锐化、降噪）
-            applyImageQualitySettings(builder, currentState)
+            applyEdgeSettings(builder, currentState)
+            if (isCapture) {
+                applyNoiseReductionSettings(builder, currentState, isCapture = true)
+            }
 
         }
 
@@ -4107,6 +4113,10 @@ class Camera2Controller(private val context: Context) {
         }
         applyVendorCaptureSettings(builder, isCapture)
         applyCustomVendorCaptureRequestKeys(builder, isCapture)
+        if (!isCapture) {
+            // Preview NR is a pipeline constraint, including custom request keys and RAW preview.
+            applyNoiseReductionSettings(builder, currentState, isCapture = false)
+        }
         if (isCapture) {
             PLog.i(
                 TAG,
@@ -5221,20 +5231,17 @@ class Camera2Controller(private val context: Context) {
     }
 
     /**
-     * 应用图像质量设置（锐化、降噪）
+     * 应用锐化设置。
      *
      * 照片与视频使用各自的参数，视频预览和录制保持一致。
      *
      * @param builder 需要配置的 Builder
      * @param currentState 当前拍摄模式及多帧配置
      */
-    private fun applyImageQualitySettings(builder: CaptureRequest.Builder, currentState: CameraState) {
+    private fun applyEdgeSettings(builder: CaptureRequest.Builder, currentState: CameraState) {
         try {
             val isVideo = currentState.captureMode == CaptureMode.VIDEO
             val selectedEdgeLevel = if (isVideo) videoEdgeLevel else edgeLevel
-            val selectedNrLevel = if (isVideo) {
-                currentState.videoConfig.effectiveInputMode.resolveNoiseReduction(videoNrLevel)
-            } else nrLevel
             val isBurst = !isVideo && currentState.requiresMultiFrameCaptureSequence
             val effectiveEdgeLevel = if (isBurst && selectedEdgeLevel == 2) 1 else selectedEdgeLevel
             val edgeMode = when (effectiveEdgeLevel) {
@@ -5254,9 +5261,31 @@ class Camera2Controller(private val context: Context) {
             } else if (availableEdgeModes.contains(CaptureRequest.EDGE_MODE_FAST)) {
                 builder.set(CaptureRequest.EDGE_MODE, CaptureRequest.EDGE_MODE_FAST)
             }
+        } catch (e: Exception) {
+            PLog.e(TAG, "Failed to apply edge settings", e)
+        }
+    }
+
+    /**
+     * 预览（含视频录制的重复请求）将高质量降噪限制为快速；实际拍照保留拍摄降噪策略。
+     * OFF、MINIMAL 和 ZERO_SHUTTER_LAG 保留各自语义，不能按枚举数值比较质量等级。
+     */
+    private fun applyNoiseReductionSettings(
+        builder: CaptureRequest.Builder,
+        currentState: CameraState,
+        isCapture: Boolean
+    ) {
+        try {
+            val isVideo = currentState.captureMode == CaptureMode.VIDEO
+            val selectedNrLevel = if (isVideo) {
+                currentState.videoConfig.effectiveInputMode.resolveNoiseReduction(videoNrLevel)
+            } else nrLevel
+            val isBurst = !isVideo && currentState.requiresMultiFrameCaptureSequence
             val effectiveNrLevel = when {
+                // Cap every preview path before applying capture-only overrides such as night vision.
+                !isCapture && selectedNrLevel == NoiseReductionLevel.HIGH_QUALITY -> NoiseReductionLevel.FAST
                 // Night vision always asks the ISP for HIGH_QUALITY NR on every burst frame.
-                !isVideo && currentState.isNightVisionActive -> NoiseReductionLevel.HIGH_QUALITY
+                isCapture && !isVideo && currentState.isNightVisionActive -> NoiseReductionLevel.HIGH_QUALITY
                 isBurst && selectedNrLevel == NoiseReductionLevel.HIGH_QUALITY -> NoiseReductionLevel.FAST
                 else -> selectedNrLevel
             }
@@ -5283,11 +5312,11 @@ class Camera2Controller(private val context: Context) {
                 builder.set(CaptureRequest.NOISE_REDUCTION_MODE, noiseReductionMode)
             } else if (availableNoiseReductionModes.contains(CaptureRequest.NOISE_REDUCTION_MODE_FAST)) {
                 builder.set(CaptureRequest.NOISE_REDUCTION_MODE, CaptureRequest.NOISE_REDUCTION_MODE_FAST)
-            } else if (isVideo && currentState.videoConfig.effectiveInputMode == VideoInputMode.YUV) {
+            } else if (!isCapture || (isVideo && currentState.videoConfig.effectiveInputMode == VideoInputMode.YUV)) {
                 builder.set(CaptureRequest.NOISE_REDUCTION_MODE, CaptureRequest.NOISE_REDUCTION_MODE_OFF)
             }
         } catch (e: Exception) {
-            PLog.e(TAG, "Failed to apply image quality settings", e)
+            PLog.e(TAG, "Failed to apply noise reduction settings", e)
         }
     }
 
