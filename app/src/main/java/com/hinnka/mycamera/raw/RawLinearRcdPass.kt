@@ -152,6 +152,8 @@ internal class RawLinearRcdPass(
         val FRAGMENT_SHADER = """
             #version 300 es
             precision highp float;
+            // Area integration converts full-resolution texel coordinates to floating-point edges.
+            precision highp int;
             precision highp sampler2D;
             precision highp sampler3D;
 

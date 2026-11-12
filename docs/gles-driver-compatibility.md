@@ -23,6 +23,7 @@
 | 纹理/sampler 状态 | 跨驱动约束 | 每次 draw 显式绑定 program、framebuffer、texture unit 和所有 sampler |
 | sampler 未赋值落 unit 0 | 已确认，Adreno 840 | 首个 draw 前显式赋 unit；不能绑定真实纹理时用 1x1 占位，避免读到 unit 0 的外部纹理 |
 | 浮点纹理 sampler 精度 | 规范约束 | 线性 RGB 与浮点曲线/增益纹理显式声明 `highp` sampler；`highp float` 不覆盖 sampler |
+| 全分辨率坐标的整数转浮点 | 已在 Adreno 840 复现；规范精度约束 | 坐标及函数形参使用 `highp int`；`highp float` 不提升 `float(int)` 构造的操作数精度 |
 | `imageStore` 可见性 | 跨驱动约束 | barrier 必须覆盖下一位 consumer，而非只覆盖 producer |
 | CPU/GPU Float 除法 | 已确认，Adreno；跨驱动精度约束 | CPU 算法迁到 GPU 时不能假定 `/` 与 JVM Float 逐位一致 |
 | 后台 compute 调度 | 已确认，Mali | 以资源 RAW/WAR/WAW 冲突和 fence 管理并发，不以队列长度代替所有权 |
@@ -30,6 +31,29 @@
 | IMG/PowerVR `imageSize` | 研究线索，项目未复现 | 只做对照验证，复现前不建立全局兼容分支 |
 
 ## 全局基线
+
+### 全分辨率坐标的整数转浮点精度
+
+PMA110 / Adreno 840 / GLES 3.2 V@0842.52 上，YUV 输出 shader 仅声明
+`precision highp float` 时，`ivec2` 坐标仍使用 fragment 默认的 `mediump int`。
+`float(outP.x)`、`vec2(ivec2)` 等构造继承操作数的精度，后续赋给 highp 变量不能
+恢复已丢失的像素坐标。这属于 [GLSL ES 精度规则](https://registry.khronos.org/OpenGL/specs/es/3.2/GLSL_ES_Specification_3.20.html#precision-qualifiers)
+允许的行为，不应认定为驱动违反规范。
+
+4080×3060 的生产归一化 shader 对照中，以整数直通采样为基准，0° 浮点变换从
+横坐标 2049（零基）开始跳点，共 4,653,725 个像素不一致；180° 有
+11,970,704 个像素不一致。仅增加 `highp sampler2D` 不消除差异；仅增加
+`precision highp int` 后两种变换均逐像素一致。该路径差异会使横屏出现锯齿，
+而先整数直通、再整数旋转的竖屏路径不触发同一问题。
+
+修复后的生产归一化、HDR 单帧输出和旋转回读 shader，在同一设备上覆盖四种
+旋转、全幅/居中裁切、8-bit/P010 颜色转换分支，共 32 组均与整数直通参考的
+CPU 裁切/旋转结果逐像素一致。此验证使用合成纹理，不代替相机输入或实拍画质验证。
+
+- 参与全分辨率像素变换的整型 uniform、局部变量、函数参数和返回值使用 highp；
+  fragment 优先显式声明 `precision highp int`，不要只提升最终浮点接收变量。
+- 对照必须覆盖超过 2048 的坐标、正向与反向变换，并经过实际纹理采样和回读；
+  shader 编译成功不能证明每个输出像素采到了正确的源像素。
 
 ### CPU/GPU 全局位移均值精度
 

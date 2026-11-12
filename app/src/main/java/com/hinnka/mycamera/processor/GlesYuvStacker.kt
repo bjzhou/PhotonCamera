@@ -3349,6 +3349,8 @@ class GlesYuvStacker(
         private val ALIGNED_FRAME_OUTPUT_FRAGMENT_SHADER = """
             #version 300 es
             precision highp float;
+            // Integer-to-float constructors inherit the coordinate precision, even with highp float.
+            precision highp int;
             uniform sampler2D uCurrentY;
             uniform sampler2D uCurrentCbCr;
             uniform ivec2 uInputSize;
@@ -3779,6 +3781,8 @@ class GlesYuvStacker(
         private val NORMALIZE_FRAGMENT_SHADER = """
             #version 300 es
             precision highp float;
+            // Keep integer-to-float pixel transforms exact beyond the FP16 integer range.
+            precision highp int;
             uniform sampler2D uAccumulator;
             uniform ivec2 uInputSize;
             uniform vec3 uTransformX;
