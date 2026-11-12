@@ -15,7 +15,7 @@ import com.hinnka.mycamera.preview.EyeFocusProcessingTiming
 import com.hinnka.mycamera.raw.ColorSpace
 import com.hinnka.mycamera.screencapture.PhantomPipCrop
 import com.hinnka.mycamera.camera.MeteringMode
-import com.hinnka.mycamera.camera.PreviewYuvFrame
+import com.hinnka.mycamera.stabilization.StabilizationImageReader
 import com.hinnka.mycamera.camera.PreviewYuvFrameChannel
 import com.hinnka.mycamera.stabilization.DEFAULT_VIDEO_STABILIZATION_LOOKAHEAD
 import com.hinnka.mycamera.stabilization.RealtimeStabilizationCoordinator
@@ -78,8 +78,7 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
 
     private val colorProgramCache = PreviewColorProgramCache()
     private val enginePreview = RawEnginePreviewGl()
-    private val mgcEisHardwareBufferRenderer = MgcEisHardwareBufferRenderer(TAG)
-    private val mgcEisYuvRenderer = MgcEisYuvRenderer(TAG)
+    private val mgcEisRenderer = MgcEisRenderer(TAG)
     private val previewYuvRenderer = PreviewYuvRenderer(TAG)
     private var previewYuvChannel: PreviewYuvFrameChannel? = null
     private val previewYuvMatrix = FloatArray(16).apply { Matrix.setIdentityM(this, 0) }
@@ -624,8 +623,7 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
         previewLiteEffects.reset()
         toneBase.reset()
         enginePreview.reset()
-        mgcEisHardwareBufferRenderer.resetAfterContextLoss()
-        mgcEisYuvRenderer.resetAfterContextLoss()
+        mgcEisRenderer.resetAfterContextLoss()
         previewYuvRenderer.resetAfterContextLoss()
         cameraTextureId = 0
         currentCameraTextureId = 0
@@ -1152,12 +1150,8 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
         var yuvFrameUpdated = false
         previewYuvChannel?.take()?.let { frame ->
             if (delayedStabilizationEnabled) {
-                // Stabilized frames come from the MGC reader; this stream only proves the
-                // orientation, which no OES frame provides while the viewfinder is a YUV reader.
+                // Discard an ordinary frame queued before the shared input switched to EIS.
                 frame.close()
-                if (!mgcEisPresentationTransform.captureFromSensorOrientation(sensorOrientation)) {
-                    PLog.w(TAG, "MGC cannot derive presentation from sensor orientation $sensorOrientation")
-                }
             } else if (usePreviewYuvFrame(frame)) {
                 yuvFrameUpdated = true
                 cameraFrameUpdated = true
@@ -1165,6 +1159,10 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
         }
 
         if (delayedStabilizationEnabled) {
+            // Photo mode has no OES stream or ordinary YUV notifications while EIS is active.
+            if (!mgcEisPresentationTransform.captureFromSensorOrientation(sensorOrientation)) {
+                PLog.w(TAG, "MGC cannot derive presentation from sensor orientation $sensorOrientation")
+            }
             val session = stabilizationSession
             if (!stabilizationSessionStarted) {
                 stabilizationSessionStarted = session?.start() == true
@@ -1452,9 +1450,9 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
     }
 
     /** Converts a viewfinder YUV frame and makes it the camera texture. Always closes [frame]. */
-    private fun usePreviewYuvFrame(frame: PreviewYuvFrame): Boolean {
+    private fun usePreviewYuvFrame(frame: StabilizationImageReader.AcquiredImage): Boolean {
         val timestampNs = frame.timestampNs
-        val textureId = previewYuvRenderer.render(frame)
+        val textureId = frame.use { previewYuvRenderer.render(it.image) }
         if (textureId == 0) return false
         val matrix = resolvePreviewYuvPresentationMatrix(sensorOrientation, lensFacing == 0) ?: run {
             PLog.w(TAG, "Preview YUV frame has non-cardinal sensor orientation $sensorOrientation")
@@ -2547,8 +2545,7 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
         previewHeight = height
         surfaceTexture?.setDefaultBufferSize(width, height)
         if (sizeChanged && previewStabilizationUseCase != null) {
-            mgcEisHardwareBufferRenderer.release()
-            mgcEisYuvRenderer.release()
+            mgcEisRenderer.release()
             recreatePreviewStabilizationSession()
         }
         // 更新 MVP 矩阵以处理 center crop
@@ -2565,8 +2562,7 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
         stabilizationInputWidth = width
         stabilizationInputHeight = height
         if (previewStabilizationUseCase != null) {
-            mgcEisHardwareBufferRenderer.release()
-            mgcEisYuvRenderer.release()
+            mgcEisRenderer.release()
             recreatePreviewStabilizationSession()
         }
     }
@@ -2624,21 +2620,20 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
         currentFrameTimestampNs = 0L
     }
 
-    /**
-     * Uses MGC's HardwareBuffer/EGLImage renderer whenever the camera buffer and current EGL
-     * context support it. The CPU YUV implementation is retained only for devices without that
-     * platform import path.
-     */
+    /** Converts with the ordinary preview's color rules, then applies only EIS geometry. */
     private fun renderMgcEisFrame(
         frame: com.hinnka.mycamera.stabilization.StabilizationFrame,
-    ): MgcEisHardwareBufferRenderer.Frame? {
-        val hardwareRendered = mgcEisHardwareBufferRenderer.render(frame)
-        if (hardwareRendered != null) {
-            frame.image.close()
-            return hardwareRendered
-        }
-        return mgcEisYuvRenderer.render(frame)?.let { rendered ->
-            MgcEisHardwareBufferRenderer.Frame(rendered.timestampNs, rendered.textureId)
+    ): MgcEisRenderer.Frame? {
+        return frame.image.use { image ->
+            val textureId = previewYuvRenderer.render(image.image)
+            if (textureId == 0) return null
+            mgcEisRenderer.render(
+                textureId = textureId,
+                width = image.width,
+                height = image.height,
+                timestampNs = frame.timestampNs,
+                rowHomographies = frame.transform?.rowHomographies,
+            )
         }
     }
 
@@ -3539,8 +3534,7 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
             stackTextureId = 0
         }
         basicToneTextures.release()
-        mgcEisHardwareBufferRenderer.release()
-        mgcEisYuvRenderer.release()
+        mgcEisRenderer.release()
         previewYuvChannel?.take()?.close()
         previewYuvRenderer.release()
         // 删除程序

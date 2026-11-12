@@ -7,7 +7,10 @@ import android.os.Handler
 import com.hinnka.mycamera.utils.PLog
 import java.util.concurrent.atomic.AtomicBoolean
 
-/** Owns the reader until every acquired frame, including renderer leases, has been released. */
+/**
+ * Camera YUV input for photo preview and EIS. Supports latest-frame display or FIFO stabilization,
+ * retaining the reader until every acquired frame, including renderer leases, has been released.
+ */
 internal class StabilizationImageReader(
     val width: Int,
     val height: Int,
@@ -33,6 +36,13 @@ internal class StabilizationImageReader(
         // A callback queued before retirement must not acquire another frame.
         if (isClosed) return@synchronized null
         val image = reader.acquireNextImage() ?: return@synchronized null
+        acquiredImageCount += 1
+        AcquiredImage(this, image)
+    }
+
+    fun acquireLatestImage(): AcquiredImage? = synchronized(lock) {
+        if (isClosed) return@synchronized null
+        val image = reader.acquireLatestImage() ?: return@synchronized null
         acquiredImageCount += 1
         AcquiredImage(this, image)
     }

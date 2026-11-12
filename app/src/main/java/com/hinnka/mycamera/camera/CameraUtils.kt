@@ -46,7 +46,7 @@ object CameraUtils {
             val sensorRatio = aspectRatio.getValue(true)
             // Mandatory stream combinations only guarantee PREVIEW-bounded sizes:
             // long side <= 1920 and short side <= 1080 (CameraDevice#createCaptureSession).
-            // Photo mode's viewfinder is a YUV_420_888 ImageReader (PreviewYuvImageReader).
+            // Photo mode shares one YUV_420_888 ImageReader between viewfinder and EIS.
             val previewSizes = map.getOutputSizes(ImageFormat.YUV_420_888)
                 ?.filter { isWithinPreviewBound(it) }
                 .orEmpty()

@@ -84,8 +84,8 @@ class RealtimeVideoRenderer(
     private val toneBase = ToneBaseGl(TAG)
     private val basicToneTextures = BasicToneGlTextures()
     private val filmGrainGl = FilmGrainGl(TAG)
-    private val mgcEisHardwareBufferRenderer = MgcEisHardwareBufferRenderer(TAG)
-    private val mgcEisYuvRenderer = MgcEisYuvRenderer(TAG)
+    private val mgcEisRenderer = MgcEisRenderer(TAG)
+    private val previewYuvRenderer = PreviewYuvRenderer(TAG)
     private val filmGrainAmount: Float
         get() = layers.lastOrNull { it.params.filmGrain > 0.001f }?.params?.filmGrain ?: 0f
     private val finalFilmGrainEnabled: Boolean
@@ -398,14 +398,17 @@ class RealtimeVideoRenderer(
 
     private fun renderMgcEisFrame(
         frame: com.hinnka.mycamera.stabilization.StabilizationFrame,
-    ): MgcEisHardwareBufferRenderer.Frame? {
-        val hardwareRendered = mgcEisHardwareBufferRenderer.render(frame)
-        if (hardwareRendered != null) {
-            frame.image.close()
-            return hardwareRendered
-        }
-        return mgcEisYuvRenderer.render(frame)?.let { rendered ->
-            MgcEisHardwareBufferRenderer.Frame(rendered.timestampNs, rendered.textureId)
+    ): MgcEisRenderer.Frame? {
+        return frame.image.use { image ->
+            val textureId = previewYuvRenderer.render(image.image)
+            if (textureId == 0) return null
+            mgcEisRenderer.render(
+                textureId = textureId,
+                width = image.width,
+                height = image.height,
+                timestampNs = frame.timestampNs,
+                rowHomographies = frame.transform?.rowHomographies,
+            )
         }
     }
 
@@ -1005,8 +1008,8 @@ class RealtimeVideoRenderer(
         filmGrainGl.release()
         softLightGl.release()
         highlightDiffusionGl.release()
-        mgcEisHardwareBufferRenderer.release()
-        mgcEisYuvRenderer.release()
+        mgcEisRenderer.release()
+        previewYuvRenderer.release()
         colorProgramCache.release()
         toneBase.release()
         basicToneTextures.release()

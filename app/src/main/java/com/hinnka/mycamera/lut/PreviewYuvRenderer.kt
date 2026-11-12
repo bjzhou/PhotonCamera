@@ -9,7 +9,6 @@ import android.opengl.GLES30
 import android.opengl.GLES31
 import android.opengl.Matrix
 import android.os.Build
-import com.hinnka.mycamera.camera.PreviewYuvFrame
 import com.hinnka.mycamera.processor.GlesHardwareBufferImage
 import com.hinnka.mycamera.utils.PLog
 import java.nio.ByteBuffer
@@ -19,15 +18,15 @@ import java.nio.ByteOrder
  * Converts one YUV_420_888 preview image into an RGBA8 texture with the image's own YCbCr matrix
  * and range, in the MGC output layout (buffer row 0 at the top framebuffer row).
  *
- * Paths, in order: HardwareBuffer EGLImage read as raw YCbCr through GL_EXT_YUV_target; the same
- * EGLImage converted by the driver's samplerExternalOES when the extension is missing; and plane
- * upload when the buffer cannot be imported into EGL.
+ * HardwareBuffer EGLImage raw YCbCr sampling and CPU plane upload use the same explicit matrix
+ * and range. Without GL_EXT_YUV_target, use planes rather than a driver-specific RGB conversion.
+ * Shared by ordinary preview and EIS; stabilization operates only on this converter's RGB output.
+ * Readers retain their default usage: GPU_SAMPLED_IMAGE caused swapped Cb/Cr on Xiaomi 11.
  */
 internal class PreviewYuvRenderer(private val tag: String) {
-    private enum class Path { RAW_YUV, DRIVER_RGB, PLANES }
+    private enum class Path { RAW_YUV, PLANES }
 
     private var y2yProgram: Program? = null
-    private var driverProgram: Program? = null
     private var planeProgram: Program? = null
     private var yuvTargetSupported: Boolean? = null
     private var importDisabled = false
@@ -46,25 +45,24 @@ internal class PreviewYuvRenderer(private val tag: String) {
     private val conversion = FloatArray(9)
     private val offset = FloatArray(3)
 
-    /** Always closes [frame]. Returns the output texture, or 0 when the frame cannot be drawn. */
-    fun render(frame: PreviewYuvFrame): Int {
+    /** Borrows [image] through GPU sampling completion; the caller retains ownership. */
+    fun render(image: Image): Int {
         try {
-            val image = frame.image
             if (image.width <= 0 || image.height <= 0) return 0
             if (!ensureTarget(image.width, image.height)) return 0
-            resolveConversion(frame.dataSpace)
+            resolveConversion(if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) image.dataSpace else 0)
             val drawn = (!importDisabled && drawImported(image)) || drawPlanes(image)
             return if (drawn) outputTextureId else 0
         } catch (error: IllegalStateException) {
             // The reader may be torn down while a frame is still queued for the GL thread.
-            PLog.w(tag, "Preview YUV frame revoked ts=${frame.timestampNs}: ${error.message}")
+            PLog.w(tag, "Preview YUV frame revoked: ${error.message}")
             return 0
-        } finally {
-            frame.close()
         }
     }
 
     private fun drawImported(image: Image): Boolean {
+        val rawYuv = yuvTargetSupported ?: queryYuvTarget().also { yuvTargetSupported = it }
+        if (!rawYuv) return disableImport("GL_EXT_YUV_target unavailable")
         val buffer = image.hardwareBuffer ?: return disableImport("Image has no HardwareBuffer")
         val handle = buffer.use { GlesHardwareBufferImage.create(it) }
         if (handle == 0L) return disableImport("EGLImage import failed")
@@ -73,12 +71,8 @@ internal class PreviewYuvRenderer(private val tag: String) {
             if (!GlesHardwareBufferImage.bind(handle, externalTextureId)) {
                 return disableImport("EGLImage bind failed")
             }
-            val rawYuv = yuvTargetSupported ?: queryYuvTarget().also { yuvTargetSupported = it }
-            val program = if (rawYuv) {
-                y2yProgram ?: buildProgram(Y2Y_FRAGMENT_SHADER).also { y2yProgram = it }
-            } else {
-                driverProgram ?: buildProgram(DRIVER_FRAGMENT_SHADER).also { driverProgram = it }
-            } ?: return disableImport("External program unavailable")
+            val program = y2yProgram ?: buildProgram(Y2Y_FRAGMENT_SHADER)?.also { y2yProgram = it }
+                ?: return disableImport("External program unavailable")
             beginDraw(program)
             GLES30.glActiveTexture(GLES30.GL_TEXTURE0)
             GLES30.glBindTexture(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, externalTextureId)
@@ -88,7 +82,7 @@ internal class PreviewYuvRenderer(private val tag: String) {
             awaitGpu()
             GLES30.glBindTexture(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, 0)
             endDraw()
-            reportPath(if (rawYuv) Path.RAW_YUV else Path.DRIVER_RGB)
+            reportPath(Path.RAW_YUV)
             return true
         } finally {
             GlesHardwareBufferImage.destroy(handle)
@@ -358,14 +352,14 @@ internal class PreviewYuvRenderer(private val tag: String) {
         releasePlaneTextures()
         if (externalTextureId != 0) GlUtils.deleteTexture(externalTextureId)
         if (quadBufferId != 0) GLES30.glDeleteBuffers(1, intArrayOf(quadBufferId), 0)
-        listOfNotNull(y2yProgram, driverProgram, planeProgram).forEach { GLES30.glDeleteProgram(it.id) }
+        listOfNotNull(y2yProgram, planeProgram).forEach { GLES30.glDeleteProgram(it.id) }
         resetAfterContextLoss()
     }
 
     /** Forgets GL names without deleting them; the context that owned them is gone. */
     fun resetAfterContextLoss() {
         y2yProgram = null
-        driverProgram = null
+        importDisabled = false
         planeProgram = null
         yuvTargetSupported = null
         activePath = null
@@ -416,7 +410,7 @@ internal class PreviewYuvRenderer(private val tag: String) {
             #version 300 es
             #extension GL_EXT_YUV_target : require
             precision highp float;
-            uniform __samplerExternal2DY2YEXT uInput;
+            uniform highp __samplerExternal2DY2YEXT uInput;
             uniform mat3 uYuvToRgb;
             uniform vec3 uYuvOffset;
             in vec2 vTexCoord;
@@ -427,22 +421,10 @@ internal class PreviewYuvRenderer(private val tag: String) {
             }
         """.trimIndent()
 
-        // Without GL_EXT_YUV_target the driver applies its own YCbCr conversion.
-        val DRIVER_FRAGMENT_SHADER = """
-            #version 300 es
-            #extension GL_OES_EGL_image_external_essl3 : require
-            precision highp float;
-            uniform samplerExternalOES uInput;
-            in vec2 vTexCoord;
-            out vec4 fragColor;
-            void main() {
-                fragColor = vec4(texture(uInput, vTexCoord).rgb, 1.0);
-            }
-        """.trimIndent()
-
         val PLANE_FRAGMENT_SHADER = """
             #version 300 es
             precision highp float;
+            precision highp int;
             uniform highp sampler2D uInput;
             uniform highp sampler2D uCb;
             uniform highp sampler2D uCr;
