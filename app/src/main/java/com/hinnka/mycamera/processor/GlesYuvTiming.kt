@@ -33,6 +33,7 @@ internal class GlesYuvTiming {
     private var counterOverflow = false
     private var disjoint = false
     private var aborted = false
+    private var computePasses = 0
 
     fun start(description: String) {
         if (!enabled) return
@@ -107,6 +108,19 @@ internal class GlesYuvTiming {
             return block()
         } finally {
             endPass(stage)
+        }
+    }
+
+    /** Elapsed queries can report zero for compute on Adreno. Never label that as GPU time. */
+    fun <T> compute(stage: String, block: () -> T): T {
+        if (!enabled) return block()
+        computePasses++
+        val sample = Sample(stage, frame, System.nanoTime(), "compute-pass")
+        try {
+            return block()
+        } finally {
+            sample.cpuNs = System.nanoTime() - sample.startNs
+            samples += sample
         }
     }
 
@@ -191,17 +205,19 @@ internal class GlesYuvTiming {
                 "wallMs=${ms(System.nanoTime() - startNs)} " +
                 "gpuMs=${if (validGpu) ms(gpuSamples.sumOf { it.gpuNs ?: 0L }) else "NA"} " +
                 "gpuStatus=$gpuStatus passes=${gpuSamples.size} " +
+                "gpuCoverage=${if (computePasses > 0) "graphics-only" else "timed-passes"} computePasses=$computePasses " +
                 "cpuScopes=inclusive cpuGpu=overlap queueTail=remaining-at-readback",
         )
         for ((label, frameSamples) in samples.groupBy { it.frame }) {
             val passes = frameSamples.filter { it.kind == "gpu-pass" }
+            val compute = frameSamples.filter { it.kind == "compute-pass" }
             val first = frameSamples.minOf { it.startNs }
             val last = frameSamples.maxOf { it.startNs + it.cpuNs }
             PLog.i(
                 TAG,
                 "capture=$capture frame=$label submitStartMs=${ms(first - startNs)} " +
                     "submitEndMs=${ms(last - startNs)} " +
-                    "cpuSubmitMs=${ms(passes.sumOf { it.cpuNs })} " +
+                    "cpuSubmitMs=${ms(passes.sumOf { it.cpuNs } + compute.sumOf { it.cpuNs })} " +
                     "gpuMs=${if (validGpu) ms(passes.sumOf { it.gpuNs ?: 0L }) else "NA"}",
             )
         }

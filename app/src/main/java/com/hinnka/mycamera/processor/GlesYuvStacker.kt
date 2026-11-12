@@ -26,10 +26,9 @@ import kotlin.math.min
 import kotlin.math.roundToInt
 
 /**
- * GLES YUV burst processor using Spatial's alignment, rejection and additive RBF merge graph.
- * YUV planes feed Spatial's half-resolution rejection guide and Fixed14 candidate pyramid.
- * LK uses a filterable current pyramid and sparse fine-level fits to limit alignment cost;
- * temporal rejection and additive reconstruction retain Spatial's contracts.
+ * YUV burst processing with Sabre-style directional reconstruction in the ISP's YCbCr domain.
+ * Native luma/chroma grids retain independent weights; guides and measured noise share the
+ * same encoded domain. HDR retains its existing Spatial/Mertens processing path.
  */
 class GlesYuvStacker(
     private val width: Int,
@@ -61,6 +60,9 @@ class GlesYuvStacker(
         val height: Int,
         val scaleToGuidePixels: Float,
         val linearTexture: Int = 0,
+        val tileSize: Int = 0,
+        val gridWidth: Int = 0,
+        val gridHeight: Int = 0,
     )
 
     private data class Alignment(
@@ -146,6 +148,20 @@ class GlesYuvStacker(
     private var hardwareFrameCount = 0
     private var planeFrameCount = 0
     private var inputSamplingComplete = false
+    private var sabreMode = false
+    private val sabreAlignmentPlan by lazy { GlesYuvLkPyramidPlan(width, height) }
+    private var noiseEstimateProgram = 0
+    private var covarianceProgram = 0
+    private var sabreChromaMergeProgram = 0
+    private var sabreResolveProgram = 0
+    private var nativeNoiseTexture = 0
+    private var referenceGuideNoiseTexture = 0
+    private var currentGuideNoiseTexture = 0
+    private var covarianceTexture = 0
+    private var lumaAccumulatorTexture = 0
+    private var chromaAccumulatorTexture = 0
+    private val noiseWidth get() = ceilDiv(guideWidth, GlesYuvSabreShaders.NOISE_TILE_SIZE)
+    private val noiseHeight get() = ceilDiv(guideHeight, GlesYuvSabreShaders.NOISE_TILE_SIZE)
 
     private var prepareBlocksProgram = 0
     private var guideProgram = 0
@@ -239,8 +255,8 @@ class GlesYuvStacker(
     }
     private val guideWidth get() = rejectionGeometry.guideWidth
     private val guideHeight get() = rejectionGeometry.guideHeight
-    private val mergeWeightWidth get() = rejectionGeometry.mergeWeightWidth
-    private val mergeWeightHeight get() = rejectionGeometry.mergeWeightHeight
+    private val mergeWeightWidth get() = if (sabreMode) ceilDiv(width, 4) else rejectionGeometry.mergeWeightWidth
+    private val mergeWeightHeight get() = if (sabreMode) ceilDiv(height, 4) else rejectionGeometry.mergeWeightHeight
     private val rejectionFilterWidth get() = rejectionGeometry.filterWidth
     private val rejectionFilterHeight get() = rejectionGeometry.filterHeight
     private val renderOutputWidth = outputWidth
@@ -274,7 +290,8 @@ class GlesYuvStacker(
             return null
         }
 
-        timing.start("mode=YUV input=${width}x$height output=${gpuOutputWidth}x$gpuOutputHeight frames=${images.size} format=${formatName(inputFormat)} lanczos=$outputUpscaleEnabled alignment=rg16f-sparse2 inputPreference=hardwarebuffer fallbackUpload=ring2")
+        sabreMode = true
+        timing.start("mode=YUV-Sabre input=${width}x$height output=${gpuOutputWidth}x$gpuOutputHeight frames=${images.size} format=${formatName(inputFormat)} lanczos=$outputUpscaleEnabled alignment=compute-rg16f-sparse2 noise=local-mad domain=encoded-ycc inputPreference=hardwarebuffer fallbackUpload=ring2")
         var succeeded = false
         val startTime = System.currentTimeMillis()
         val originalThreadPriority = GlesGpuScheduler.lowerCurrentThreadPriority(TAG)
@@ -288,7 +305,7 @@ class GlesYuvStacker(
             RawStackRuntimeDebug.d(TAG) {
                 "GLES stack format=${formatName(inputFormat)} " +
                     "internal=${if (highPrecisionInput) "R16F/RG16F" else "R8/RG8"} " +
-                    "spatialGuide=${guideWidth}x$guideHeight flowGrid=${gridWidth}x${gridHeight} " +
+                    "sabreGuide=${guideWidth}x$guideHeight flowGrid=${gridWidth}x${gridHeight} " +
                     "lanczos=${outputUpscaleEnabled} outputScale=${outputScaleFactor.formatScale()}"
             }
 
@@ -301,8 +318,9 @@ class GlesYuvStacker(
             val curPyramid = timing.cpu("allocate.currentPyramid") { createPyramid(linearSampling = true) }
             prepareGuideAndPyramid(refY, refCbCr, referenceGuideTexture, refPyramid, 1.0f)
             val referenceAlignmentProducts = buildReferenceAlignmentProducts(refPyramid)
-            clearAccumulator()
-            accumulateFrame(refY, refCbCr, isReference = true, currentToReferenceScale = 1.0f)
+            prepareSabreNoiseAndCovariance(refY, refCbCr, referenceGuideTexture, referenceGuideNoiseTexture)
+            clearSabreAccumulators()
+            accumulateSabreFrame(refY, refCbCr, isReference = true)
             timing.cpu("scheduler.yield") { GlesGpuScheduler.yieldToUiRenderer() }
 
             for (index in 1 until images.size) {
@@ -311,17 +329,17 @@ class GlesYuvStacker(
                     PLog.w(TAG, "Failed to upload frame $index YUV planes")
                     return null
                 }
-                prepareSpatialTemporalFrame(
-                    referencePyramid = refPyramid,
-                    currentPyramid = curPyramid,
-                    referenceAlignmentProducts = referenceAlignmentProducts,
-                    currentToReferenceScale = 1.0f,
-                )
-                accumulateFrame(curY, curCbCr, isReference = false, currentToReferenceScale = 1.0f)
+                prepareGuideAndPyramid(curY, curCbCr, currentGuideTexture, curPyramid, 1.0f)
+                val alignment = alignPyramids(refPyramid, curPyramid, referenceAlignmentProducts)
+                mergeAlignmentTexture = alignment.texture
+                prepareSabreNoiseAndCovariance(curY, curCbCr, currentGuideTexture, currentGuideNoiseTexture)
+                renderSabreRejection(alignment)
+                accumulateSabreFrame(curY, curCbCr, isReference = false)
                 timing.cpu("scheduler.yield") { GlesGpuScheduler.yieldToUiRenderer() }
             }
 
             timing.frame("output")
+            if (outputUpscaleEnabled) resolveSabreAccumulator()
             normalizeOutput()
             timing.cpu("scheduler.yield") { GlesGpuScheduler.yieldToUiRenderer() }
             val bitmap = readOutputBitmap() ?: return null
@@ -351,6 +369,7 @@ class GlesYuvStacker(
             return null
         }
 
+        sabreMode = false
         timing.start("mode=HDR input=${width}x$height output=${gpuOutputWidth}x$gpuOutputHeight frames=${frames.size} format=${formatName(inputFormat)} alignment=rg16f-sparse2 inputPreference=hardwarebuffer fallbackUpload=ring2")
         var succeeded = false
         val originalThreadPriority = GlesGpuScheduler.lowerCurrentThreadPriority(TAG)
@@ -570,6 +589,14 @@ class GlesYuvStacker(
     }
 
     private fun initPrograms() {
+        globalAlignment.init()
+        if (sabreMode) {
+            val limit = IntArray(1)
+            GLES30.glGetIntegerv(GLES31.GL_MAX_IMAGE_UNITS, limit, 0)
+            check(limit[0] >= 2) { "YUV noise estimation requires two image bindings" }
+            GLES30.glGetIntegerv(GLES31.GL_MAX_COMPUTE_IMAGE_UNIFORMS, limit, 0)
+            check(limit[0] >= 2) { "YUV noise estimation requires two compute images" }
+        }
         if (hardwareInput.isSupported()) {
             try {
                 hardwareInputProgram = linkGraphicsProgram(
@@ -581,16 +608,15 @@ class GlesYuvStacker(
             }
         }
         PLog.i(TAG, "YUV input preferred=${if (hardwareInputProgram != 0) "hardwarebuffer" else "planes"}")
-        globalAlignment.init()
         prepareBlocksProgram = linkGraphicsProgram(
             FULLSCREEN_VERTEX_SHADER,
-            GlesYuvSpatialShaders.prepareBlocks,
-            "yuv_spatial_prepare_blocks",
+            if (sabreMode) GlesYuvSabreShaders.prepareBlocks else GlesYuvSpatialShaders.prepareBlocks,
+            "yuv_prepare_blocks",
         )
         guideProgram = linkGraphicsProgram(
             FULLSCREEN_VERTEX_SHADER,
-            GlesYuvSpatialShaders.guideAndAlignment,
-            "yuv_spatial_guide",
+            if (sabreMode) GlesYuvSabreShaders.guideAndAlignment else GlesYuvSpatialShaders.guideAndAlignment,
+            "yuv_guide",
         )
         downsampleProgram = linkGraphicsProgram(
             FULLSCREEN_VERTEX_SHADER,
@@ -612,47 +638,65 @@ class GlesYuvStacker(
             GlesMgcRawSpatialShaders.yuvUpsampleAlignment,
             "yuv_spatial_upsample_alignment",
         )
-        blockLucasKanadeProgram = linkGraphicsProgram(
+        blockLucasKanadeProgram = if (sabreMode) linkComputeProgram(
+            GlesYuvAlignmentShaders.blockLucasKanadeCompute, "yuv_sabre_block_lk",
+        ) else linkGraphicsProgram(
             FULLSCREEN_VERTEX_SHADER,
             GlesYuvAlignmentShaders.blockLucasKanade,
             "yuv_spatial_block_lk",
         )
-        rejectionProgram = linkGraphicsProgram(
+        if (sabreMode) {
+            noiseEstimateProgram = linkComputeProgram(GlesYuvSabreShaders.noiseEstimate, "yuv_sabre_noise")
+            covarianceProgram = linkGraphicsProgram(FULLSCREEN_VERTEX_SHADER, GlesYuvSabreShaders.covariance, "yuv_sabre_covariance")
+            rejectionProgram = linkGraphicsProgram(FULLSCREEN_VERTEX_SHADER, GlesYuvSabreShaders.rejection, "yuv_sabre_rejection")
+            rejectionDownsampleProgram = linkGraphicsProgram(FULLSCREEN_VERTEX_SHADER, GlesMgcRawSpatialShaders.dilateRejection, "yuv_sabre_dilation")
+            accumulateProgram = linkGraphicsProgram(FULLSCREEN_VERTEX_SHADER, GlesYuvSabreShaders.mergeLuma, "yuv_sabre_merge_luma")
+            sabreChromaMergeProgram = linkGraphicsProgram(FULLSCREEN_VERTEX_SHADER, GlesYuvSabreShaders.mergeChroma, "yuv_sabre_merge_chroma")
+            if (outputUpscaleEnabled) {
+                sabreResolveProgram = linkGraphicsProgram(FULLSCREEN_VERTEX_SHADER, GlesYuvSabreShaders.resolve, "yuv_sabre_resolve")
+            }
+        } else {
+            rejectionProgram = linkGraphicsProgram(
+                FULLSCREEN_VERTEX_SHADER,
+                GlesYuvSpatialShaders.rejection,
+                "yuv_spatial_rejection",
+            )
+            rejectionDownsampleProgram = linkGraphicsProgram(
+                FULLSCREEN_VERTEX_SHADER,
+                GlesYuvSpatialShaders.rejectionDownsample,
+                "yuv_spatial_rejection_downsample",
+            )
+            clippedGaussianProgram = linkGraphicsProgram(
+                FULLSCREEN_VERTEX_SHADER,
+                GlesYuvSpatialShaders.clippedGaussian,
+                "yuv_spatial_pixel_difference_blur",
+            )
+            rejectionFilterDownsampleProgram = linkGraphicsProgram(
+                FULLSCREEN_VERTEX_SHADER,
+                GlesMgcRawSpatialShaders.rejectionFilterDownsample,
+                "yuv_spatial_rejection_filter_downsample",
+            )
+            rejectionFilterProgram = linkGraphicsProgram(
+                FULLSCREEN_VERTEX_SHADER,
+                GlesMgcRawSpatialShaders.rejectionFilter,
+                "yuv_spatial_rejection_filter",
+            )
+            rejectionPostprocessProgram = linkGraphicsProgram(
+                FULLSCREEN_VERTEX_SHADER,
+                GlesMgcRawSpatialShaders.rejectionPostprocess,
+                "yuv_spatial_rejection_postprocess",
+            )
+            accumulateProgram = linkGraphicsProgram(
+                FULLSCREEN_VERTEX_SHADER,
+                GlesYuvSpatialShaders.merge,
+                "yuv_spatial_merge",
+            )
+        }
+        normalizeProgram = linkGraphicsProgram(
             FULLSCREEN_VERTEX_SHADER,
-            GlesYuvSpatialShaders.rejection,
-            "yuv_spatial_rejection",
+            if (sabreMode) GlesYuvSabreShaders.normalizedOutput else NORMALIZE_FRAGMENT_SHADER,
+            "normalize",
         )
-        rejectionDownsampleProgram = linkGraphicsProgram(
-            FULLSCREEN_VERTEX_SHADER,
-            GlesYuvSpatialShaders.rejectionDownsample,
-            "yuv_spatial_rejection_downsample",
-        )
-        clippedGaussianProgram = linkGraphicsProgram(
-            FULLSCREEN_VERTEX_SHADER,
-            GlesYuvSpatialShaders.clippedGaussian,
-            "yuv_spatial_pixel_difference_blur",
-        )
-        rejectionFilterDownsampleProgram = linkGraphicsProgram(
-            FULLSCREEN_VERTEX_SHADER,
-            GlesMgcRawSpatialShaders.rejectionFilterDownsample,
-            "yuv_spatial_rejection_filter_downsample",
-        )
-        rejectionFilterProgram = linkGraphicsProgram(
-            FULLSCREEN_VERTEX_SHADER,
-            GlesMgcRawSpatialShaders.rejectionFilter,
-            "yuv_spatial_rejection_filter",
-        )
-        rejectionPostprocessProgram = linkGraphicsProgram(
-            FULLSCREEN_VERTEX_SHADER,
-            GlesMgcRawSpatialShaders.rejectionPostprocess,
-            "yuv_spatial_rejection_postprocess",
-        )
-        accumulateProgram = linkGraphicsProgram(
-            FULLSCREEN_VERTEX_SHADER,
-            GlesYuvSpatialShaders.merge,
-            "yuv_spatial_merge",
-        )
-        normalizeProgram = linkGraphicsProgram(FULLSCREEN_VERTEX_SHADER, NORMALIZE_FRAGMENT_SHADER, "normalize")
         readbackResolveProgram = linkGraphicsProgram(FULLSCREEN_VERTEX_SHADER, READBACK_RESOLVE_FRAGMENT_SHADER, "readback_resolve")
         if (outputUpscaleEnabled) {
             lanczosOutputProgram = linkGraphicsProgram(
@@ -669,7 +713,8 @@ class GlesYuvStacker(
         val maxTextureSize = IntArray(1)
         GLES30.glGetIntegerv(GLES30.GL_MAX_TEXTURE_SIZE, maxTextureSize, 0)
         val maxSize = maxTextureSize[0].coerceAtLeast(1)
-        if (gpuOutputWidth > maxSize || gpuOutputHeight > maxSize ||
+        if (width > maxSize || height > maxSize ||
+            gpuOutputWidth > maxSize || gpuOutputHeight > maxSize ||
             renderOutputWidth > maxSize || renderOutputHeight > maxSize
         ) {
             throw IllegalStateException(
@@ -741,16 +786,29 @@ class GlesYuvStacker(
             GLES30.GL_NEAREST,
         )
         rawReverseWeightTexture = createTexture2D(guideWidth, guideHeight, GLES30.GL_R8, GLES30.GL_LINEAR)
-        rawPixelDifferenceTexture = createTexture2D(guideWidth, guideHeight, GLES30.GL_R8, GLES30.GL_LINEAR)
-        initialWeightTexture = createTexture2D(mergeWeightWidth, mergeWeightHeight, GLES30.GL_R8, GLES30.GL_LINEAR)
-        pixelDifferenceTexture = createTexture2D(mergeWeightWidth, mergeWeightHeight, GLES30.GL_R8, GLES30.GL_LINEAR)
-        pixelDifferenceHorizontalTexture = createTexture2D(mergeWeightWidth, mergeWeightHeight, GLES30.GL_R16F, GLES30.GL_LINEAR)
-        smoothedPixelDifferenceTexture = createTexture2D(mergeWeightWidth, mergeWeightHeight, GLES30.GL_R8, GLES30.GL_NEAREST)
-        downsampledLumaTexture = createTexture2D(rejectionFilterWidth, rejectionFilterHeight, GLES30.GL_R32F, GLES30.GL_NEAREST)
-        downsampledRejectionTexture = createTexture2D(rejectionFilterWidth, rejectionFilterHeight, GLES30.GL_R32F, GLES30.GL_NEAREST)
-        filteredRejectionTexture = createTexture2D(rejectionFilterWidth, rejectionFilterHeight, GLES30.GL_R8, GLES30.GL_LINEAR)
+        if (sabreMode) {
+            nativeNoiseTexture = createTexture2D(noiseWidth, noiseHeight, GLES30.GL_RGBA16F, GLES30.GL_LINEAR)
+            referenceGuideNoiseTexture = createTexture2D(noiseWidth, noiseHeight, GLES30.GL_RGBA16F, GLES30.GL_LINEAR)
+            currentGuideNoiseTexture = createTexture2D(noiseWidth, noiseHeight, GLES30.GL_RGBA16F, GLES30.GL_LINEAR)
+            covarianceTexture = createTexture2D(guideWidth, guideHeight, GLES30.GL_RGBA16F, GLES30.GL_LINEAR)
+            lumaAccumulatorTexture = createTexture2D(width, height, GLES30.GL_RG16F, GLES30.GL_NEAREST)
+            chromaAccumulatorTexture = createTexture2D(chromaWidth, chromaHeight, GLES30.GL_RGBA16F, GLES30.GL_NEAREST)
+        } else {
+            rawPixelDifferenceTexture = createTexture2D(guideWidth, guideHeight, GLES30.GL_R8, GLES30.GL_LINEAR)
+            initialWeightTexture = createTexture2D(mergeWeightWidth, mergeWeightHeight, GLES30.GL_R8, GLES30.GL_LINEAR)
+            pixelDifferenceTexture = createTexture2D(mergeWeightWidth, mergeWeightHeight, GLES30.GL_R8, GLES30.GL_LINEAR)
+            pixelDifferenceHorizontalTexture = createTexture2D(mergeWeightWidth, mergeWeightHeight, GLES30.GL_R16F, GLES30.GL_LINEAR)
+            smoothedPixelDifferenceTexture = createTexture2D(mergeWeightWidth, mergeWeightHeight, GLES30.GL_R8, GLES30.GL_NEAREST)
+            downsampledLumaTexture = createTexture2D(rejectionFilterWidth, rejectionFilterHeight, GLES30.GL_R32F, GLES30.GL_NEAREST)
+            downsampledRejectionTexture = createTexture2D(rejectionFilterWidth, rejectionFilterHeight, GLES30.GL_R32F, GLES30.GL_NEAREST)
+            filteredRejectionTexture = createTexture2D(rejectionFilterWidth, rejectionFilterHeight, GLES30.GL_R8, GLES30.GL_LINEAR)
+        }
         frameWeightTexture = createTexture2D(mergeWeightWidth, mergeWeightHeight, GLES30.GL_R8, GLES30.GL_LINEAR)
-        accumulatorTexture = createTexture2D(width, height, GLES30.GL_RGBA16F, GLES30.GL_NEAREST)
+        // Native output resolves directly from independent accumulators. Lanczos reuses a
+        // normalized surface so each of its 36 taps needs one fetch, not five plane fetches.
+        if (!sabreMode || outputUpscaleEnabled) {
+            accumulatorTexture = createTexture2D(width, height, GLES30.GL_RGBA16F, GLES30.GL_NEAREST)
+        }
         currentAccumulatorTexture = accumulatorTexture
         outputTexture = createTexture2D(gpuOutputWidth, gpuOutputHeight, GLES30.GL_RGBA8, GLES30.GL_NEAREST)
         if (cpuRotateReadback) {
@@ -769,6 +827,14 @@ class GlesYuvStacker(
     }
 
     private fun createPyramid(linearSampling: Boolean = false): List<TextureLevel> {
+        if (sabreMode) return sabreAlignmentPlan.levels.map { level ->
+            TextureLevel(
+                createTexture2D(level.width, level.height, GLES30.GL_R16I, GLES30.GL_NEAREST),
+                level.width, level.height, level.scale.toFloat(),
+                if (linearSampling) createTexture2D(level.width, level.height, GLES30.GL_RG16F, GLES30.GL_LINEAR) else 0,
+                level.tileSize, level.gridWidth, level.gridHeight,
+            )
+        }
         val levels = ArrayList<TextureLevel>(ALIGN_PYRAMID_DOWNSAMPLE_STEPS.size + 1)
         var levelWidth = guideWidth
         var levelHeight = guideHeight
@@ -1346,7 +1412,7 @@ class GlesYuvStacker(
         levels: List<TextureLevel>,
         currentToReferenceScale: Float,
     ) {
-        bindFramebufferOutput(blockTexture, "prepareSpatialBlocks")
+        bindFramebufferOutput(blockTexture, "prepareYuvBlocks")
         GLES30.glViewport(0, 0, guideWidth, guideHeight)
         GLES30.glUseProgram(prepareBlocksProgram)
         bindTexture(prepareBlocksProgram, "uLuma", 0, yTexture)
@@ -1355,7 +1421,7 @@ class GlesYuvStacker(
         GLES30.glUniform2i(uniform(prepareBlocksProgram, "uChromaSize"), chromaWidth, chromaHeight)
         GLES30.glUniform1i(uniform(prepareBlocksProgram, "uIsP010"), if (highPrecisionInput) 1 else 0)
         GLES30.glDrawArrays(GLES30.GL_TRIANGLES, 0, 3)
-        finishFramebufferPass("prepareSpatialBlocks")
+        finishFramebufferPass("prepareYuvBlocks")
 
         val first = levels.first()
         val guideOutputs = if (first.linearTexture != 0) {
@@ -1363,7 +1429,7 @@ class GlesYuvStacker(
         } else {
             intArrayOf(guideTexture, first.texture)
         }
-        bindFramebufferOutputs(guideOutputs, "prepareSpatialGuideAndAlignment")
+        bindFramebufferOutputs(guideOutputs, "prepareYuvGuideAndAlignment")
         GLES30.glViewport(0, 0, guideWidth, guideHeight)
         GLES30.glUseProgram(guideProgram)
         bindTexture(guideProgram, "uBlocks", 0, blockTexture)
@@ -1379,12 +1445,12 @@ class GlesYuvStacker(
             currentToReferenceScale * GUIDE_CLIPPING_POINT,
         )
         GLES30.glDrawArrays(GLES30.GL_TRIANGLES, 0, 3)
-        finishFramebufferPass("prepareSpatialGuideAndAlignment")
+        finishFramebufferPass("prepareYuvGuideAndAlignment")
 
         for (index in 1 until levels.size) {
             val input = levels[index - 1]
             val output = levels[index]
-            val step = ALIGN_PYRAMID_DOWNSAMPLE_STEPS[index - 1]
+            val step = if (sabreMode) sabreAlignmentPlan.levels[index].downsample else ALIGN_PYRAMID_DOWNSAMPLE_STEPS[index - 1]
             val program = if (step == 4) downsample4Program else downsampleProgram
             val pyramidOutputs = if (output.linearTexture != 0) {
                 intArrayOf(output.texture, output.linearTexture)
@@ -1443,7 +1509,10 @@ class GlesYuvStacker(
     private fun finishFramebufferPass(label: String) {
         try {
             GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, 0)
-            GLES31.glMemoryBarrier(GLES31.GL_FRAMEBUFFER_BARRIER_BIT or GLES31.GL_TEXTURE_FETCH_BARRIER_BIT)
+            GLES31.glMemoryBarrier(
+                GLES31.GL_FRAMEBUFFER_BARRIER_BIT or GLES31.GL_TEXTURE_FETCH_BARRIER_BIT or
+                    if (sabreMode) GLES31.GL_SHADER_IMAGE_ACCESS_BARRIER_BIT else 0,
+            )
             checkGlError(label)
         } finally {
             timing.endPass(label)
@@ -1456,6 +1525,110 @@ class GlesYuvStacker(
         GLES30.glClearColor(0f, 0f, 0f, 0f)
         GLES30.glClear(GLES30.GL_COLOR_BUFFER_BIT)
         finishFramebufferPass("clearAccumulator")
+        currentAccumulatorTexture = accumulatorTexture
+    }
+
+    /** Noise is measured in the same encoded YCbCr domain as guide differences and kernels. */
+    private fun prepareSabreNoiseAndCovariance(y: Int, cbcr: Int, guide: Int, guideNoise: Int) {
+        timing.compute("sabre.noise") {
+            check(noiseWidth in 1..65535 && noiseHeight in 1..65535)
+            GLES30.glUseProgram(noiseEstimateProgram)
+            bindTexture(noiseEstimateProgram, "uLuma", 0, y)
+            bindTexture(noiseEstimateProgram, "uChroma", 1, cbcr)
+            bindTexture(noiseEstimateProgram, "uGuide", 2, guide)
+            GLES30.glUniform2i(uniform(noiseEstimateProgram, "uInputSize"), width, height)
+            GLES30.glUniform2i(uniform(noiseEstimateProgram, "uGuideSize"), guideWidth, guideHeight)
+            GLES30.glUniform1f(uniform(noiseEstimateProgram, "uCodeStep"), if (highPrecisionInput) 64f / 65535f else 1f / 255f)
+            GLES31.glBindImageTexture(0, nativeNoiseTexture, 0, false, 0, GLES31.GL_WRITE_ONLY, GLES30.GL_RGBA16F)
+            GLES31.glBindImageTexture(1, guideNoise, 0, false, 0, GLES31.GL_WRITE_ONLY, GLES30.GL_RGBA16F)
+            GLES31.glDispatchCompute(noiseWidth, noiseHeight, 1)
+            finishComputeImages("sabre.noise", 2, GLES30.GL_RGBA16F)
+        }
+        bindFramebufferOutput(covarianceTexture, "sabre.covariance")
+        GLES30.glViewport(0, 0, guideWidth, guideHeight)
+        GLES30.glUseProgram(covarianceProgram)
+        bindTexture(covarianceProgram, "uGuide", 0, guide)
+        bindTexture(covarianceProgram, "uNativeNoise", 1, nativeNoiseTexture)
+        bindTexture(covarianceProgram, "uGuideNoise", 2, guideNoise)
+        GLES30.glUniform2i(uniform(covarianceProgram, "uGuideSize"), guideWidth, guideHeight)
+        GLES30.glDrawArrays(GLES30.GL_TRIANGLES, 0, 3)
+        finishFramebufferPass("sabre.covariance")
+    }
+
+    private fun clearSabreAccumulators() {
+        for ((texture, size) in listOf(
+            lumaAccumulatorTexture to (width to height),
+            chromaAccumulatorTexture to (chromaWidth to chromaHeight),
+        )) {
+            bindFramebufferOutput(texture, "sabre.clear")
+            GLES30.glViewport(0, 0, size.first, size.second)
+            GLES30.glClearColor(0f, 0f, 0f, 0f)
+            GLES30.glClear(GLES30.GL_COLOR_BUFFER_BIT)
+            finishFramebufferPass("sabre.clear")
+        }
+    }
+
+    private fun renderSabreRejection(alignment: Alignment) {
+        check(alignment.gridMin == 0 && alignment.scaleToGuidePixels == 1f)
+        bindFramebufferOutput(rawReverseWeightTexture, "sabre.rejection")
+        GLES30.glViewport(0, 0, guideWidth, guideHeight)
+        GLES30.glUseProgram(rejectionProgram)
+        bindTexture(rejectionProgram, "uReferenceGuide", 0, referenceGuideTexture)
+        bindTexture(rejectionProgram, "uCurrentGuide", 1, currentGuideTexture)
+        bindTexture(rejectionProgram, "uReferenceNoise", 2, referenceGuideNoiseTexture)
+        bindTexture(rejectionProgram, "uCurrentNoise", 3, currentGuideNoiseTexture)
+        bindTexture(rejectionProgram, "uAlignment", 4, alignment.texture)
+        GLES30.glUniform2i(uniform(rejectionProgram, "uGuideSize"), guideWidth, guideHeight)
+        GLES30.glUniform2i(uniform(rejectionProgram, "uAlignmentGridSize"), alignment.gridWidth, alignment.gridHeight)
+        GLES30.glUniform1i(uniform(rejectionProgram, "uAlignmentTileSize"), alignment.tileStride)
+        GLES30.glDrawArrays(GLES30.GL_TRIANGLES, 0, 3)
+        finishFramebufferPass("sabre.rejection")
+
+        bindFramebufferOutput(frameWeightTexture, "sabre.dilation")
+        GLES30.glViewport(0, 0, mergeWeightWidth, mergeWeightHeight)
+        GLES30.glUseProgram(rejectionDownsampleProgram)
+        bindTexture(rejectionDownsampleProgram, "uRejection", 0, rawReverseWeightTexture)
+        GLES30.glUniform2i(uniform(rejectionDownsampleProgram, "uInputSize"), guideWidth, guideHeight)
+        GLES30.glDrawArrays(GLES30.GL_TRIANGLES, 0, 3)
+        finishFramebufferPass("sabre.dilation")
+    }
+
+    private fun accumulateSabreFrame(y: Int, cbcr: Int, isReference: Boolean) {
+        for (chroma in listOf(false, true)) {
+            val program = if (chroma) sabreChromaMergeProgram else accumulateProgram
+            val label = if (chroma) "sabre.merge.chroma" else "sabre.merge.luma"
+            bindFramebufferOutput(if (chroma) chromaAccumulatorTexture else lumaAccumulatorTexture, label)
+            GLES30.glViewport(0, 0, if (chroma) chromaWidth else width, if (chroma) chromaHeight else height)
+            GLES30.glUseProgram(program)
+            bindTexture(program, "uCurrentY", 0, y)
+            bindTexture(program, "uCurrentCbCr", 1, cbcr)
+            bindTexture(program, "uCovariance", 2, covarianceTexture)
+            bindTexture(program, "uAlignment", 3, if (isReference) zeroFlowTexture else mergeAlignmentTexture)
+            bindTexture(program, "uFrameWeight", 4, if (isReference) identityWeightTexture else frameWeightTexture)
+            GLES30.glUniform2i(uniform(program, "uInputSize"), width, height)
+            GLES30.glUniform2i(uniform(program, "uGuideSize"), guideWidth, guideHeight)
+            GLES30.glUniform1i(uniform(program, "uUseFrameWeight"), if (isReference) 0 else 1)
+            GLES30.glEnable(GLES30.GL_BLEND)
+            try {
+                GLES30.glBlendEquation(GLES30.GL_FUNC_ADD)
+                GLES30.glBlendFunc(GLES30.GL_ONE, GLES30.GL_ONE)
+                GLES30.glDrawArrays(GLES30.GL_TRIANGLES, 0, 3)
+            } finally {
+                GLES30.glDisable(GLES30.GL_BLEND)
+            }
+            finishFramebufferPass(label)
+        }
+    }
+
+    private fun resolveSabreAccumulator() {
+        bindFramebufferOutput(accumulatorTexture, "sabre.resolve")
+        GLES30.glViewport(0, 0, width, height)
+        GLES30.glUseProgram(sabreResolveProgram)
+        bindTexture(sabreResolveProgram, "uLumaAccumulator", 0, lumaAccumulatorTexture)
+        bindTexture(sabreResolveProgram, "uChromaAccumulator", 1, chromaAccumulatorTexture)
+        GLES30.glUniform2i(uniform(sabreResolveProgram, "uInputSize"), width, height)
+        GLES30.glDrawArrays(GLES30.GL_TRIANGLES, 0, 3)
+        finishFramebufferPass("sabre.resolve")
         currentAccumulatorTexture = accumulatorTexture
     }
 
@@ -1478,9 +1651,9 @@ class GlesYuvStacker(
     private fun buildReferenceAlignmentProducts(
         reference: List<TextureLevel>,
     ): List<ReferenceAlignmentProducts> {
-        check(reference.size == ALIGN_LEVEL_TILE_STRIDES.size)
+        check(reference.size == if (sabreMode) sabreAlignmentPlan.levels.size else ALIGN_LEVEL_TILE_STRIDES.size)
         return reference.mapIndexed { levelIndex, level ->
-            val tileSize = ALIGN_LEVEL_TILE_STRIDES[levelIndex]
+            val tileSize = if (sabreMode) level.tileSize else ALIGN_LEVEL_TILE_STRIDES[levelIndex]
             val productGridWidth = alignmentGridWidth(level, tileSize)
             val productGridHeight = alignmentGridHeight(level, tileSize)
             val products0 = createTexture2D(
@@ -1527,22 +1700,25 @@ class GlesYuvStacker(
         current: List<TextureLevel>,
         referenceProducts: List<ReferenceAlignmentProducts>,
     ): Alignment {
-        check(reference.size == current.size && reference.size == ALIGN_LEVEL_TILE_STRIDES.size)
+        check(reference.size == current.size)
         check(referenceProducts.size == reference.size)
         val coarseIndex = reference.lastIndex
         var alignment = renderLucasKanadeLevel(
             reference = reference[coarseIndex],
             current = current[coarseIndex],
             initial = null,
-            tileStride = ALIGN_LEVEL_TILE_STRIDES[coarseIndex],
-            tileSize = ALIGN_LEVEL_TILE_STRIDES[coarseIndex],
-            iterations = ALIGN_LK_ITERATIONS_COARSER,
-            normalize = true,
+            tileStride = if (sabreMode) reference[coarseIndex].tileSize else ALIGN_LEVEL_TILE_STRIDES[coarseIndex],
+            tileSize = if (sabreMode) reference[coarseIndex].tileSize else ALIGN_LEVEL_TILE_STRIDES[coarseIndex],
+            iterations = if (coarseIndex == 0) ALIGN_LK_ITERATIONS_FINEST else ALIGN_LK_ITERATIONS_COARSER,
+            normalize = coarseIndex != 0,
             referenceProducts = referenceProducts[coarseIndex],
         )
         for (levelIndex in coarseIndex - 1 downTo 0) {
             val level = reference[levelIndex]
-            val tileSize = ALIGN_LEVEL_TILE_STRIDES[levelIndex]
+            val tileSize = if (sabreMode) level.tileSize else ALIGN_LEVEL_TILE_STRIDES[levelIndex]
+            val globalCandidate = if (sabreMode) timing.compute("alignment.globalHistogram") {
+                globalAlignment.estimate(alignment.texture, alignment.gridWidth, alignment.gridHeight)
+            } else 0
             alignment = renderUpsampledAlignment(
                 reference = level,
                 current = current[levelIndex],
@@ -1552,6 +1728,7 @@ class GlesYuvStacker(
                 targetGridMin = ALIGN_LK_GRID_MIN,
                 targetTileStride = tileSize,
                 targetTileSize = tileSize,
+                globalCandidate = globalCandidate,
             )
             alignment = renderLucasKanadeLevel(
                 reference = level,
@@ -1568,7 +1745,7 @@ class GlesYuvStacker(
                 referenceProducts = referenceProducts[levelIndex],
             )
         }
-        val globalCandidate = timing.gpu("alignment.globalHistogram") {
+        val globalCandidate = if (sabreMode) 0 else timing.compute("alignment.globalHistogram") {
             globalAlignment.estimate(alignment.texture, alignment.gridWidth, alignment.gridHeight)
         }
         alignment = renderUpsampledAlignment(
@@ -1583,9 +1760,10 @@ class GlesYuvStacker(
             globalCandidate = globalCandidate,
         )
         RawStackRuntimeDebug.d(TAG) {
-            "YUV Spatial alignment guide=${guideWidth}x$guideHeight " +
+            "YUV ${if (sabreMode) "Sabre" else "Spatial"} alignment guide=${guideWidth}x$guideHeight " +
                 "flowGrid=${alignment.gridWidth}x${alignment.gridHeight} " +
-                "global=gpu-histogram"
+                "global=${if (sabreMode) "pyramid-transitions" else "final-grid"} " +
+                "solver=${if (sabreMode) "compute" else "fragment"} levels=${reference.size}"
         }
         return alignment
     }
@@ -1612,8 +1790,11 @@ class GlesYuvStacker(
         var input = initial
         repeat(iterations) { iteration ->
             val output = alignmentScratchTarget(levelGridWidth, levelGridHeight, input?.texture ?: 0)
-            bindFramebufferOutput(output, "alignment.lk.scale=${reference.scaleToGuidePixels}.iteration=$iteration")
-            GLES30.glViewport(0, 0, levelGridWidth, levelGridHeight)
+            val label = "alignment.lk.scale=${reference.scaleToGuidePixels}.iteration=$iteration"
+            if (!sabreMode) {
+                bindFramebufferOutput(output, label)
+                GLES30.glViewport(0, 0, levelGridWidth, levelGridHeight)
+            }
             GLES30.glUseProgram(blockLucasKanadeProgram)
             bindTexture(blockLucasKanadeProgram, "uReference", 0, reference.texture)
             check(current.linearTexture != 0) { "YUV LK requires a filterable current pyramid" }
@@ -1651,8 +1832,17 @@ class GlesYuvStacker(
                 uniform(blockLucasKanadeProgram, "uHasInitialAlignment"),
                 if (input != null) 1 else 0,
             )
-            GLES30.glDrawArrays(GLES30.GL_TRIANGLES, 0, 3)
-            finishFramebufferPass("alignment.lk.scale=${reference.scaleToGuidePixels}.iteration=$iteration")
+            if (sabreMode) {
+                timing.compute(label) {
+                    check(levelGridWidth in 1..65535 && levelGridHeight in 1..65535)
+                    GLES31.glBindImageTexture(0, output, 0, false, 0, GLES31.GL_WRITE_ONLY, GLES30.GL_RGBA32F)
+                    GLES31.glDispatchCompute(levelGridWidth, levelGridHeight, 1)
+                    finishComputeImages(label, 1, GLES30.GL_RGBA32F)
+                }
+            } else {
+                GLES30.glDrawArrays(GLES30.GL_TRIANGLES, 0, 3)
+                finishFramebufferPass(label)
+            }
             input = Alignment(
                 texture = output,
                 gridWidth = levelGridWidth,
@@ -2037,7 +2227,12 @@ class GlesYuvStacker(
         bindFramebufferOutput(targetTexture, label)
         GLES30.glViewport(0, 0, gpuOutputWidth, gpuOutputHeight)
         GLES30.glUseProgram(program)
-        bindTexture(program, "uAccumulator", 0, accumulatorTexture)
+        if (sabreMode && !outputUpscaleEnabled) {
+            bindTexture(program, "uLumaAccumulator", 0, lumaAccumulatorTexture)
+            bindTexture(program, "uChromaAccumulator", 1, chromaAccumulatorTexture)
+        } else {
+            bindTexture(program, "uAccumulator", 0, accumulatorTexture)
+        }
         GLES31.glUniform2i(GLES31.glGetUniformLocation(program, "uInputSize"), width, height)
         val transform = if (outputUpscaleEnabled) computeOutputResampleTransform() else computeRenderTransform()
         GLES31.glUniform3f(
@@ -2562,6 +2757,39 @@ class GlesYuvStacker(
         }
     }
 
+    private fun linkComputeProgram(source: String, name: String): Int {
+        GlesComputeWorkGroup.requireBaselineCompatible(source, name)
+        val shader = compileShader(GLES31.GL_COMPUTE_SHADER, source, name)
+        var program = 0
+        var retained = false
+        try {
+            program = GLES30.glCreateProgram()
+            GLES30.glAttachShader(program, shader)
+            GLES30.glLinkProgram(program)
+            val linked = IntArray(1)
+            GLES30.glGetProgramiv(program, GLES30.GL_LINK_STATUS, linked, 0)
+            check(linked[0] != 0) { "Program $name linking failed: ${GLES30.glGetProgramInfoLog(program)}" }
+            programs += program
+            retained = true
+            return program
+        } finally {
+            GLES30.glDeleteShader(shader)
+            if (!retained && program != 0) GLES30.glDeleteProgram(program)
+        }
+    }
+
+    private fun finishComputeImages(label: String, count: Int, format: Int) {
+        // Scratch targets alternate between image writes, sampler reads and framebuffer writes.
+        GLES31.glMemoryBarrier(
+            GLES31.GL_SHADER_IMAGE_ACCESS_BARRIER_BIT or GLES31.GL_TEXTURE_FETCH_BARRIER_BIT or
+                GLES31.GL_FRAMEBUFFER_BARRIER_BIT,
+        )
+        repeat(count) { unit ->
+            GLES31.glBindImageTexture(unit, 0, 0, false, 0, GLES31.GL_WRITE_ONLY, format)
+        }
+        checkGlError(label)
+    }
+
     private fun compileShader(type: Int, source: String, name: String): Int {
         val shader = GLES30.glCreateShader(type)
         GLES30.glShaderSource(shader, source)
@@ -2747,13 +2975,13 @@ class GlesYuvStacker(
     }
 
     private fun alignmentGridWidth(level: TextureLevel, tileStride: Int): Int =
-        alignmentGridExtent(
+        if (sabreMode) level.gridWidth else alignmentGridExtent(
             ceilDiv(guideWidth, level.scaleToGuidePixels.toInt()),
             tileStride,
         )
 
     private fun alignmentGridHeight(level: TextureLevel, tileStride: Int): Int =
-        alignmentGridExtent(
+        if (sabreMode) level.gridHeight else alignmentGridExtent(
             ceilDiv(guideHeight, level.scaleToGuidePixels.toInt()),
             tileStride,
         )
