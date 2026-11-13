@@ -25,7 +25,6 @@
     <string name="take_photo">拍照</string>
     <string name="capture_mode_professional">专业</string>
     <string name="capture_mode_photo">照片</string>
-    <string name="capture_mode_night_vision">夜视</string>
     <string name="capture_mode_video">视频</string>
 
     <!-- Exposure Controls -->

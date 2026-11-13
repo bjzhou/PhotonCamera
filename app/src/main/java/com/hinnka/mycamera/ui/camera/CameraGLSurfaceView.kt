@@ -239,10 +239,6 @@ class CameraGLSurfaceView @JvmOverloads constructor(
         renderer.meteringEnabled = enabled
     }
 
-    fun setNightVisionEnabled(enabled: Boolean) {
-        renderer.nightVisionEnabled = enabled
-    }
-
     /**
      * 设置 LUT
      * 

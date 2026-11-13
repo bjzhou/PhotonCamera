@@ -131,7 +131,6 @@ enum class ActivePanel {
 private enum class CameraShootingMode {
     PROFESSIONAL,
     PHOTO,
-    NIGHT_VISION,
     VIDEO
 }
 
@@ -654,27 +653,17 @@ fun CameraScreen(
 
         val targetCaptureMode = when (mode) {
             CameraShootingMode.PROFESSIONAL,
-            CameraShootingMode.PHOTO,
-            CameraShootingMode.NIGHT_VISION -> CaptureMode.PHOTO
+            CameraShootingMode.PHOTO -> CaptureMode.PHOTO
             CameraShootingMode.VIDEO -> CaptureMode.VIDEO
         }
         val targetUseRaw = when (mode) {
             CameraShootingMode.PROFESSIONAL -> true
-            CameraShootingMode.PHOTO,
-            CameraShootingMode.NIGHT_VISION -> false
-            CameraShootingMode.VIDEO -> null
-        }
-        // Video keeps the night vision preference so returning to photo restores it.
-        val targetNightVision = when (mode) {
-            CameraShootingMode.NIGHT_VISION -> true
-            CameraShootingMode.PROFESSIONAL,
             CameraShootingMode.PHOTO -> false
-            CameraShootingMode.VIDEO -> state.nightVisionEnabled
+            CameraShootingMode.VIDEO -> null
         }
         if (
             targetCaptureMode == state.captureMode &&
-            (targetUseRaw == null || targetUseRaw == state.useRaw) &&
-            targetNightVision == state.nightVisionEnabled
+            (targetUseRaw == null || targetUseRaw == state.useRaw)
         ) {
             return
         }
@@ -683,7 +672,7 @@ fun CameraScreen(
             if (targetCaptureMode == CaptureMode.VIDEO && state.aspectRatio == AspectRatio.XPAN) {
                 viewModel.setAspectRatio(AspectRatio.RATIO_4_3)
             }
-            viewModel.setShootingMode(targetCaptureMode, targetUseRaw, targetNightVision)
+            viewModel.setShootingMode(targetCaptureMode, targetUseRaw)
         }
     }
 
@@ -1351,7 +1340,6 @@ fun CameraScreen(
                             },
                             livePhotoRecorder = viewModel.livePhotoRecorder,
                             videoLogProfile = state.videoConfig.logProfile,
-                            nightVisionEnabled = state.isNightVisionActive,
                             isEyeFocusBusy = viewModel.isEyeFocusBusy,
                             isAutoFocus = state.isAutoFocus,
                             focusPeakingEnabled = focusPeakingEnabled && !state.isHyperfocalFocusEnabled,
@@ -1763,7 +1751,6 @@ fun CameraScreen(
         CameraTopSheet(
             visible = activePanel == ActivePanel.SETTINGS,
             captureMode = state.captureMode,
-            nightVisionEnabled = state.nightVisionEnabled,
             aspectRatio = state.aspectRatio,
             topSheetAspectRatios = topSheetAspectRatios,
             onAspectRatioChange = { runPreviewTransition { viewModel.setAspectRatio(it) } },
@@ -2237,7 +2224,6 @@ private fun Controls(
                 shootingMode = when {
                     state.captureMode == CaptureMode.VIDEO -> CameraShootingMode.VIDEO
                     state.useRaw && state.isRawSupported -> CameraShootingMode.PROFESSIONAL
-                    state.nightVisionEnabled -> CameraShootingMode.NIGHT_VISION
                     else -> CameraShootingMode.PHOTO
                 },
                 professionalModeEnabled = state.isRawSupported,
@@ -2696,7 +2682,6 @@ private val CameraShootingMode.labelRes: Int
     get() = when (this) {
         CameraShootingMode.PROFESSIONAL -> R.string.capture_mode_professional
         CameraShootingMode.PHOTO -> R.string.capture_mode_photo
-        CameraShootingMode.NIGHT_VISION -> R.string.capture_mode_night_vision
         CameraShootingMode.VIDEO -> R.string.capture_mode_video
     }
 

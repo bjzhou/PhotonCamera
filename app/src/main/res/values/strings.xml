@@ -25,7 +25,6 @@
     <string name="take_photo">Take Photo</string>
     <string name="capture_mode_professional">Pro</string>
     <string name="capture_mode_photo">Photo</string>
-    <string name="capture_mode_night_vision">Night</string>
     <string name="capture_mode_video">Video</string>
 
     <!-- Exposure Controls -->

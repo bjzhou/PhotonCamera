@@ -1,6 +1,5 @@
 package com.hinnka.mycamera.gallery
 
-import com.hinnka.mycamera.processor.NightVisionToneCurve
 import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
@@ -92,19 +91,6 @@ class PhotoProcessor(
                 userPreferencesRepository.latest().rawLensShadingCorrectionEnabled
             }
     }
-
-    /**
-     * Night vision capture stage (MGC denoise, then tone curve) in one GL pass chain without LUT
-     * or recipe. Returns [bitmap] itself when there is nothing to do; otherwise a new bitmap and
-     * the caller owns both.
-     */
-    internal suspend fun applyNightVision(
-        bitmap: Bitmap,
-        lumaStrength: Float,
-        chromaStrength: Float,
-        sensorIso: Int?,
-        curve: NightVisionToneCurve,
-    ): Bitmap = lutImageProcessor.applyNightVision(bitmap, lumaStrength, chromaStrength, sensorIso, curve)
 
     /**
      * 非 RAW 照片的降噪基底（对应 RAW 烘焙进 original.jpg 的降噪）：对 [source] 全分辨率跑一次

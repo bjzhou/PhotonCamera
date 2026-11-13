@@ -1,7 +1,5 @@
 package com.hinnka.mycamera.lut
 
-import com.hinnka.mycamera.processor.NightVisionTone
-import com.hinnka.mycamera.processor.NightVisionToneCurve
 import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.PointF
@@ -53,10 +51,6 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
     private val appContext = context.applicationContext
     companion object {
         private const val TAG = "LutRenderer"
-
-        /** Units 0-3 and 5/6/12 are taken by the color pass and its helpers. */
-        private const val NIGHT_TONE_TEXTURE_UNIT = 9
-        private const val NIGHT_VISION_SAMPLE_INTERVAL_MS = 200L
 
         // 属性位置
         private const val POSITION_COMPONENT_COUNT = 2
@@ -115,30 +109,6 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
     private var meteringTextureId: Int = 0
     private val METERING_SIZE = 32
 
-    // Night vision: the camera input (no curve, layers or engine) is sampled at the model size,
-    // read back asynchronously, and the estimator posts a smoothed curve for the shader stage.
-    private val nightVisionPboIds = IntArray(2)
-    private val nightVisionPboFences = LongArray(2)
-    private var nightVisionPboIndex = 0
-    private var nightVisionFboId = 0
-    private var nightVisionTextureId = 0
-    private var lastNightVisionSampleTime = 0L
-    private var nightToneTextureId = 0
-    private var nightToneWhitePoint = 1f
-    private var nightToneActive = false
-    @Volatile
-    private var pendingNightTone: NightVisionToneCurve? = null
-    private val nightVisionEstimator = NightVisionPreviewEstimator(context) { pendingNightTone = it }
-
-    /** Enables the night vision preview curve; disabling drops the curve immediately. */
-    @Volatile
-    var nightVisionEnabled: Boolean = false
-        set(value) {
-            if (field == value) return
-            field = value
-            nightVisionEstimator.reset()
-            pendingNightTone = null
-        }
     private val meteringExecutor: ExecutorService = Executors.newSingleThreadExecutor()
     private val meteringDispatchInFlight = AtomicBoolean(false)
     private var captureFboId: Int = 0
@@ -647,14 +617,6 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
         pboId = 0
         resetPixelPackState(meteringPboIds, meteringPboFences)
         meteringPboIndex = 0
-        resetPixelPackState(nightVisionPboIds, nightVisionPboFences)
-        nightVisionPboIndex = 0
-        nightVisionFboId = 0
-        nightVisionTextureId = 0
-        nightToneTextureId = 0
-        nightToneActive = false
-        // The curve lived in the lost context; ask the estimator for a fresh one.
-        nightVisionEstimator.reset()
         meteringFboId = 0
         meteringTextureId = 0
         captureFboId = 0
@@ -843,7 +805,6 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
         params: com.hinnka.mycamera.model.ColorRecipeParams,
         enableVideoLog: Boolean,
         includeEnginePreview: Boolean = false,
-        nightVisionTone: Boolean = false,
     ): ColorPassLocations? {
         val variant = PreviewColorShaderVariant.forPass(
             textureSource = textureSource,
@@ -852,7 +813,6 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
             lutEnabled = lutEnabled && lutConfig != null,
             videoLogEnabled = enableVideoLog && videoLogProfile.isEnabled,
             previewLite = previewLiteEffectsEnabled,
-            nightVisionTone = nightVisionTone,
         )
         return colorProgramCache.get(variant.copy(includeEnginePreview = includeEnginePreview))
     }
@@ -876,7 +836,6 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
         curveEnabled: Boolean,
         enableVideoLog: Boolean,
         toneBaseOnly: Boolean = false,
-        nightVisionTone: Boolean = false,
     ) {
         val shadowsHighlightsActive =
             ShadowsHighlightsShader.isActive(params.highlights, params.shadows)
@@ -902,7 +861,6 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
                 curveEnabled = curveEnabled,
                 enableVideoLog = enableVideoLog,
                 toneBaseOnly = true,
-                nightVisionTone = nightVisionTone,
             )
             toneBase.buildLevels(::drawSimpleQuad)
         }
@@ -1046,13 +1004,6 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
         GLES30.glUniform1i(locations.uCurveTextureLocation, 2)
         GLES30.glUniform1i(locations.uCurveEnabledLocation, if (curveEnabled && curveTextureId != 0) 1 else 0)
 
-        if (nightVisionTone) {
-            GLES30.glActiveTexture(GLES30.GL_TEXTURE0 + NIGHT_TONE_TEXTURE_UNIT)
-            GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, nightToneTextureId)
-            GLES30.glUniform1i(locations.uNightToneTextureLocation, NIGHT_TONE_TEXTURE_UNIT)
-            GLES30.glUniform1f(locations.uNightWhitePointLocation, nightToneWhitePoint)
-        }
-
         basicToneTextures.bind(
             context = appContext,
             textureUnit = 3,
@@ -1099,25 +1050,6 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
         GLES30.glDisableVertexAttribArray(locations.aTexCoordLocation)
         GLES30.glBindBuffer(GLES30.GL_ARRAY_BUFFER, 0)
         GLES30.glBindBuffer(GLES30.GL_ELEMENT_ARRAY_BUFFER, 0)
-    }
-
-    private fun uploadPendingNightTone() {
-        if (!nightVisionEnabled) {
-            nightToneActive = false
-            return
-        }
-        val curve = pendingNightTone ?: return
-        pendingNightTone = null
-        if (curve.isIdentity) {
-            nightToneActive = false
-            return
-        }
-        if (nightToneTextureId == 0) {
-            nightToneTextureId = NightVisionToneGl.createCurveTexture()
-        }
-        NightVisionToneGl.uploadCurveValues(nightToneTextureId, curve)
-        nightToneWhitePoint = curve.whitePoint
-        nightToneActive = true
     }
 
     private fun uploadPendingCurveTextures() {
@@ -1261,7 +1193,6 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
         val hasCreativeLayer = hasCreativeLayer()
         val hasDualLayer = hasBaselineLayer && hasCreativeLayer
         uploadPendingCurveTextures()
-        uploadPendingNightTone()
         val requestedFbo = liveRecorder != null ||
             postProcessEffectEnabled ||
             clarityEnabled ||
@@ -1445,19 +1376,13 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
                 compositeFinalDisplay = needsHdfCompositeForSampling
             )
             if (meteringEnabled) {
-                if (nightVisionEnabled) {
-                    // AE must see the scene before the night vision lift, or it would undo it.
-                    runMeteringInternal()
-                } else {
-                    runMeteringInternal(
-                        sourceTextureId = finalDisplayTextureId,
-                        sourceWidth = finalDisplayWidth,
-                        sourceHeight = finalDisplayHeight,
-                        compositeWithHdf = needsHdfCompositeForSampling
-                    )
-                }
+                runMeteringInternal(
+                    sourceTextureId = finalDisplayTextureId,
+                    sourceWidth = finalDisplayWidth,
+                    sourceHeight = finalDisplayHeight,
+                    compositeWithHdf = needsHdfCompositeForSampling
+                )
             }
-            runNightVisionSampling()
         } else {
             // 直接渲染到屏幕
             drawInternal(
@@ -1612,11 +1537,8 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
         suppressBaselineLayer: Boolean = false,
         suppressCreativeLayer: Boolean = false,
         suppressCameraEngine: Boolean = false,
-        suppressNightVisionTone: Boolean = false,
     ) {
         val plan = if (suppressCameraEngine) null else enginePreviewPlan
-        val nightVisionTone = !suppressNightVisionTone && nightVisionEnabled && nightToneActive &&
-            nightToneTextureId != 0
         if (plan != null && !enginePreview.prepare(plan)) return
         val baselineLayerAvailable = hasBaselineLayer() && !suppressBaselineLayer
         val creativeLayerAvailable = hasCreativeLayer() && !suppressCreativeLayer
@@ -1661,7 +1583,6 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
             params = layerParams,
             enableVideoLog = enableVideoLog,
             includeEnginePreview = plan != null,
-            nightVisionTone = nightVisionTone,
         ) ?: return
         drawColorPass(
             locations = locations,
@@ -1681,15 +1602,11 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
             curveTextureId = layerCurveTextureId,
             curveEnabled = layerCurveEnabled,
             enableVideoLog = enableVideoLog,
-            nightVisionTone = nightVisionTone,
         )
 
         // 测光和直方图（按需）
         if (fboId == 0 && meteringEnabled) {
             runMeteringInternal()
-        }
-        if (fboId == 0) {
-            runNightVisionSampling()
         }
 
         GlUtils.checkGlError("onDrawFrame")
@@ -3086,7 +3003,6 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
                     suppressBaselineLayer = true,
                     suppressCreativeLayer = true,
                     suppressCameraEngine = true,
-                    suppressNightVisionTone = true,
                 )
             }
 
@@ -3099,93 +3015,6 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
         }
 
         dispatchMeteringCalculation(completedBytes, currentMeteringPoint, currentMode)
-    }
-
-    private fun runNightVisionSampling() {
-        if (!nightVisionEnabled) return
-        val size = NightVisionTone.MODEL_SIZE
-        val pixelSize = size * size * 4
-        if (!ensureNightVisionFbo() || !ensurePixelPackPbos(nightVisionPboIds, pixelSize)) return
-
-        val writeIndex = nightVisionPboIndex % 2
-        val readIndex = (nightVisionPboIndex + 1) % 2
-        if (nightVisionPboIndex > 0) {
-            readReadyPixelPackBuffer(nightVisionPboIds, nightVisionPboFences, readIndex, pixelSize)
-                ?.let(nightVisionEstimator::submit)
-        }
-        val now = SystemClock.elapsedRealtime()
-        if (now - lastNightVisionSampleTime < NIGHT_VISION_SAMPLE_INTERVAL_MS) return
-        if (!isPixelPackBufferWritable(nightVisionPboFences, writeIndex)) return
-        lastNightVisionSampleTime = now
-        // Crop the capture composition first, then sample its central 2/3 in each dimension.
-        // The square viewport resizes that region to the same MODEL_SIZE² as capture input.
-        val samplingMatrix = buildMvpMatrix(captureWidth, captureHeight).apply {
-            val scale = 1f / NightVisionTone.SAMPLE_FRAME_FRACTION
-            Matrix.scaleM(this, 0, scale, scale, 1f)
-        }
-        try {
-            drawInternal(
-                fboId = nightVisionFboId,
-                width = size,
-                height = size,
-                targetMvpMatrix = samplingMatrix,
-                suppressBaselineLayer = true,
-                suppressCreativeLayer = true,
-                suppressCameraEngine = true,
-                suppressNightVisionTone = true,
-            )
-            GLES30.glBindBuffer(GLES30.GL_PIXEL_PACK_BUFFER, nightVisionPboIds[writeIndex])
-            GLES30.glReadPixels(0, 0, size, size, GLES30.GL_RGBA, GLES30.GL_UNSIGNED_BYTE, 0)
-            nightVisionPboFences[writeIndex] = GLES30.glFenceSync(GLES30.GL_SYNC_GPU_COMMANDS_COMPLETE, 0)
-            nightVisionPboIndex++
-        } finally {
-            restorePixelReadbackState()
-        }
-    }
-
-    private fun ensureNightVisionFbo(): Boolean {
-        if (nightVisionFboId != 0 && nightVisionTextureId != 0) return true
-        val size = NightVisionTone.MODEL_SIZE
-        val textures = IntArray(1)
-        GLES30.glGenTextures(1, textures, 0)
-        nightVisionTextureId = textures[0]
-        GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, nightVisionTextureId)
-        GLES30.glTexImage2D(
-            GLES30.GL_TEXTURE_2D, 0, GLES30.GL_RGBA, size, size, 0,
-            GLES30.GL_RGBA, GLES30.GL_UNSIGNED_BYTE, null
-        )
-        GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_MIN_FILTER, GLES30.GL_LINEAR)
-        GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_MAG_FILTER, GLES30.GL_LINEAR)
-        GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_WRAP_S, GLES30.GL_CLAMP_TO_EDGE)
-        GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_WRAP_T, GLES30.GL_CLAMP_TO_EDGE)
-        val fbos = IntArray(1)
-        GLES30.glGenFramebuffers(1, fbos, 0)
-        nightVisionFboId = fbos[0]
-        GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, nightVisionFboId)
-        GLES30.glFramebufferTexture2D(
-            GLES30.GL_FRAMEBUFFER, GLES30.GL_COLOR_ATTACHMENT0,
-            GLES30.GL_TEXTURE_2D, nightVisionTextureId, 0
-        )
-        val complete = GLES30.glCheckFramebufferStatus(GLES30.GL_FRAMEBUFFER) == GLES30.GL_FRAMEBUFFER_COMPLETE
-        GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, 0)
-        GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, 0)
-        if (!complete) {
-            PLog.e(TAG, "Failed to create night vision sampling FBO")
-            releaseNightVisionGl()
-        }
-        return complete
-    }
-
-    private fun releaseNightVisionGl() {
-        releasePixelPackPbos(nightVisionPboIds, nightVisionPboFences)
-        nightVisionPboIndex = 0
-        if (nightVisionFboId != 0) GLES30.glDeleteFramebuffers(1, intArrayOf(nightVisionFboId), 0)
-        if (nightVisionTextureId != 0) GLES30.glDeleteTextures(1, intArrayOf(nightVisionTextureId), 0)
-        if (nightToneTextureId != 0) GLES30.glDeleteTextures(1, intArrayOf(nightToneTextureId), 0)
-        nightVisionFboId = 0
-        nightVisionTextureId = 0
-        nightToneTextureId = 0
-        nightToneActive = false
     }
 
     private fun ensurePixelPackPbos(pboIds: IntArray, pixelSize: Int): Boolean {
@@ -3486,7 +3315,6 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
         } catch (e: Exception) {
             PLog.e(TAG, "Error shutting down metering executor", e)
         }
-        nightVisionEstimator.close()
         // 释放 SurfaceTexture
         surfaceTexture?.release()
         surfaceTexture = null
@@ -3586,7 +3414,6 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
             pboId = 0
         }
         releasePixelPackPbos(meteringPboIds, meteringPboFences)
-        releaseNightVisionGl()
 
         if (meteringFboId != 0) {
             GLES30.glDeleteFramebuffers(1, intArrayOf(meteringFboId), 0)

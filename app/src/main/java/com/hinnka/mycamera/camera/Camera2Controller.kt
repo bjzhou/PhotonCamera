@@ -5275,10 +5275,7 @@ class Camera2Controller(private val context: Context) {
             } else nrLevel
             val isBurst = !isVideo && currentState.requiresMultiFrameCaptureSequence
             val effectiveNrLevel = when {
-                // Cap every preview path before applying capture-only overrides such as night vision.
                 !isCapture && selectedNrLevel == NoiseReductionLevel.HIGH_QUALITY -> NoiseReductionLevel.FAST
-                // Night vision always asks the ISP for HIGH_QUALITY NR on every burst frame.
-                isCapture && !isVideo && currentState.isNightVisionActive -> NoiseReductionLevel.HIGH_QUALITY
                 isBurst && selectedNrLevel == NoiseReductionLevel.HIGH_QUALITY -> NoiseReductionLevel.FAST
                 else -> selectedNrLevel
             }
@@ -7546,10 +7543,6 @@ class Camera2Controller(private val context: Context) {
             hdrBracketCapturing = false,
             hdrBracketFrameCount = 0
         )
-    }
-
-    fun setNightVisionEnabled(enabled: Boolean) {
-        _state.value = _state.value.copy(nightVisionEnabled = enabled)
     }
 
     fun setJpgMultiFrameDenoiseFrameCount(frameCount: Int) {

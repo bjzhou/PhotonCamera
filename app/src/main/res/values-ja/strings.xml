@@ -357,7 +357,6 @@
     <string name="take_photo">撮影</string>
     <string name="capture_mode_professional">プロ</string>
     <string name="capture_mode_photo">写真</string>
-    <string name="capture_mode_night_vision">夜景</string>
     <string name="capture_mode_video">動画</string>
     <string name="camera_focus_auto">オート</string>
     <string name="settings_top_sheet_aspect_ratios_summary">表示中： %1$s</string>

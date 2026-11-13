@@ -61,7 +61,6 @@ private val CameraTopSheetContentTopPadding = 32.dp
 fun CameraTopSheet(
     visible: Boolean,
     captureMode: CaptureMode,
-    nightVisionEnabled: Boolean,
     aspectRatio: AspectRatio,
     topSheetAspectRatios: List<AspectRatio>,
     onAspectRatioChange: (AspectRatio) -> Unit,
@@ -202,7 +201,7 @@ fun CameraTopSheet(
                                 onClick = { showRenderingEngineSheet = true },
                                 modifier = itemModifier
                             )
-                        } else if (!nightVisionEnabled) {
+                        } else {
                             QuickSettingToggle(
                                 title = stringResource(R.string.settings_use_jpg_max),
                                 checked = useJpgMax,

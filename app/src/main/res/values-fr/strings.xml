@@ -503,7 +503,6 @@
     <string name="take_photo">Prendre une photo</string>
     <string name="capture_mode_professional">Pro</string>
     <string name="capture_mode_photo">Photo</string>
-    <string name="capture_mode_night_vision">Nuit</string>
     <string name="capture_mode_video">Vidéo</string>
     <string name="camera_focus_auto">AUTO</string>
     <string name="camera_hyperfocal_label">HYP</string>
