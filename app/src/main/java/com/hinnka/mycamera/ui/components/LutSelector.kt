@@ -748,7 +748,7 @@ private fun LutItem(
                 )
             }
 
-            if (isVip) {
+            if (showVipBadges && isVip) {
                 Box(
                     modifier = Modifier
                         .align(Alignment.TopEnd)

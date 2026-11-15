@@ -54,6 +54,7 @@ import com.hinnka.mycamera.ui.camera.autoRotate
 import com.hinnka.mycamera.ui.camera.LutEditBottomSheet
 import com.hinnka.mycamera.utils.PLog
 import com.hinnka.mycamera.ui.components.PaymentDialog
+import com.hinnka.mycamera.ui.components.showVipBadges
 import com.hinnka.mycamera.viewmodel.CameraViewModel
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -1858,7 +1859,7 @@ private fun FilterManagementItem(
                 )
 
                 // VIP 标签
-                if (lutInfo.isVip) {
+                if (showVipBadges && lutInfo.isVip) {
                     Spacer(modifier = Modifier.width(4.dp))
                     Text(
                         text = stringResource(R.string.billing_vip_tag),

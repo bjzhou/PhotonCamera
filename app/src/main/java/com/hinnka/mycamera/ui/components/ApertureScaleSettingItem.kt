@@ -53,7 +53,8 @@ fun ApertureScaleSettingItem(
     toggleValue: Boolean? = null,
     onToggleChange: (Boolean) -> Unit = {},
     enabled: Boolean = toggleValue ?: true,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    isVip: Boolean = false
 ) {
     val shouldShowScale = enabled || toggleValue == null
     val selectedIndex = closestApertureStopIndex(value)
@@ -83,10 +84,14 @@ fun ApertureScaleSettingItem(
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text(
                         text = title,
+                        modifier = Modifier.weight(1f, fill = false),
                         color = Color.White,
                         fontSize = 16.sp,
                         fontWeight = FontWeight.Normal
                     )
+                    if (isVip) {
+                        VipBadge(Modifier.padding(start = 8.dp))
+                    }
                     if (shouldShowScale) {
                         Spacer(modifier = Modifier.width(8.dp))
                         Text(

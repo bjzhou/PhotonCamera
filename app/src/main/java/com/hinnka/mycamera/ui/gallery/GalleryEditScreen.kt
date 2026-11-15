@@ -207,11 +207,11 @@ fun GalleryEditScreen(
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
+    val isPurchased by viewModel.isPurchased.collectAsState()
     val depthModelState by remember(context.applicationContext) {
         DepthModelManager.observe(context)
     }.collectAsState()
     val isDepthModelInstalled = DepthModelManager.isInstalled(context)
-    var showDepthModelDownloadDialog by remember { mutableStateOf(false) }
     var pendingVirtualAperture by remember { mutableStateOf<Float?>(null) }
     val colorFmModelState by remember(context.applicationContext) {
         ColorFmModelManager.observe(context)
@@ -224,16 +224,16 @@ fun GalleryEditScreen(
     val colorMatchReferenceLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.PickVisualMedia()
     ) { uri ->
-        if (uri != null) pendingColorMatchReference = ColorMatchReferenceStore.Source.NewImage(uri)
+        if (uri != null && viewModel.requireEditPurchase()) {
+            pendingColorMatchReference = ColorMatchReferenceStore.Source.NewImage(uri)
+        }
     }
 
-    LaunchedEffect(depthModelState, pendingVirtualAperture) {
-        val pendingAperture = pendingVirtualAperture
-        if (depthModelState is DepthModelDownloadState.Ready && pendingAperture != null) {
-            viewModel.setComputationalAperture(pendingAperture)
-            pendingVirtualAperture = null
-            showDepthModelDownloadDialog = false
-        }
+    LaunchedEffect(isPurchased, depthModelState, pendingVirtualAperture) {
+        val pendingAperture = pendingVirtualAperture ?: return@LaunchedEffect
+        if (isPurchased && depthModelState !is DepthModelDownloadState.Ready) return@LaunchedEffect
+        pendingVirtualAperture = null
+        if (isPurchased) viewModel.setComputationalAperture(pendingAperture)
     }
 
     val userPreferencesRepository = remember {
@@ -257,7 +257,6 @@ fun GalleryEditScreen(
     val lutSwipeState = rememberLutSwipeState()
     val density = LocalDensity.current
     val showPaymentDialog = viewModel.showPaymentDialog
-    val isPurchased by viewModel.isPurchased.collectAsState()
     val categoryOrder by preferenceValue { it.categoryOrder }
     val hasCopiedEditSettings by viewModel.hasCopiedEditSettings.collectAsState()
 
@@ -649,8 +648,12 @@ fun GalleryEditScreen(
             }
         }
     }
-    LaunchedEffect(aiDenoiseModelState, pendingAiDenoise) {
-        if (aiDenoiseModelState is HfModelState.Ready && pendingAiDenoise) {
+    LaunchedEffect(isPurchased, aiDenoiseModelState, pendingAiDenoise) {
+        if (!pendingAiDenoise) return@LaunchedEffect
+        if (!isPurchased) {
+            pendingAiDenoise = false
+            viewModel.revertAiDenoiseEnabled()
+        } else if (aiDenoiseModelState is HfModelState.Ready) {
             pendingAiDenoise = false
             startAiDenoise()
         }
@@ -1023,7 +1026,7 @@ fun GalleryEditScreen(
                                                 toggleEditControls()
                                             } else if (
                                                 editTab == EDIT_TAB_DETAIL &&
-                                                viewModel.editComputationalAperture.value != null &&
+                                                viewModel.editComputationalAperture.value?.let { it > 0f } == true &&
                                                 previewBitmap != null
                                             ) {
                                                 val tapPosition = upEvent.changes[0].position
@@ -1593,13 +1596,17 @@ fun GalleryEditScreen(
                                                     references = colorMatchReferences,
                                                     enabled = !isAiColorMatching,
                                                     onAddReference = {
-                                                        colorMatchReferenceLauncher.launch(
-                                                            PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
-                                                        )
+                                                        if (viewModel.requireEditPurchase()) {
+                                                            colorMatchReferenceLauncher.launch(
+                                                                PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
+                                                            )
+                                                        }
                                                     },
                                                     onReuseReference = {
-                                                        pendingColorMatchReference =
-                                                            ColorMatchReferenceStore.Source.Saved(it)
+                                                        if (viewModel.requireEditPurchase()) {
+                                                            pendingColorMatchReference =
+                                                                ColorMatchReferenceStore.Source.Saved(it)
+                                                        }
                                                     },
                                                     onDeleteReference = { colorMatchReferenceToDelete = it },
                                                     onRemove = { viewModel.setEditLut(null) },
@@ -1789,8 +1796,12 @@ fun GalleryEditScreen(
                                                 aiDenoiseProgress * 100
                                             ) else stringResource(R.string.ai_denoise_description),
                                             checked = editAiDenoiseEnabled,
+                                            isVip = true,
                                             onCheckedChange = { enabled ->
                                                 if (isAiDenoising) return@SwitchSettingItem
+                                                if (enabled && !viewModel.requireEditPurchase()) {
+                                                    return@SwitchSettingItem
+                                                }
                                                 viewModel.setAiDenoiseEnabled(enabled)
                                                 if (enabled) {
                                                     if (AiDenoiseModelManager.isInstalled(context)) {
@@ -1811,6 +1822,8 @@ fun GalleryEditScreen(
                                         Spacer(modifier = Modifier.height(8.dp))
                                         // 细节处理调整 (锐化, 降噪, 杂色降噪)
                                         val aperture = editComputationalAperture
+                                        val bokehEnabled = aperture != null && aperture > 0f
+                                        val canAdjustBokeh = isPurchased && isDepthModelInstalled && bokehEnabled
                                         ApertureScaleSettingItem(
                                             title = stringResource(
                                                 R.string.gallery_large_aperture_blur_title
@@ -1818,17 +1831,16 @@ fun GalleryEditScreen(
                                             description = stringResource(
                                                 R.string.gallery_large_aperture_blur_description
                                             ),
-                                            value = editComputationalAperture
-                                                ?: DEFAULT_COMPUTATIONAL_APERTURE,
-                                            onValueChange = { viewModel.setComputationalAperture(it) },
-                                            toggleValue = isDepthModelInstalled &&
-                                                aperture != null &&
-                                                aperture > 0f,
-                                            enabled = isDepthModelInstalled &&
-                                                aperture != null &&
-                                                aperture > 0f,
+                                            value = aperture ?: DEFAULT_COMPUTATIONAL_APERTURE,
+                                            onValueChange = viewModel::setComputationalAperture,
+                                            toggleValue = bokehEnabled,
+                                            enabled = canAdjustBokeh,
+                                            isVip = true,
                                             onToggleChange = { checked ->
                                                 if (checked) {
+                                                    if (!viewModel.requireEditPurchase()) {
+                                                        return@ApertureScaleSettingItem
+                                                    }
                                                     val requestedAperture = aperture
                                                         ?.takeIf { it > 0f }
                                                         ?: DEFAULT_COMPUTATIONAL_APERTURE
@@ -1836,18 +1848,13 @@ fun GalleryEditScreen(
                                                         viewModel.setComputationalAperture(requestedAperture)
                                                     } else {
                                                         pendingVirtualAperture = requestedAperture
-                                                        showDepthModelDownloadDialog = true
                                                     }
                                                 } else {
                                                     viewModel.setComputationalAperture(null)
                                                 }
                                             }
                                         )
-                                        if (
-                                            isDepthModelInstalled &&
-                                            aperture != null &&
-                                            aperture > 0f
-                                        ) {
+                                        if (canAdjustBokeh) {
                                             BokehStyleSelector(
                                                 selectedStyle = editBokehStyle,
                                                 onStyleSelected = viewModel::setBokehStyle,
@@ -1884,9 +1891,11 @@ fun GalleryEditScreen(
                                         value = editChromaNoiseReduction,
                                         valueRange = DenoiseStrength.valueRange,
                                         resetValue = 0f,
+                                        enabled = isPurchased || !editAiDenoiseEnabled,
                                         onValueChange = { viewModel.setChromaNoiseReduction(it) },
                                         onValueChangeFinished = {
                                             if (viewModel.hasAppliedAiDenoise()) {
+                                                if (!viewModel.requireEditPurchase()) return@SliderSettingItem
                                                 // Color noise is reduced before AI denoise: run AI denoise again.
                                                 if (isRaw) {
                                                     viewModel.persistCurrentRawEditMetadata(currentEditSourcePhoto) { success ->
@@ -2174,8 +2183,12 @@ fun GalleryEditScreen(
     }
 
     // AI color match: download the model first if needed, then run once it is Ready.
-    LaunchedEffect(pendingColorMatchReference, colorFmModelState) {
+    LaunchedEffect(isPurchased, pendingColorMatchReference, colorFmModelState) {
         val reference = pendingColorMatchReference ?: return@LaunchedEffect
+        if (!isPurchased) {
+            pendingColorMatchReference = null
+            return@LaunchedEffect
+        }
         if (colorFmModelState !is HfModelState.Ready) return@LaunchedEffect
         pendingColorMatchReference = null
         val photo = editSourcePhoto ?: return@LaunchedEffect
@@ -2185,7 +2198,7 @@ fun GalleryEditScreen(
             }
         }
     }
-    if (pendingColorMatchReference != null && colorFmModelState !is HfModelState.Ready) {
+    if (isPurchased && pendingColorMatchReference != null && colorFmModelState !is HfModelState.Ready) {
         var colorFmModelSource by remember { mutableStateOf(HfModelSource.preferred(context)) }
         HfModelDownloadDialog(
             title = stringResource(R.string.ai_color_match_model_title),
@@ -2232,7 +2245,7 @@ fun GalleryEditScreen(
         )
     }
 
-    if (pendingAiDenoise) {
+    if (isPurchased && pendingAiDenoise) {
         var aiDenoiseModelSource by remember { mutableStateOf(HfModelSource.preferred(context)) }
         HfModelDownloadDialog(
             title = stringResource(R.string.ai_denoise_model_title),
@@ -2248,17 +2261,14 @@ fun GalleryEditScreen(
         )
     }
 
-    if (showDepthModelDownloadDialog) {
+    if (isPurchased && pendingVirtualAperture != null) {
         var depthModelSource by remember { mutableStateOf(HfModelSource.preferred(context)) }
         DepthModelDownloadDialog(
             source = depthModelSource,
             onSourceChange = { depthModelSource = it },
             state = depthModelState,
             onDownload = { DepthModelManager.download(context, depthModelSource) },
-            onDismiss = {
-                showDepthModelDownloadDialog = false
-                pendingVirtualAperture = null
-            }
+            onDismiss = { pendingVirtualAperture = null }
         )
     }
 }
@@ -2519,7 +2529,7 @@ private fun FrameOption(
                 }
             }
 
-            if (isVip) {
+            if (showVipBadges && isVip) {
                 Box(
                     modifier = Modifier
                         .align(Alignment.TopEnd)
@@ -2784,12 +2794,18 @@ private fun AiColorMatchRow(
             .padding(horizontal = 12.dp, vertical = 10.dp)
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
-            Text(
-                text = stringResource(if (active) R.string.ai_color_match_active else R.string.ai_color_match_action),
-                color = if (active) AccentColor else Color.White,
-                style = MaterialTheme.typography.titleSmall,
-                modifier = Modifier.weight(1f)
-            )
+            Row(
+                modifier = Modifier.weight(1f),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = stringResource(if (active) R.string.ai_color_match_active else R.string.ai_color_match_action),
+                    modifier = Modifier.weight(1f, fill = false),
+                    color = if (active) AccentColor else Color.White,
+                    style = MaterialTheme.typography.titleSmall
+                )
+                VipBadge(Modifier.padding(start = 8.dp))
+            }
             if (active) {
                 TextButton(
                     onClick = onRemove,

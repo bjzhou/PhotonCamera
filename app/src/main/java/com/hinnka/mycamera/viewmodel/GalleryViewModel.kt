@@ -519,18 +519,26 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
     private val _isBokehProcessing = MutableStateFlow(false)
     val isBokehProcessing = _isBokehProcessing.asStateFlow()
 
+    fun requireEditPurchase(): Boolean {
+        if (isPurchased.value) return true
+        showPaymentDialog = true
+        return false
+    }
+
     fun setComputationalAperture(value: Float?) {
+        if (value != null && value > 0f && !requireEditPurchase()) return
         editComputationalAperture.value = value
         updateBokehPhoto()
     }
 
     fun setBokehStyle(value: BokehStyle) {
-        if (editBokehStyle.value == value) return
+        if (editBokehStyle.value == value || !requireEditPurchase()) return
         editBokehStyle.value = value
         updateBokehPhoto()
     }
 
     fun setFocusPoint(x: Float, y: Float) {
+        if (!requireEditPurchase()) return
         val cropRect = editCropRect.value
         val croppedX = cropRect?.let { it.left + x * it.width() } ?: x
         val croppedY = cropRect?.let { it.top + y * it.height() } ?: y
@@ -647,6 +655,10 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
 
     fun applyAiDenoise(photo: MediaData, onComplete: (Boolean) -> Unit) {
         if (_isAiDenoising.value) return
+        if (!requireEditPurchase()) {
+            revertAiDenoiseEnabled()
+            return
+        }
         _isAiDenoising.value = true
         _aiDenoiseProgress.value = 0f
 
@@ -2477,7 +2489,7 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
      * with the id of the reference record it was made from, not in the filter library.
      */
     fun applyAiColorMatch(photo: MediaData, source: ColorMatchReferenceStore.Source, onComplete: (Boolean) -> Unit) {
-        if (_isAiColorMatching.value) return
+        if (_isAiColorMatching.value || !requireEditPurchase()) return
         _isAiColorMatching.value = true
         viewModelScope.launch {
             val lutId = withContext(Dispatchers.IO) {
@@ -2846,6 +2858,7 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
     fun pasteCopiedEditSettingsToCurrentEdit(): Map<String, String>? {
         val copied = copiedEditSettings ?: return null
         val settings = copied.metadata
+        val canPasteBokeh = isPurchased.value
 
         viewModelScope.launch {
             flushPendingEditLutRecipeSync()
@@ -2867,12 +2880,12 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                 editChromaNoiseReduction.value = DenoiseStrength.clamp(it)
             }
         }
-        editComputationalAperture.value = settings.computationalAperture
-        editBokehStyle.value = BokehStyle.fromPersistedName(
-            settings.computationalBokehStyle
-        )
-        editFocusPointX.value = settings.focusPointX
-        editFocusPointY.value = settings.focusPointY
+        if (canPasteBokeh) {
+            editComputationalAperture.value = settings.computationalAperture
+            editBokehStyle.value = BokehStyle.fromPersistedName(settings.computationalBokehStyle)
+            editFocusPointX.value = settings.focusPointX
+            editFocusPointY.value = settings.focusPointY
+        }
         editRotationDegrees.value =
             PostEditGeometry.normalizeRotation(settings.postRotationDegrees)
         editStraightenDegrees.value =
@@ -2898,7 +2911,7 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
         } ?: run {
             editLutConfig = null
         }
-        updateBokehPhoto()
+        if (canPasteBokeh) updateBokehPhoto()
         return settings.customProperties.toMap()
     }
 
@@ -2929,6 +2942,7 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
      * 设置减少杂色强度
      */
     fun setChromaNoiseReduction(value: Float) {
+        if (hasAppliedAiDenoise() && !requireEditPurchase()) return
         editChromaNoiseReduction.value = DenoiseStrength.clamp(value)
     }
 
@@ -4362,6 +4376,7 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
         copyDetailProcessing: Boolean
     ): MediaMetadata {
         val settings = copied.metadata
+        val canPasteBokeh = isPurchased.value
         val (cropWidth, cropHeight) = PostEditGeometry.editedDimensions(
             current.width,
             current.height,
@@ -4402,10 +4417,10 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                 } else {
                     current.chromaNoiseReduction
                 },
-            computationalAperture = settings.computationalAperture,
-            computationalBokehStyle = settings.computationalBokehStyle,
-            focusPointX = settings.focusPointX,
-            focusPointY = settings.focusPointY,
+            computationalAperture = if (canPasteBokeh) settings.computationalAperture else current.computationalAperture,
+            computationalBokehStyle = if (canPasteBokeh) settings.computationalBokehStyle else current.computationalBokehStyle,
+            focusPointX = if (canPasteBokeh) settings.focusPointX else current.focusPointX,
+            focusPointY = if (canPasteBokeh) settings.focusPointY else current.focusPointY,
             postCropRegion = cropRegion,
             postRotationDegrees =
                 PostEditGeometry.normalizeRotation(settings.postRotationDegrees),

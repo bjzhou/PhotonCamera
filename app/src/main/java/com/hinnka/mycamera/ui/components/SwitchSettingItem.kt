@@ -21,7 +21,8 @@ fun SwitchSettingItem(
     description: String? = null,
     checked: Boolean,
     onCheckedChange: (Boolean) -> Unit,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    isVip: Boolean = false
 ) {
     Column(
         modifier = modifier
@@ -34,12 +35,18 @@ fun SwitchSettingItem(
             verticalAlignment = Alignment.CenterVertically
         ) {
             Column(modifier = Modifier.weight(1f)) {
-                Text(
-                    text = title,
-                    color = Color.White,
-                    fontSize = 16.sp,
-                    fontWeight = FontWeight.Normal
-                )
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        text = title,
+                        modifier = Modifier.weight(1f, fill = false),
+                        color = Color.White,
+                        fontSize = 16.sp,
+                        fontWeight = FontWeight.Normal
+                    )
+                    if (isVip) {
+                        VipBadge(Modifier.padding(start = 8.dp))
+                    }
+                }
                 description?.let {
                     Spacer(modifier = Modifier.height(2.dp))
                     Text(
