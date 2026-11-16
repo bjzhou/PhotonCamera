@@ -1040,12 +1040,19 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
             0,
         )
         GLES30.glBindBuffer(GLES30.GL_ELEMENT_ARRAY_BUFFER, indexBufferId)
-        GLES30.glDrawElements(
-            GLES30.GL_TRIANGLES,
-            Shaders.DRAW_ORDER.size,
-            GLES30.GL_UNSIGNED_SHORT,
-            0,
-        )
+        val timingStage = if (previewTiming == null) "" else when {
+            toneBaseOnly -> "color.toneBase"
+            lutEnabled && lutTextureId != 0 -> "color.lut${lutSize.toInt()}"
+            else -> "color.noLut"
+        }
+        previewTiming.gpu(timingStage) {
+            GLES30.glDrawElements(
+                GLES30.GL_TRIANGLES,
+                Shaders.DRAW_ORDER.size,
+                GLES30.GL_UNSIGNED_SHORT,
+                0,
+            )
+        }
         GLES30.glDisableVertexAttribArray(locations.aPositionLocation)
         GLES30.glDisableVertexAttribArray(locations.aTexCoordLocation)
         GLES30.glBindBuffer(GLES30.GL_ARRAY_BUFFER, 0)
@@ -2416,6 +2423,13 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
             return
         }
 
+        // AndroidView.update also runs for focus, metering and other UI changes.
+        // LutManager retains the config instance: do not rebuild its unchanged texture.
+        // Keep the texture check so a lost context cannot turn this into a false cache hit.
+        if (currentLutConfig === lutConfig && (lutConfig == null || lutTextureId != 0)) {
+            lutEnabled = lutConfig != null
+            return
+        }
         setLutInternal(lutConfig)
     }
 
@@ -2430,6 +2444,12 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
         if (!surfaceReady) {
             currentBaselineLutConfig = lutConfig
             pendingBaselineLutConfig = lutConfig
+            return
+        }
+        if (currentBaselineLutConfig === lutConfig &&
+            (lutConfig == null || baselineLutTextureId != 0)
+        ) {
+            baselineLutEnabled = lutConfig != null
             return
         }
         setBaselineLutInternal(lutConfig)
@@ -2449,7 +2469,9 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
         currentLutConfig = lutConfig
 
         if (lutConfig != null && lutConfig.isValid()) {
-            lutTextureId = GlUtils.create3DTexture(lutConfig)
+            lutTextureId = previewTiming.cpu("lut.upload.creative.${lutConfig.size}") {
+                GlUtils.create3DTexture(lutConfig)
+            }
             lutSize = lutConfig.size.toFloat()
             lutEnabled = true
 //            PLog.d(TAG, "LUT set: ${lutConfig.title}, size: ${lutConfig.size}")
@@ -2467,7 +2489,9 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
         currentBaselineLutConfig = lutConfig
 
         if (lutConfig != null && lutConfig.isValid()) {
-            baselineLutTextureId = GlUtils.create3DTexture(lutConfig)
+            baselineLutTextureId = previewTiming.cpu("lut.upload.baseline.${lutConfig.size}") {
+                GlUtils.create3DTexture(lutConfig)
+            }
             baselineLutSize = lutConfig.size.toFloat()
             baselineLutEnabled = true
         } else {
