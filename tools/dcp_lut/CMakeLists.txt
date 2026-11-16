@@ -1,0 +1,23 @@
+cmake_minimum_required(VERSION 3.20)
+project(photon_dcp_lut LANGUAGES CXX)
+set(CMAKE_CXX_STANDARD 17)
+set(SDK "${CMAKE_CURRENT_SOURCE_DIR}/../../app/src/main/cpp/dcp/dng_sdk/source")
+file(GLOB SDK_SOURCES CONFIGURE_DEPENDS "${SDK}/*.cpp")
+list(FILTER SDK_SOURCES EXCLUDE REGEX "/dng_(validate|jxl)\\.cpp$")
+find_package(ZLIB REQUIRED)
+find_package(Threads REQUIRED)
+add_library(photon_dcp SHARED sdk_bridge.cpp ${SDK_SOURCES})
+target_include_directories(photon_dcp PRIVATE "${SDK}" "${SDK}/../../XMPStub/include")
+target_compile_definitions(photon_dcp PRIVATE
+    qDNGUseStdInt=1 qDNGReportErrors=1 qDNGXMPFiles=0 qDNGXMPDocOps=0
+    qDNGUseLibJPEG=0 qDNGValidate=0 qDNGValidateTarget=0 qDNGThreadSafe=0
+    PHOTON_ENABLE_DNG_JXL=0)
+if(APPLE)
+    target_compile_definitions(photon_dcp PRIVATE qMacOS=1)
+    target_link_libraries(photon_dcp PRIVATE "-framework CoreServices")
+elseif(UNIX)
+    target_compile_definitions(photon_dcp PRIVATE qLinux=1)
+else()
+    message(FATAL_ERROR "This host tool currently requires macOS or Linux")
+endif()
+target_link_libraries(photon_dcp PRIVATE ZLIB::ZLIB Threads::Threads)
