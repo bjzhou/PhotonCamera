@@ -90,9 +90,13 @@ Java_com_hinnka_mycamera_processor_GlesHardwareBufferImage_create(
     return 0;
   }
   AHardwareBuffer_acquire(buffer);
+  // The camera/producer has already populated this buffer. The default is
+  // EGL_FALSE, which leaves its pixels undefined after EGLImage creation.
+  // Require preservation; if unsupported, fail without modifying the source.
+  const EGLint attributes[] = {EGL_IMAGE_PRESERVED_KHR, EGL_TRUE, EGL_NONE};
   const EGLImageKHR image = create_image(
       display, EGL_NO_CONTEXT, EGL_NATIVE_BUFFER_ANDROID, client_buffer,
-      nullptr);
+      attributes);
   if (image == EGL_NO_IMAGE_KHR) {
     const EGLint error = eglGetError();
     AHardwareBuffer_release(buffer);
