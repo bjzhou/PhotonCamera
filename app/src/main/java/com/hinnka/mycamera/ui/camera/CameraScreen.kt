@@ -303,7 +303,6 @@ fun CameraScreen(
     var previewBounds by remember { mutableStateOf<Rect?>(null) }
     var viewfinderAreaBounds by remember { mutableStateOf<Rect?>(null) }
     var zoomBarBounds by remember { mutableStateOf<Rect?>(null) }
-    var filterButtonBounds by remember { mutableStateOf<Rect?>(null) }
     var captureButtonBounds by remember { mutableStateOf<Rect?>(null) }
     var parameterRulerBounds by remember { mutableStateOf<Rect?>(null) }
     var galleryThumbnailBounds by remember { mutableStateOf<Rect?>(null) }
@@ -984,12 +983,7 @@ fun CameraScreen(
                     onZoomChange = { setZoomWithPreviewTransition(it) },
                     onZoomStopClick = { animateZoomStopWithPreviewTransition(it) },
                     onLensSwitch = { lensId -> switchToLensWithPreviewTransition(lensId) },
-                    onFilterClick = {
-                        activePanel = if (activePanel == ActivePanel.FILTERS) ActivePanel.NONE else ActivePanel.FILTERS
-                    },
-                    onFilterButtonBoundsChanged = { bounds ->
-                        filterButtonBounds = bounds
-                    },
+                    onSwitchCameraClick = ::switchCameraWithPreviewTransition,
                     modifier = Modifier
                         .fillMaxWidth()
                         .onGloballyPositioned { coordinates ->
@@ -1578,17 +1572,11 @@ fun CameraScreen(
                             onZoomChange = { setZoomWithPreviewTransition(it) },
                             onZoomStopClick = { animateZoomStopWithPreviewTransition(it) },
                             onLensSwitch = { lensId -> switchToLensWithPreviewTransition(lensId) },
-                            onFilterClick = {
-                                activePanel =
-                                    if (activePanel == ActivePanel.FILTERS) ActivePanel.NONE else ActivePanel.FILTERS
-                            },
-                            onFilterButtonBoundsChanged = { bounds ->
-                                filterButtonBounds = bounds
-                            },
+                            onSwitchCameraClick = ::switchCameraWithPreviewTransition,
                         )
                     }
                     Box(
-                        modifier = Modifier
+                         modifier = Modifier
                             .align(Alignment.CenterEnd)
                             .width(xpanSideWidth),
                         contentAlignment = Alignment.Center
@@ -1620,7 +1608,10 @@ fun CameraScreen(
                 onCaptureButtonBoundsChanged = { bounds ->
                     captureButtonBounds = bounds
                 },
-                onSwitchCameraClick = ::switchCameraWithPreviewTransition,
+                onFilterClick = {
+                    activePanel = if (activePanel == ActivePanel.FILTERS) ActivePanel.NONE else ActivePanel.FILTERS
+                },
+                isFilterPanelOpen = activePanel == ActivePanel.FILTERS,
                 onCaptureModeSelected = ::setShootingModeWithPreviewTransition,
                 modeSwitchEnabled = !previewTransitionActive && !lensSwitchTransition.isActive,
                 onCaptureTap = {
@@ -1846,11 +1837,9 @@ fun CameraScreen(
             isVideoMode -> maxHeight - 170.dp
             else -> topBarHeight + cardHeight - 48.dp
         }
-        val filterPanelAnchorY = if (isXpan) {
-            captureButtonBounds?.top
-        } else {
-            filterButtonBounds?.bottom
-        }
+        // The filter entry now sits beside the shutter. Keep the panel above
+        // the entire capture row so both the shutter and panel toggle stay accessible.
+        val filterPanelAnchorY = captureButtonBounds?.top
         val requestedFilterPanelBottom = filterPanelAnchorY?.let { anchorY ->
             val parentTop = cameraScreenBounds?.top ?: 0f
             with(density) { (anchorY - parentTop).toDp() - 8.dp }
@@ -2070,7 +2059,8 @@ private fun Controls(
     multipleExposureState: com.hinnka.mycamera.viewmodel.MultipleExposureSessionState,
     onGalleryThumbnailBoundsChanged: (Rect) -> Unit,
     onCaptureButtonBoundsChanged: (Rect) -> Unit,
-    onSwitchCameraClick: () -> Unit,
+    onFilterClick: () -> Unit,
+    isFilterPanelOpen: Boolean,
     onCaptureModeSelected: (CameraShootingMode) -> Unit,
     modeSwitchEnabled: Boolean,
     onCaptureTap: () -> Unit,
@@ -2155,66 +2145,68 @@ private fun Controls(
                 )
 
                 if (state.videoRecordingState.isRecording) {
-                    IconButton(
-                        onClick = { viewModel.captureVideoFrame() },
-                        modifier = Modifier
-                            .align(Alignment.CenterEnd)
-                            .padding(end = sideControlInset ?: 40.dp)
-                            .size(CameraControlsLayoutDefaults.SideButtonSize)
-                            .autoRotate()
+                    // Both recording actions share the shutter's center and spacing.
+                    Row(
+                        modifier = Modifier.align(Alignment.Center),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Icon(
-                            imageVector = AppIcons.CameraAlt,
-                            contentDescription = stringResource(R.string.take_photo),
-                            tint = Color.White,
-                            modifier = Modifier.size(32.dp)
-                        )
-                    }
+                        IconButton(
+                            onClick = {
+                                if (state.videoRecordingState.isPaused) {
+                                    viewModel.resumeVideoRecording()
+                                } else {
+                                    viewModel.pauseVideoRecording()
+                                }
+                            },
+                            modifier = Modifier
+                                .size(32.dp)
+                                .autoRotate()
+                        ) {
+                            Icon(
+                                imageVector = if (state.videoRecordingState.isPaused) Icons.Default.PlayArrow else AppIcons.Pause,
+                                contentDescription = null,
+                                tint = Color.White,
+                                modifier = Modifier.size(20.dp)
+                            )
+                        }
 
-                    IconButton(
-                        onClick = {
-                            if (state.videoRecordingState.isPaused) {
-                                viewModel.resumeVideoRecording()
-                            } else {
-                                viewModel.pauseVideoRecording()
-                            }
-                        },
-                        modifier = Modifier
-                            .align(Alignment.CenterStart)
-                            .padding(start = 100.dp)
-                            .size(48.dp)
-                            .autoRotate()
-                    ) {
-                        Icon(
-                            imageVector = if (state.videoRecordingState.isPaused) Icons.Default.PlayArrow else AppIcons.Pause,
-                            contentDescription = null,
-                            tint = Color.White,
-                            modifier = Modifier.size(32.dp)
-                        )
+                        Spacer(modifier = Modifier.width(CameraControlsLayoutDefaults.CaptureButtonSize))
+
+                        IconButton(
+                            onClick = { viewModel.captureVideoFrame() },
+                            modifier = Modifier
+                                .size(32.dp)
+                                .autoRotate()
+                        ) {
+                            Icon(
+                                imageVector = AppIcons.CameraAlt,
+                                contentDescription = stringResource(R.string.take_photo),
+                                tint = Color.White,
+                                modifier = Modifier.size(20.dp)
+                            )
+                        }
                     }
-                } else {
-                    PhysicalButton(
-                        onClick = {
-                            if (!state.videoRecordingState.isProcessing) {
-                                onSwitchCameraClick()
-                            }
-                        },
-                        modifier = Modifier
-                            .align(Alignment.CenterEnd)
-                            .padding(end = sideControlInset ?: 40.dp)
-                            .size(CameraControlsLayoutDefaults.SideButtonSize)
-                            .autoRotate(),
-                        shape = CircleShape
-                    ) {
-                        Icon(
-                            imageVector = AppIcons.Cameraswitch,
-                            contentDescription = stringResource(R.string.switch_camera),
-                            tint = Color.White.copy(
-                                alpha = if (state.videoRecordingState.isProcessing) 0.35f else 1f
-                            ),
-                            modifier = Modifier.size(24.dp)
-                        )
-                    }
+                }
+
+                PhysicalButton(
+                    onClick = onFilterClick,
+                    enabled = !state.videoRecordingState.isProcessing,
+                    modifier = Modifier
+                        .align(Alignment.CenterEnd)
+                        .padding(end = sideControlInset ?: 40.dp)
+                        .size(CameraControlsLayoutDefaults.SideButtonSize)
+                        .autoRotate(),
+                    shape = CircleShape
+                ) {
+                    Icon(
+                        imageVector = AppIcons.ColorFilters,
+                        contentDescription = stringResource(R.string.filters_panel),
+                        tint = (if (isFilterPanelOpen) AccentColor else Color.White).copy(
+                            alpha = if (state.videoRecordingState.isProcessing) 0.35f else 1f
+                        ),
+                        modifier = Modifier.size(28.dp)
+                    )
                 }
             }
 

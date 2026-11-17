@@ -18,12 +18,9 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
-import androidx.compose.ui.layout.boundsInRoot
-import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextDecoration
@@ -57,8 +54,7 @@ fun ZoomControlBarVerticel(
     onZoomChange: (Float) -> Unit,
     onZoomStopClick: (Float) -> Unit,
     onLensSwitch: (String) -> Unit,
-    onFilterClick: () -> Unit,
-    onFilterButtonBoundsChanged: (Rect) -> Unit = {},
+    onSwitchCameraClick: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     val displayMode by viewModel.zoomDisplayMode.collectAsState()
@@ -236,22 +232,24 @@ fun ZoomControlBarVerticel(
             exit = fadeOut() + shrinkVertically(),
             modifier = Modifier.align(Alignment.BottomCenter)
         ) {
-            // 底部滤镜按钮
+            // 底部前后摄像头切换按钮
             IconButton(
-                onClick = onFilterClick,
-                modifier = Modifier
-                    .size(32.dp)
-                    .onGloballyPositioned { coordinates ->
-                        onFilterButtonBoundsChanged(coordinates.boundsInRoot())
-                    }
+                onClick = onSwitchCameraClick,
+                enabled = !cameraState.videoRecordingState.isRecording &&
+                    !cameraState.videoRecordingState.isProcessing,
+                modifier = Modifier.size(32.dp)
             ) {
                 Icon(
-                    imageVector = AppIcons.AutoAwesome,
-                    contentDescription = stringResource(R.string.filters_panel),
+                    imageVector = AppIcons.Cameraswitch,
+                    contentDescription = stringResource(R.string.switch_camera),
                     modifier = Modifier.size(32.dp)
                         .background(Color.Black.copy(alpha = 0.3f), CircleShape)
-                        .padding(8.dp),
-                    tint = AccentColor
+                        .padding(8.dp)
+                        .autoRotate(),
+                    tint = Color.White.copy(
+                        alpha = if (cameraState.videoRecordingState.isRecording ||
+                            cameraState.videoRecordingState.isProcessing) 0.35f else 1f
+                    )
                 )
             }
         }

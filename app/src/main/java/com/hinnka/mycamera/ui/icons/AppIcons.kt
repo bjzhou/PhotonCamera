@@ -601,6 +601,32 @@ object AppIcons {
             }
         }
 
+    /** Three overlapping optical filters, drawn on the standard 24 dp icon grid. */
+    val ColorFilters: ImageVector
+        get() {
+            _colorFilters?.let { return it }
+            return ImageVector.Builder(
+                name = "AppIcons.ColorFilters",
+                defaultWidth = 24f.dp,
+                defaultHeight = 24f.dp,
+                viewportWidth = 24f,
+                viewportHeight = 24f,
+            ).apply {
+                addPath(
+                    pathData = addPathNodes(
+                        "M16.8,7.8a4.8,4.8 0,1 1,-9.6,0a4.8,4.8 0,1 1,9.6,0Z " +
+                            "M12.8,14.8a4.8,4.8 0,1 1,-9.6,0a4.8,4.8 0,1 1,9.6,0Z " +
+                            "M20.8,14.8a4.8,4.8 0,1 1,-9.6,0a4.8,4.8 0,1 1,9.6,0Z"
+                    ),
+                    fill = null,
+                    stroke = SolidColor(Color.Black),
+                    strokeLineWidth = 1.8f,
+                )
+            }.build().also {
+                _colorFilters = it
+            }
+        }
+
     val FilterFrames: ImageVector
         get() {
             _filterFrames?.let { return it }
@@ -1568,6 +1594,7 @@ private var _download: ImageVector? = null
 private var _dragHandle: ImageVector? = null
 private var _expandLess: ImageVector? = null
 private var _expandMore: ImageVector? = null
+private var _colorFilters: ImageVector? = null
 private var _filterFrames: ImageVector? = null
 private var _filterNone: ImageVector? = null
 private var _filterVintage: ImageVector? = null
