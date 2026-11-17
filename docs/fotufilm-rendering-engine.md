@@ -68,3 +68,5 @@ Fotufilm 交付 SDR 印放，处理器对其不生成 HDR 参考。
 ### 控件（`ui/components/FotufilmControls.kt`）
 
 由 native catalogue（上游 Android surface 控件目录）驱动；光线/平衡/色彩/分级控件由 RAW 管线自身提供，不重复显示（Camera Preflash 除外）。换胶片时移除新胶片不接受的值。文本见 `FotufilmStringRes.kt` 与各语言 `strings.xml` 的 Fotufilm 段（由 `scripts/fotufilm_strings.py` 生成，修改文本请改脚本后重新运行）。
+
+增感／减感（`push`）使用 catalogue 中该胶片的 `scale.stops` 生成离散档位按钮（含正常显影 `0`），不允许连续值；每档对应完整的显影曲线。换胶片时也校验档位是否存在，不能只判断最小／最大值。其他滑块的 `stops`（如过期年数）仅为参考刻度，不限制连续调节。
