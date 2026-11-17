@@ -487,4 +487,5 @@
     <string name="fotufilm_value_years">%1$s thn</string>
     <!-- /Fotufilm controls -->
     <string name="save_as_preset">Simpan sebagai preset</string>
+    <string name="frequent_filters">Sering digunakan</string>
 </resources>

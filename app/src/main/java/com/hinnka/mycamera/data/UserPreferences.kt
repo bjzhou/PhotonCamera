@@ -334,6 +334,12 @@ class UserPreferences internal constructor(
     var cameraOrientationOffsets: Map<String, Int> by stored({ p ->
         parseCameraOrientationOffsets(p[K.CAMERA_ORIENTATION_OFFSETS])
     }) { p, v -> p[K.CAMERA_ORIENTATION_OFFSETS] = serializeCameraOrientationOffsets(v.filterValues { it != 0 }) }
+    /** 常用滤镜的拍照次数；使用独立 key，旧的预览选用次数不参与统计。
+     * null 表示尚未从收藏或内置滤镜初始化。 */
+    var frequentLutUsage: Map<String, Long>? by json(
+        "frequent_lut_capture_usage", ::parseFrequentLutUsage, ::serializeFrequentLutUsage
+    )
+
     /** 滤镜排序（ID 列表）。 */
     var filterOrder: List<String> by stored({ p -> p[K.FILTER_ORDER]?.split(",")?.filter { it.isNotEmpty() } ?: emptyList() }) { p, v ->
         p[K.FILTER_ORDER] = v.joinToString(",")

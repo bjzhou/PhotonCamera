@@ -1521,4 +1521,5 @@
     <string name="settings_video_input_yuv">App processing</string>
     <string name="settings_video_nr_yuv_description">App processing does not support High quality noise reduction. Fast is used instead when High quality is selected.</string>
     <string name="settings_oppo_super_stabilization_yuv_disabled">Unavailable with App processing. Switch to System processing to use Ultra Steady.</string>
+    <string name="frequent_filters">Frequent</string>
 </resources>

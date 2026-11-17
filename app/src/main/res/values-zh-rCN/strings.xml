@@ -1496,4 +1496,5 @@
     <string name="settings_video_input_yuv">应用处理</string>
     <string name="settings_video_nr_yuv_description">应用处理不支持高质量降噪；原设置为高质量时，改用快速模式。</string>
     <string name="settings_oppo_super_stabilization_yuv_disabled">应用处理下不可用，切换至系统处理后可使用超级防抖。</string>
+    <string name="frequent_filters">常用</string>
 </resources>

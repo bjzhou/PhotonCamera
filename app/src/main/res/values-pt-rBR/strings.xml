@@ -488,4 +488,5 @@
     <string name="fotufilm_value_years">%1$s anos</string>
     <!-- /Fotufilm controls -->
     <string name="save_as_preset">Salvar como predefinição</string>
+    <string name="frequent_filters">Frequentes</string>
 </resources>

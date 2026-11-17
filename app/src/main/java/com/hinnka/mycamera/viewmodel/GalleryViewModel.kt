@@ -32,6 +32,7 @@ import com.hinnka.mycamera.hdr.HdrGainmapStrength
 import com.hinnka.mycamera.hdr.UnifiedGainmapProducer
 import com.hinnka.mycamera.lut.BaselineColorCorrectionTarget
 import com.hinnka.mycamera.lut.LutConfig
+import com.hinnka.mycamera.lut.sortLutsByUserOrder
 import com.hinnka.mycamera.lut.LutInfo
 import com.hinnka.mycamera.lut.PhotoTransformation
 import com.hinnka.mycamera.lut.VideoExportOption
@@ -911,12 +912,7 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
             contentRepository.availableLuts.combine(
                 userPreferencesRepository.userPreferences.map { it.filterOrder }
             ) { luts, order ->
-                if (order.isEmpty()) {
-                    luts
-                } else {
-                    val orderMap = order.withIndex().associate { it.value to it.index }
-                    luts.sortedBy { orderMap[it.id] ?: Int.MAX_VALUE }
-                }
+                sortLutsByUserOrder(luts, order)
             }.collect { sortedLuts ->
                 availableLuts = sortedLuts
             }

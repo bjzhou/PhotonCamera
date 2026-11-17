@@ -42,6 +42,7 @@ import com.hinnka.mycamera.lut.BaselineColorCorrectionTarget
 import com.hinnka.mycamera.lut.BakedLutExporter
 import com.hinnka.mycamera.lut.LutConfig
 import com.hinnka.mycamera.lut.LutConverter
+import com.hinnka.mycamera.lut.sortLutsByUserOrder
 import com.hinnka.mycamera.lut.LutInfo
 import com.hinnka.mycamera.lut.creator.LutGenerator
 import com.hinnka.mycamera.model.CameraPreset
@@ -1705,6 +1706,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 image.close()
             } else {
                 burstImageCount++
+                contentRepository.recordLutCapture(settings.lutId)
                 CaptureProcessingQueue.enqueue(listOf(image)) {
                     val context = getApplication<Application>()
                     if (GalleryManager.loadMetadata(context, photoId) == null) {
@@ -1754,6 +1756,8 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             if (settings == null) {
                 photo.frames.forEach { it.image.close() }
             } else {
+                // 每次完成的拍摄仅计一次，HDR / 多帧合成不按输入帧数累加。
+                contentRepository.recordLutCapture(settings.lutId)
                 val shotSettings = settings
                 shotSettings.state = photo.state
                 if (photo.state.useLivePhoto) {
@@ -1990,12 +1994,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             contentRepository.availableLuts.combine(
                 userPreferencesRepository.userPreferences.map { it.filterOrder }
             ) { luts, order ->
-                if (order.isEmpty()) {
-                    luts
-                } else {
-                    val orderMap = order.withIndex().associate { it.value to it.index }
-                    luts.sortedBy { orderMap[it.id] ?: Int.MAX_VALUE }
-                }
+                sortLutsByUserOrder(luts, order)
             }.collect { sortedLuts ->
                 availableLutList = sortedLuts
             }
@@ -3319,7 +3318,9 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             vibrationHelper.vibrate()
         }
 
+        val capturedLutId = currentLutId.value
         glSurfaceView?.capturePreviewFrame { bitmap ->
+            contentRepository.recordLutCapture(capturedLutId)
             viewModelScope.launch {
                 saveVideoSnapshot(bitmap)
             }

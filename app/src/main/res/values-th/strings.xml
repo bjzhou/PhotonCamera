@@ -1108,4 +1108,5 @@
     <string name="aesthetic_show_in_gallery">แสดงคะแนนในแกลเลอรี</string>
     <string name="aesthetic_show_in_gallery_description">ให้คะแนนรูปภาพในพื้นหลังขณะเลื่อนดู</string>
     <string name="aesthetic_note">ให้คะแนนโดยโมเดลความสวยงาม CLIP บนอุปกรณ์ (LAION Aesthetic Predictor) ที่ฝึกจากคะแนนของมนุษย์จำนวนมาก สะท้อนความน่าดึงดูดทางสายตาโดยทั่วไป ไม่ใช่เจตนาทางศิลปะ ควรใช้เป็นข้อมูลอ้างอิงเท่านั้น</string>
+    <string name="frequent_filters">ใช้บ่อย</string>
 </resources>

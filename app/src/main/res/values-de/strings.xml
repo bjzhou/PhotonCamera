@@ -487,4 +487,5 @@
     <string name="fotufilm_value_years">%1$s J.</string>
     <!-- /Fotufilm controls -->
     <string name="save_as_preset">Als Preset speichern</string>
+    <string name="frequent_filters">Häufig</string>
 </resources>

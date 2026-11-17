@@ -42,6 +42,8 @@ import com.hinnka.mycamera.R
 import com.hinnka.mycamera.data.ContentRepository
 import com.hinnka.mycamera.frame.FrameInfo
 import com.hinnka.mycamera.lut.BaselineColorCorrectionTarget
+import com.hinnka.mycamera.lut.frequentLuts
+import com.hinnka.mycamera.ui.prefs.preferenceValue
 import com.hinnka.mycamera.lut.LutInfo
 import com.hinnka.mycamera.model.CameraPreset
 import com.hinnka.mycamera.model.LutSelectorMode
@@ -51,6 +53,7 @@ import kotlinx.coroutines.withContext
 import com.hinnka.mycamera.ui.icons.AppIcons
 
 private sealed class LutCategoryTab {
+    data object Frequent : LutCategoryTab()
     data object Favorite : LutCategoryTab()
     data object BuiltIn : LutCategoryTab()
     data object Uncategorized : LutCategoryTab()
@@ -58,6 +61,7 @@ private sealed class LutCategoryTab {
 }
 
 private fun LutCategoryTab.stableKey(): String = when (this) {
+    LutCategoryTab.Frequent -> "fixed:frequent"
     LutCategoryTab.Favorite -> "fixed:favorite"
     LutCategoryTab.BuiltIn -> "fixed:built_in"
     LutCategoryTab.Uncategorized -> "fixed:uncategorized"
@@ -204,6 +208,9 @@ fun LutSelector(
 ) {
     val scrollState = rememberLazyListState()
     val coroutineScope = rememberCoroutineScope()
+    val frequentUsage by preferenceValue { it.frequentLutUsage }
+    val frequentItems = remember(availableLuts, frequentUsage) { frequentLuts(availableLuts, frequentUsage) }
+    val frequentText = stringResource(R.string.frequent_filters)
     val favoriteText = stringResource(R.string.favorite)
     val builtInText = stringResource(R.string.built_in)
     val uncategorizedText = stringResource(R.string.uncategorized)
@@ -213,8 +220,8 @@ fun LutSelector(
     val noneText = stringResource(R.string.none)
 
     // 分类逻辑
-    val categoryTabs = remember(availableLuts, categoryOrder, favoriteText, builtInText, uncategorizedText) {
-        val reservedCategoryNames = setOf(favoriteText, builtInText, uncategorizedText)
+    val categoryTabs = remember(availableLuts, categoryOrder, frequentText, favoriteText, builtInText, uncategorizedText) {
+        val reservedCategoryNames = setOf(frequentText, favoriteText, builtInText, uncategorizedText)
         val dynamicCategories = availableLuts.map { it.category }
             .distinct()
             .filter { it.isNotEmpty() && it !in reservedCategoryNames }
@@ -223,6 +230,7 @@ fun LutSelector(
         val remainingDynamic = dynamicCategories.filterNot { it in orderedEntries }.sorted()
 
         buildList {
+            add(LutCategoryTab.Frequent)
             add(LutCategoryTab.Favorite)
             if (orderedEntries.isEmpty()) {
                 add(LutCategoryTab.BuiltIn)
@@ -244,6 +252,7 @@ fun LutSelector(
         }
     }
     fun LutCategoryTab.contains(lut: LutInfo): Boolean = when (this) {
+        LutCategoryTab.Frequent -> frequentItems.any { it.id == lut.id }
         LutCategoryTab.Favorite -> lut.isFavorite
         LutCategoryTab.BuiltIn -> lut.isBuiltIn
         LutCategoryTab.Uncategorized -> !lut.isBuiltIn && lut.category.isEmpty()
@@ -251,13 +260,14 @@ fun LutSelector(
     }
 
     fun preferredCategoryFor(lut: LutInfo): LutCategoryTab = when {
+        frequentItems.any { it.id == lut.id } -> LutCategoryTab.Frequent
         lut.isFavorite -> LutCategoryTab.Favorite
         lut.category.isNotEmpty() -> LutCategoryTab.Category(lut.category)
         lut.isBuiltIn -> LutCategoryTab.BuiltIn
         else -> LutCategoryTab.Uncategorized
     }
 
-    var selectedCategory by remember { mutableStateOf<LutCategoryTab>(LutCategoryTab.BuiltIn) }
+    var selectedCategory by remember { mutableStateOf<LutCategoryTab>(LutCategoryTab.Frequent) }
     val activeLutId = currentLutId
     val supportsFrames = onFrameSelected != null
     val supportsPresets = presetModeEnabled
@@ -267,19 +277,20 @@ fun LutSelector(
         LutSelectorMode.Presets -> if (supportsPresets) LutSelectorMode.Presets else LutSelectorMode.Style
     }
 
-    LaunchedEffect(activeLutId, availableLuts, categoryTabs) {
+    LaunchedEffect(activeLutId, availableLuts, categoryTabs, frequentItems) {
+        if (frequentUsage == null) return@LaunchedEffect
         val selectedLut = availableLuts.find { it.id == activeLutId }
         selectedCategory = when {
             selectedLut != null && selectedCategory.contains(selectedLut) -> selectedCategory
-            selectedLut?.isFavorite == true -> LutCategoryTab.Favorite
             selectedLut != null -> preferredCategoryFor(selectedLut)
             selectedCategory in categoryTabs -> selectedCategory
-            else -> LutCategoryTab.BuiltIn
+            else -> LutCategoryTab.Frequent
         }
     }
 
-    val filteredLuts = remember(selectedCategory, availableLuts) {
+    val filteredLuts = remember(selectedCategory, availableLuts, frequentItems) {
         when (selectedCategory) {
+            LutCategoryTab.Frequent -> frequentItems
             LutCategoryTab.Favorite -> availableLuts.filter { it.isFavorite }
             LutCategoryTab.BuiltIn -> availableLuts.filter { it.isBuiltIn }
             LutCategoryTab.Uncategorized -> availableLuts.filter { !it.isBuiltIn && it.category.isEmpty() }
@@ -496,6 +507,7 @@ fun LutSelector(
                             items(categoryTabs, key = { it.stableKey() }) { category ->
                                 val isSelected = selectedCategory == category
                                 val categoryName = when (category) {
+                                    LutCategoryTab.Frequent -> frequentText
                                     LutCategoryTab.Favorite -> favoriteText
                                     LutCategoryTab.BuiltIn -> builtInText
                                     LutCategoryTab.Uncategorized -> uncategorizedText
@@ -643,11 +655,11 @@ private fun LutItem(
     onClick: () -> Unit,
     onManageClick: (() -> Unit)? = null,
     recipeTarget: BaselineColorCorrectionTarget? = null,
-    isNone: Boolean = false,
     isCustom: Boolean = false,
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
+    val isNone = id == "none"
     val itemShape = RoundedCornerShape(12.dp)
     val borderColor by animateColorAsState(
         targetValue = if (isSelected) AccentColor else Color.White.copy(alpha = 0.15f),
@@ -741,7 +753,7 @@ private fun LutItem(
             }
             if (isNone) {
                 Icon(
-                    imageVector = AppIcons.FilterNone,
+                    imageVector = AppIcons.Block,
                     contentDescription = null,
                     tint = Color.White.copy(alpha = 0.7f),
                     modifier = Modifier.size(24.dp)

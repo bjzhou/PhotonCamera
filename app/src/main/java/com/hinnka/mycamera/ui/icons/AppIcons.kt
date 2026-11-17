@@ -9,6 +9,33 @@ import androidx.compose.ui.graphics.vector.group
 import androidx.compose.ui.unit.dp
 
 object AppIcons {
+    val Block: ImageVector
+        get() {
+            _block?.let { return it }
+            return ImageVector.Builder(
+                name = "AppIcons.Block",
+                defaultWidth = 24.dp,
+                defaultHeight = 24.dp,
+                viewportWidth = 24f,
+                viewportHeight = 24f,
+            ).apply {
+                addPath(
+                    pathData = addPathNodes(
+                        "M12 2a10 10 0 1 0 0 20a10 10 0 1 0 0-20Z" +
+                            "M12 4a8 8 0 1 0 0 16a8 8 0 1 0 0-16Z"
+                    ),
+                    fill = SolidColor(Color.Black),
+                    pathFillType = PathFillType.EvenOdd,
+                )
+                addPath(
+                    pathData = addPathNodes("M4.93 6.34 17.66 19.07 19.07 17.66 6.34 4.93Z"),
+                    fill = SolidColor(Color.Black),
+                )
+            }.build().also { _block = it }
+        }
+
+    private var _block: ImageVector? = null
+
     val AutoMirroredArrowLeft: ImageVector
         get() {
             _autoMirroredArrowLeft?.let { return it }

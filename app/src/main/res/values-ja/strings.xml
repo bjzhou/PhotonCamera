@@ -1326,4 +1326,5 @@
     <string name="aesthetic_show_in_gallery">ギャラリーにスコアを表示</string>
     <string name="aesthetic_show_in_gallery_description">閲覧中にバックグラウンドで写真を評価します。</string>
     <string name="aesthetic_note">端末上の CLIP 美的モデル（LAION Aesthetic Predictor）による評価で、大規模な人間の評価データで学習されています。芸術的意図ではなく一般的な見た目の魅力を反映するため、参考としてご利用ください。</string>
+    <string name="frequent_filters">よく使う</string>
 </resources>

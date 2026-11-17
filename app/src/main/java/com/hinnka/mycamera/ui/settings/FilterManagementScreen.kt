@@ -47,6 +47,7 @@ import com.hinnka.mycamera.video.VideoLogProfile
 import com.hinnka.mycamera.color.TransferCurve
 import com.hinnka.mycamera.data.CustomImportManager
 import com.hinnka.mycamera.data.ZipCubeImportManager
+import com.hinnka.mycamera.lut.frequentLuts
 import com.hinnka.mycamera.lut.LutInfo
 import com.hinnka.mycamera.lut.orderedLutCategoryTitles
 import com.hinnka.mycamera.raw.ColorSpace
@@ -71,11 +72,12 @@ private data class CategoryManagementItem(
 private fun sanitizeCustomLutCategoryInput(
     category: String,
     favoriteText: String,
+    frequentText: String,
     builtInText: String,
     uncategorizedText: String
 ): String {
     val trimmedCategory = category.trim()
-    return if (trimmedCategory == favoriteText || trimmedCategory == builtInText || trimmedCategory == uncategorizedText) {
+    return if (trimmedCategory == frequentText || trimmedCategory == favoriteText || trimmedCategory == builtInText || trimmedCategory == uncategorizedText) {
         ""
     } else {
         trimmedCategory
@@ -228,13 +230,15 @@ fun FilterManagementScreen(
 
     // 分类管理状态
     val categoryOrder by preferenceValue { it.categoryOrder }
+    val frequentUsage by preferenceValue { it.frequentLutUsage }
     var showCategoryManagement by remember { mutableStateOf(false) }
 
     val builtInText = stringResource(R.string.built_in)
     val uncategorizedText = stringResource(R.string.uncategorized)
     val favoriteText = stringResource(R.string.favorite)
-    val reservedCategoryNames = remember(favoriteText, builtInText, uncategorizedText) {
-        setOf(favoriteText, builtInText, uncategorizedText)
+    val frequentText = stringResource(R.string.frequent_filters)
+    val reservedCategoryNames = remember(frequentText, favoriteText, builtInText, uncategorizedText) {
+        setOf(frequentText, favoriteText, builtInText, uncategorizedText)
     }
 
     var selectedCategory by remember { mutableStateOf<String?>(null) }
@@ -245,18 +249,20 @@ fun FilterManagementScreen(
             builtInText = builtInText,
             uncategorizedText = uncategorizedText,
             favoriteText = favoriteText,
-            includeEmptyCategories = true
+            includeEmptyCategories = true,
+            frequentText = frequentText
         )
     }
     val currentTabIndex = categories.indexOf(selectedCategory).takeIf { it >= 0 } ?: 0
     val currentCategory = categories[currentTabIndex]
     val commonCategories = categories.filter { it !in reservedCategoryNames }
-    val managedCategories = categories.filter { it != favoriteText && it != uncategorizedText }
+    val managedCategories = categories.filter { it != frequentText && it != favoriteText && it != uncategorizedText }
     LaunchedEffect(currentCategory) {
         selectedIds = emptySet()
     }
-    val filteredLutList = remember(currentCategory, localLutList, reservedCategoryNames) {
+    val filteredLutList = remember(currentCategory, localLutList, reservedCategoryNames, frequentUsage) {
         when (currentCategory) {
+            frequentText -> frequentLuts(localLutList, frequentUsage)
             favoriteText -> localLutList.filter { it.isFavorite }
             builtInText -> localLutList.filter { it.isBuiltIn }
             uncategorizedText -> localLutList.filter { !it.isBuiltIn && it.category.isEmpty() }
@@ -347,11 +353,12 @@ fun FilterManagementScreen(
 
     // 拖拽排序状态
     val reorderableLazyListState = rememberReorderableLazyListState(lazyListState) { from, to ->
+        if (currentCategory == frequentText) return@rememberReorderableLazyListState
         val fromId = from.key as? String ?: return@rememberReorderableLazyListState
         val toId = to.key as? String ?: return@rememberReorderableLazyListState
 
         // 仅处理滤镜项的排序，忽略非滤镜项（如 import_result）
-        if (fromId == "import_result" || toId == "import_result") return@rememberReorderableLazyListState
+        if (fromId == "none" || toId == "none" || fromId == "import_result" || toId == "import_result") return@rememberReorderableLazyListState
 
         // 在原始列表中找到这两个滤镜的位置
         val fromIndexInLocal = localLutList.indexOfFirst { it.id == fromId }
@@ -760,7 +767,7 @@ fun FilterManagementScreen(
                                 }
                             } else null,
                             showCategory = categories.getOrNull(currentTabIndex) == builtInText && lutInfo.category.isNotEmpty(),
-                            dragModifier = if (isSelectionMode) Modifier else Modifier.draggableHandle()
+                            dragModifier = if (isSelectionMode || currentCategory == frequentText || lutInfo.id == "none") null else Modifier.draggableHandle()
                         )
                     }
                 }
@@ -1134,6 +1141,7 @@ fun FilterManagementScreen(
                             val sanitizedCategory = sanitizeCustomLutCategoryInput(
                                 category = categoryText,
                                 favoriteText = favoriteText,
+                                frequentText = frequentText,
                                 builtInText = builtInText,
                                 uncategorizedText = uncategorizedText
                             )
@@ -1323,6 +1331,7 @@ fun FilterManagementScreen(
                             val targetCategory = sanitizeCustomLutCategoryInput(
                                 category = categoryText,
                                 favoriteText = favoriteText,
+                                frequentText = frequentText,
                                 builtInText = builtInText,
                                 uncategorizedText = uncategorizedText
                             )
@@ -1507,8 +1516,9 @@ private fun CategoryManagementSheet(
     val builtInText = stringResource(R.string.built_in)
     val uncategorizedText = stringResource(R.string.uncategorized)
     val favoriteText = stringResource(R.string.favorite)
-    val fixedNames = remember(builtInText, uncategorizedText, favoriteText) {
-        setOf(builtInText, uncategorizedText, favoriteText)
+    val frequentText = stringResource(R.string.frequent_filters)
+    val fixedNames = remember(builtInText, uncategorizedText, favoriteText, frequentText) {
+        setOf(builtInText, uncategorizedText, favoriteText, frequentText)
     }
 
     var localCategories by remember(categories, fixedNames) {
@@ -1780,7 +1790,7 @@ private fun FilterManagementItem(
     onEditCategory: (() -> Unit)? = null,
     onToggleFavorite: (() -> Unit)? = null,
     showCategory: Boolean = false,
-    dragModifier: Modifier = Modifier,
+    dragModifier: Modifier? = null,
     modifier: Modifier = Modifier
 ) {
     val borderColor = when {
@@ -1820,7 +1830,7 @@ private fun FilterManagementItem(
                 ),
                 modifier = Modifier.padding(4.dp)
             )
-        } else {
+        } else if (dragModifier != null) {
             Box(
                 modifier = Modifier
                     .padding(horizontal = 4.dp)

@@ -16,6 +16,24 @@ import org.json.JSONObject
 /** 内置分类在当前语言下的显示名；持久化时以稳定标识存储。 */
 internal fun builtInCategoryLabel(): String = MyCameraApplication.instance.getString(R.string.built_in)
 
+// 使用数组保存首次加入顺序，避免依赖 JSON 对象键的顺序。
+internal fun parseFrequentLutUsage(value: String?): Map<String, Long>? {
+    if (value == null) return null
+    val entries = JSONArray(value)
+    return buildMap {
+        for (index in 0 until entries.length()) {
+            val entry = entries.getJSONObject(index)
+            put(entry.getString("id"), entry.getLong("count"))
+        }
+    }
+}
+
+internal fun serializeFrequentLutUsage(usage: Map<String, Long>): String = JSONArray().apply {
+    usage.forEach { (id, count) ->
+        put(JSONObject().put("id", id).put("count", count))
+    }
+}.toString()
+
 /**
  * 解析摄像头方向偏移字符串
  * 格式：cameraId1:offset1,cameraId2:offset2
