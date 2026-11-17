@@ -467,28 +467,43 @@ class Camera2Controller(private val context: Context) {
     private var enginePreviewCharacteristics: CameraCharacteristics? = null
     private var enginePreviewCalibration: RawCameraCalibration? = null
     private var enginePreviewCalibrationMode: RawColorCalibrationMode? = null
+    private var latestEnginePreviewResult: TotalCaptureResult? = null
 
     fun setEnginePreviewMetadataEnabled(enabled: Boolean) {
         enginePreviewEnabled = enabled
         if (!enabled) _enginePreviewSource.value = null
     }
 
+    /** Snapshot metadata on its owning camera thread, without changing live-preview subscriptions. */
+    fun captureEnginePreviewSource(onCaptured: (RawEnginePreviewSource?) -> Unit) {
+        val handler = cameraHandler
+        if (handler == null || !handler.post {
+            val source = try {
+                latestEnginePreviewResult?.let(::resolveEnginePreviewSource)
+            } catch (error: Exception) {
+                PLog.e(TAG, "Cannot snapshot preset preview source", error)
+                null
+            }
+            onCaptured(source)
+        }) onCaptured(null)
+    }
+
     private fun updateEnginePreviewSource(result: TotalCaptureResult) {
+        latestEnginePreviewResult = result
         if (!enginePreviewEnabled) return
+        val source = resolveEnginePreviewSource(result)
+        if (enginePreviewEnabled) _enginePreviewSource.value = source
+    }
+
+    private fun resolveEnginePreviewSource(result: TotalCaptureResult): RawEnginePreviewSource? {
         val physicalId = activeOutputPhysicalCameraId
             ?: result.get(CaptureResult.LOGICAL_MULTI_CAMERA_ACTIVE_PHYSICAL_ID)
         val cameraId = physicalId ?: getActiveOpenCameraId()
         val frame = physicalId?.let { result.physicalCameraResults[it] } ?: result
-        val characteristics = getCameraCharacteristicsOrNull(cameraId, "Engine preview") ?: run {
-            _enginePreviewSource.value = null
-            return
-        }
+        val characteristics = getCameraCharacteristicsOrNull(cameraId, "Engine preview") ?: return null
         val gains = frame.get(CaptureResult.COLOR_CORRECTION_GAINS)
             ?: result.get(CaptureResult.COLOR_CORRECTION_GAINS)
-        if (gains == null) {
-            _enginePreviewSource.value = null
-            return
-        }
+        if (gains == null) return null
         val calibrationMode = RawColorCalibrationPolicy.mode
         if (enginePreviewCharacteristics !== characteristics || enginePreviewCalibrationMode != calibrationMode) {
             enginePreviewCalibration = RawColorCalibrationPolicy.fromCharacteristics(characteristics).toRawCalibration()
@@ -511,7 +526,7 @@ class Camera2Controller(private val context: Context) {
                 List(9) { index -> matrix.getElement(index % 3, index / 3).toFloat() }
             },
         )
-        if (enginePreviewEnabled) _enginePreviewSource.value = source
+        return source
     }
 
     // 场景变化检测：用于替代固定延迟恢复连续对焦
@@ -2089,6 +2104,7 @@ class Camera2Controller(private val context: Context) {
     }
 
     private fun clearCameraCapabilityCache() {
+        latestEnginePreviewResult = null
         _enginePreviewSource.value = null
         enginePreviewCharacteristics = null
         enginePreviewCalibration = null
@@ -4732,10 +4748,10 @@ class Camera2Controller(private val context: Context) {
         val characteristics = getActiveOpenCameraCharacteristics() ?: return
         val availableRanges =
             characteristics.readMetadataOrNull(CameraCharacteristics.CONTROL_AE_AVAILABLE_TARGET_FPS_RANGES) ?: return
-        
+
         // 寻找完全匹配的固定帧率区间，例如 [60, 60]
         val exactRange = availableRanges.firstOrNull { it.lower == targetFps && it.upper == targetFps }
-        
+
         val resolvedRange = if (exactRange != null) {
             exactRange
         } else {
@@ -6060,13 +6076,13 @@ class Camera2Controller(private val context: Context) {
                 highlightPointSmoothedX.toDouble() - lastSentHighlightPointX,
                 highlightPointSmoothedY.toDouble() - lastSentHighlightPointY
             )
-            
+
             // 只有位移超过 8% (0.08) 或者这是初始化后的第一帧，才更新测光区域并触发预览
             // 这样可以避免微小的坐标抖动导致 AE 系统频繁重算测光
             if (dist > 0.08 || lastSentHighlightPointX < 0) {
                 lastSentHighlightPointX = highlightPointSmoothedX
                 lastSentHighlightPointY = highlightPointSmoothedY
-                
+
                 applyMeteringRegions()
                 updatePreview()
             }

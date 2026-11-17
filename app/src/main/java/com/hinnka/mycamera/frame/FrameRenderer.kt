@@ -43,6 +43,7 @@ class FrameRenderer(
     private val linePaint = Paint(Paint.ANTI_ALIAS_FLAG)
     private val photoShadowPaint = Paint(Paint.ANTI_ALIAS_FLAG)
     private val photoClipPath = Path()
+    private val emptyPhotoPaint = Paint().apply { blendMode = BlendMode.CLEAR }
     // ALPHA_8 stores gain samples in alpha; they are data, not coverage to blend over the fill.
     private val gainmapPaint = Paint(Paint.FILTER_BITMAP_FLAG).apply {
         blendMode = BlendMode.SRC
@@ -60,6 +61,7 @@ class FrameRenderer(
      * @param originalBitmap 原始照片
      * @param template 边框模板
      * @param metadata EXIF 元数据
+     * @param renderPhoto 为 false 时保留透明照片窗口，仅绘制边框及其装饰
      * @return 带边框的照片
      */
     fun render(
@@ -67,6 +69,7 @@ class FrameRenderer(
         template: FrameTemplate,
         metadata: MediaMetadata,
         previewSelection: FramePreviewSelection? = null,
+        renderPhoto: Boolean = true,
     ): Bitmap {
 
 //        PLog.d(TAG, "render: $metadata")
@@ -116,7 +119,7 @@ class FrameRenderer(
 
             FramePosition.IMAGE -> {
                 // IMAGE 模式使用单独的渲染方法
-                return renderImageFrame(originalBitmap, template.layout)
+                return renderImageFrame(originalBitmap, template.layout, renderPhoto)
             }
         }
 
@@ -156,7 +159,7 @@ class FrameRenderer(
             }
         }
         if (layout.position != FramePosition.OVERLAY) {
-            if (layout.effectiveBackgroundType.usesPhoto) {
+            if (renderPhoto && layout.effectiveBackgroundType.usesPhoto) {
                 drawPhotoBackground(canvas, originalBitmap, layout, outputWidth, outputHeight, dimensions)
             } else {
                 backgroundPaint.color = layout.backgroundColor
@@ -185,7 +188,7 @@ class FrameRenderer(
             borderHeight = borderHeight,
             dimensions = dimensions
         )
-        drawPhotoBitmap(canvas, originalBitmap, layout, photoLeft, photoTop, dimensions)
+        drawPhotoBitmap(canvas, originalBitmap, layout, photoLeft, photoTop, dimensions, renderPhoto)
 
         // 绘制边框内容
         when (layout.position) {
@@ -248,8 +251,13 @@ class FrameRenderer(
                 } else null
 
                 if (glassBounds != null) {
-                    drawPhotoBackground(canvas, originalBitmap, layout, outputWidth, outputHeight, dimensions)
-                } else if (layout.effectiveBackgroundType.usesPhoto) {
+                    if (renderPhoto) {
+                        drawPhotoBackground(canvas, originalBitmap, layout, outputWidth, outputHeight, dimensions)
+                    } else {
+                        backgroundPaint.color = layout.backgroundColor
+                        canvas.drawPath(FrameGlassOverlay.outline(glassBounds), backgroundPaint)
+                    }
+                } else if (renderPhoto && layout.effectiveBackgroundType.usesPhoto) {
                     if (frameHeight > 0) canvas.withSave {
                         clipRect(0f, overlayTop, outputWidth.toFloat(), outputHeight.toFloat())
                         drawPhotoBackground(this, originalBitmap, layout, outputWidth, outputHeight, dimensions)
@@ -650,6 +658,7 @@ class FrameRenderer(
         photoLeft: Float,
         photoTop: Float,
         dimensions: FrameDimensions,
+        renderPhoto: Boolean = true,
     ) {
         val cornerRadius = dimensions.toPixels(layout.photoCornerRadiusPx.coerceAtLeast(0f))
         val photoWidth = originalBitmap.width
@@ -661,7 +670,11 @@ class FrameRenderer(
                 photoClipPath.addRoundRect(photoRect, cornerRadius, cornerRadius, Path.Direction.CW)
                 clipPath(photoClipPath)
             }
-            drawBitmap(originalBitmap, photoLeft, photoTop, null)
+            if (renderPhoto) {
+                drawBitmap(originalBitmap, photoLeft, photoTop, null)
+            } else {
+                drawRect(photoLeft, photoTop, photoLeft + photoWidth, photoTop + photoHeight, emptyPhotoPaint)
+            }
         }
     }
     private fun drawPhotoBorder(
@@ -1458,8 +1471,11 @@ class FrameRenderer(
         )
     }
 
-    private fun renderImageFrame(originalBitmap: Bitmap, layout: FrameLayout): Bitmap {
-        val frame = loadImageFrameBitmap(layout) ?: return originalBitmap
+    private fun renderImageFrame(originalBitmap: Bitmap, layout: FrameLayout, renderPhoto: Boolean = true): Bitmap {
+        val frame = loadImageFrameBitmap(
+            layout,
+            maxLongEdge = if (renderPhoto) null else maxOf(originalBitmap.width, originalBitmap.height)
+        ) ?: return originalBitmap
         try {
             val aperture = detectTransparentBounds(frame)
             if (aperture.isEmpty) {
@@ -1469,7 +1485,7 @@ class FrameRenderer(
             val geometry = imageFrameGeometry(originalBitmap, frame, aperture, layout)
             val output = createBitmap(geometry.outputWidth, geometry.outputHeight)
             val canvas = Canvas(output)
-            canvas.drawBitmap(originalBitmap, geometry.photoRect.left, geometry.photoRect.top, null)
+            if (renderPhoto) canvas.drawBitmap(originalBitmap, geometry.photoRect.left, geometry.photoRect.top, null)
             // Keep the four borders attached to the real photo rectangle as its aspect ratio changes.
             val sourceX = intArrayOf(0, aperture.left, aperture.right, frame.width)
             val sourceY = intArrayOf(0, aperture.top, aperture.bottom, frame.height)
@@ -1518,11 +1534,29 @@ class FrameRenderer(
         }
     }
 
-    private fun loadImageFrameBitmap(layout: FrameLayout): Bitmap? {
+    private fun loadImageFrameBitmap(layout: FrameLayout, maxLongEdge: Int? = null): Bitmap? {
         val frameBitmap = try {
             val options = BitmapFactory.Options().apply {
                 inMutable = true
                 inPreferredConfig = Bitmap.Config.ARGB_8888
+                // The decoder treats its default 0 as 1; our sampling arithmetic needs an explicit divisor.
+                inSampleSize = 1
+            }
+            if (maxLongEdge != null) {
+                // Decode only thumbnail-scale pixels; never load full-resolution imported art into every grid cell.
+                options.inJustDecodeBounds = true
+                options.inScaled = false
+                if (layout.imagePath != null) {
+                    BitmapFactory.decodeFile(layout.imagePath, options)
+                } else if (layout.imageResName != null) {
+                    val resId = context.resources.getIdentifier(layout.imageResName, "drawable", context.packageName)
+                    if (resId == 0) return null
+                    BitmapFactory.decodeResource(context.resources, resId, options)
+                }
+                val longEdge = maxOf(options.outWidth, options.outHeight)
+                if (longEdge <= 0) return null
+                while (longEdge / options.inSampleSize > maxLongEdge * 2) options.inSampleSize *= 2
+                options.inJustDecodeBounds = false
             }
 
             // 优先使用文件路径（外部导入），其次使用资源名称（内置资源）
@@ -1635,9 +1669,34 @@ class FrameRenderer(
         return Rect(minX, minY, maxX + 1, maxY + 1)
     }
 
-    /**
-     * 生成预览缩略图
-     */
+    /** Render the frame's real geometry and decorations over a transparent, empty photo window. */
+    fun renderFrameOnlyPreview(
+        template: FrameTemplate,
+        customProperties: Map<String, String> = emptyMap(),
+        targetLongEdge: Int = 256,
+    ): Bitmap {
+        val design = template.layout.designSize
+        require(design.isValid && targetLongEdge > 0)
+        val scale = targetLongEdge / maxOf(design.width, design.height)
+        val width = (design.width * scale).toInt().coerceAtLeast(1)
+        val height = (design.height * scale).toInt().coerceAtLeast(1)
+        val emptyPhoto = createBitmap(width, height)
+        try {
+            val metadata = FramePreviewFactory.createPreviewMetadata(width, height)
+            val output = render(
+                originalBitmap = emptyPhoto,
+                template = template,
+                metadata = metadata.copy(customProperties = metadata.customProperties + customProperties),
+                renderPhoto = false,
+            )
+            check(output !== emptyPhoto) { "Unable to render frame thumbnail: ${template.id}" }
+            return output
+        } finally {
+            emptyPhoto.recycle()
+        }
+    }
+
+    /** 生成带样片的预览缩略图。 */
     fun renderPreview(
         originalBitmap: Bitmap,
         template: FrameTemplate,

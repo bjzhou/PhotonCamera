@@ -4,6 +4,7 @@ import com.hinnka.mycamera.raw.fotufilm.FotufilmDocument
 import android.media.AudioDeviceInfo
 import android.os.Build
 import androidx.compose.animation.*
+import androidx.compose.animation.core.MutableTransitionState
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
@@ -115,8 +116,11 @@ fun CameraTopSheet(
     useMultipleExposure: Boolean,
     onMultipleExposureToggle: (Boolean) -> Unit,
     contentTopPadding: Dp = CameraTopSheetContentTopPadding,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    visibilityState: MutableTransitionState<Boolean>? = null
 ) {
+    val panelVisibility = visibilityState ?: remember { MutableTransitionState(visible) }
+    panelVisibility.targetState = visible
     var expandedVideoPanel by rememberSaveable { mutableStateOf<VideoSettingPanel?>(null) }
     var showRenderingEngineSheet by rememberSaveable { mutableStateOf(false) }
     var showContentManagementOptions by rememberSaveable { mutableStateOf(false) }
@@ -136,7 +140,7 @@ fun CameraTopSheet(
     }
 
     AnimatedVisibility(
-        visible = visible,
+        visibleState = panelVisibility,
         enter = slideInVertically(initialOffsetY = { -it }) + fadeIn(),
         exit = slideOutVertically(targetOffsetY = { -it }) + fadeOut(),
         modifier = modifier

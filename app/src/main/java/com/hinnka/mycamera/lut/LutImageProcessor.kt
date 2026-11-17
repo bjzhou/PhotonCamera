@@ -69,6 +69,8 @@ class LutImageProcessor(context: Context? = null) {
     private var lutTextureId = 0
     private val basicToneTextures = BasicToneGlTextures()
     private val logInput = LogInputGl()
+    private val thumbnailEngine = RawEnginePreviewGl()
+    private var thumbnailEngineProgram = 0
     private var framebufferId = 0
     private var outputTextureId = 0
     private var outputFramebufferWidth = 0
@@ -359,6 +361,73 @@ class LutImageProcessor(context: Context? = null) {
         )
 
         outputBitmap
+    }
+
+    /** Apply the exact live-preview engine atlas to an unprocessed ISP sRGB snapshot. */
+    suspend fun applyPreviewEngine(
+        bitmap: Bitmap,
+        plan: com.hinnka.mycamera.raw.RawEnginePreviewPlan
+    ): Bitmap = withContext(glDispatcher) {
+        currentCoroutineContext().ensureActive()
+        check(!isReleased && initialize()) { "Cannot initialize preset thumbnail renderer" }
+        check(EGL14.eglMakeCurrent(eglDisplay, eglSurface, eglSurface, eglContext))
+        if (thumbnailEngineProgram == 0) {
+            thumbnailEngineProgram = createFragmentProgram(
+                IMAGE_VERTEX_SHADER,
+                """
+                    #version 300 es
+                    precision highp float;
+                    precision highp int;
+                    in vec2 vTexCoord;
+                    out vec4 fragColor;
+                    uniform highp sampler2D uImageTexture;
+                    ${PreviewColorShaderModules.COLOR_TRANSFER_CORE}
+                    ${RawEnginePreviewGl.SAMPLING_GLSL}
+                    void main() {
+                        vec4 source = texture(uImageTexture, vTexCoord);
+                        fragColor = vec4(sampleEnginePreview(source.rgb), source.a);
+                    }
+                """.trimIndent().trimStart(),
+                "presetThumbnailEngine"
+            )
+            check(thumbnailEngineProgram != 0) { "Cannot compile preset thumbnail engine program" }
+        }
+        check(thumbnailEngine.prepare(plan)) { "Cannot prepare ${plan.engine} thumbnail mapping" }
+        currentCoroutineContext().ensureActive()
+        setupFramebuffer(bitmap.width, bitmap.height)
+        uploadImageTexture(bitmap)
+        GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, framebufferId)
+        check(framebufferId != 0 && GLES30.glCheckFramebufferStatus(GLES30.GL_FRAMEBUFFER) == GLES30.GL_FRAMEBUFFER_COMPLETE) {
+            "Incomplete preset thumbnail framebuffer"
+        }
+        GLES30.glViewport(0, 0, bitmap.width, bitmap.height)
+        GLES30.glDisable(GLES30.GL_BLEND)
+        GLES30.glBindVertexArray(0)
+        GLES30.glBindBuffer(GLES30.GL_ARRAY_BUFFER, 0)
+        GLES30.glBindBuffer(GLES30.GL_ELEMENT_ARRAY_BUFFER, 0)
+        GLES30.glUseProgram(thumbnailEngineProgram)
+        thumbnailEngine.bind(GLES30.glGetUniformLocation(thumbnailEngineProgram, "uEnginePreviewLut"))
+        GLES30.glActiveTexture(GLES30.GL_TEXTURE0)
+        GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, imageTextureId)
+        GLES30.glUniform1i(GLES30.glGetUniformLocation(thumbnailEngineProgram, "uImageTexture"), 0)
+        val identity = FloatArray(16).also { android.opengl.Matrix.setIdentityM(it, 0) }
+        GLES30.glUniformMatrix4fv(GLES30.glGetUniformLocation(thumbnailEngineProgram, "uMVPMatrix"), 1, false, identity, 0)
+        try {
+            drawQuad(thumbnailEngineProgram)
+            val drawError = GLES30.glGetError()
+            check(drawError == GLES30.GL_NO_ERROR) { "Preset thumbnail engine draw failed: ${plan.engine}, GL=$drawError" }
+            val pixels = obtainReadbackBuffer(bitmap.width * bitmap.height * 4)
+            GLES30.glBindBuffer(GLES30.GL_PIXEL_PACK_BUFFER, 0)
+            GLES30.glPixelStorei(GLES30.GL_PACK_ALIGNMENT, 4)
+            GLES30.glReadPixels(0, 0, bitmap.width, bitmap.height, GLES30.GL_RGBA, GLES30.GL_UNSIGNED_BYTE, pixels)
+            val readError = GLES30.glGetError()
+            check(readError == GLES30.GL_NO_ERROR) { "Preset thumbnail readback failed: GL=$readError" }
+            pixels.position(0)
+            createBitmap(bitmap.width, bitmap.height).also { it.copyPixelsFromBuffer(pixels) }
+        } finally {
+            GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, 0)
+            GLES30.glBindBuffer(GLES30.GL_PIXEL_PACK_BUFFER, 0)
+        }
     }
 
     suspend fun applyLutStack(
@@ -2124,6 +2193,9 @@ class LutImageProcessor(context: Context? = null) {
         if (lutTextureId != 0) {
             GLES30.glDeleteTextures(1, intArrayOf(lutTextureId), 0)
         }
+        thumbnailEngine.release()
+        if (thumbnailEngineProgram != 0) GLES30.glDeleteProgram(thumbnailEngineProgram)
+        thumbnailEngineProgram = 0
         basicToneTextures.release()
         logInput.release()
         releaseOutputFramebuffer()

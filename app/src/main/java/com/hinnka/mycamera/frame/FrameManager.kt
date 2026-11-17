@@ -18,6 +18,9 @@ import com.hinnka.mycamera.utils.PLog
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.flow.firstOrNull
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.withContext
@@ -52,6 +55,8 @@ class FrameManager(private val context: Context) {
     
     // 模板缓存
     private val templateCache = LruCache<String, FrameTemplate>(CACHE_SIZE)
+    private val _previewRevision = MutableStateFlow(0L)
+    val previewRevision = _previewRevision.asStateFlow()
 
     // 反向地理编码结果缓存。同一照片在预览、导出 HDR/SDR 时无需重复查询。
     private val locationCache = LruCache<String, String>(LOCATION_CACHE_SIZE)
@@ -155,6 +160,7 @@ class FrameManager(private val context: Context) {
      */
     fun evictTemplate(id: String) {
         templateCache.remove(id)
+        _previewRevision.update { it + 1 }
     }
     
     /**
@@ -162,6 +168,7 @@ class FrameManager(private val context: Context) {
      */
     fun clearCache() {
         templateCache.evictAll()
+        _previewRevision.update { it + 1 }
         locationCache.evictAll()
         PLog.d(TAG, "Frame template cache cleared")
     }

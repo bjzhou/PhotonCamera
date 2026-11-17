@@ -488,4 +488,6 @@
     <!-- /Fotufilm controls -->
     <string name="save_as_preset">Simpan sebagai preset</string>
     <string name="frequent_filters">Sering digunakan</string>
+    <string name="camera_looks_more">Lainnya</string>
+    <string name="camera_looks_collapse">Ciutkan</string>
 </resources>

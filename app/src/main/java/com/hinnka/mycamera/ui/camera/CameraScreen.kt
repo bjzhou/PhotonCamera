@@ -32,6 +32,7 @@ import android.os.Environment
 import android.os.SystemClock
 import android.provider.Settings
 import android.view.WindowManager
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.*
@@ -303,7 +304,6 @@ fun CameraScreen(
     var previewBounds by remember { mutableStateOf<Rect?>(null) }
     var viewfinderAreaBounds by remember { mutableStateOf<Rect?>(null) }
     var zoomBarBounds by remember { mutableStateOf<Rect?>(null) }
-    var captureButtonBounds by remember { mutableStateOf<Rect?>(null) }
     var parameterRulerBounds by remember { mutableStateOf<Rect?>(null) }
     var galleryThumbnailBounds by remember { mutableStateOf<Rect?>(null) }
     var captureAnimationSnapshot by remember { mutableStateOf<CaptureAnimationSnapshot?>(null) }
@@ -357,6 +357,28 @@ fun CameraScreen(
 
     // UI State
     var activePanel by remember { mutableStateOf(ActivePanel.NONE) }
+    val filterPanelTransition = updateTransition(
+        targetState = activePanel == ActivePanel.FILTERS,
+        label = "cameraFilterPanel"
+    )
+    val settingsPanelVisibility = remember { MutableTransitionState(false) }.apply {
+        targetState = activePanel == ActivePanel.SETTINGS
+    }
+    // Restore controls only after both the panel exit and its size transition have settled.
+    val showNormalControls = activePanel == ActivePanel.NONE &&
+        !filterPanelTransition.currentState && !filterPanelTransition.targetState && !filterPanelTransition.isRunning &&
+        settingsPanelVisibility.isIdle && !settingsPanelVisibility.currentState && !settingsPanelVisibility.targetState
+    var filtersExpanded by remember { mutableStateOf(false) }
+    fun collapseFilters() {
+        filtersExpanded = false
+        if (lutSelectorMode == LutSelectorMode.Frame) {
+            viewModel.setLutSelectorMode(LutSelectorMode.Style)
+        }
+    }
+    BackHandler(enabled = activePanel == ActivePanel.FILTERS) {
+        if (filtersExpanded) collapseFilters()
+        else activePanel = ActivePanel.NONE
+    }
     var selectedParameter by remember { mutableStateOf(CameraParameter.EXPOSURE_COMPENSATION) }
     var showParameterRuler by remember(state.captureMode, state.useRaw) { mutableStateOf(false) }
     val isXpan = state.aspectRatio == AspectRatio.XPAN
@@ -382,9 +404,10 @@ fun CameraScreen(
     )
 
     // 当打开滤镜面板时，生成预览图
-    LaunchedEffect(activePanel) {
+    LaunchedEffect(activePanel, state.currentCameraId, state.previewFirstFrameTimestampNs, state.captureMode, state.useRaw) {
         if (activePanel == ActivePanel.FILTERS) {
-            viewModel.generateThumbnail()
+            if (state.previewFirstFrameTimestampNs != null) viewModel.generateThumbnail()
+            else viewModel.clearLookThumbnails()
         }
     }
 
@@ -974,7 +997,14 @@ fun CameraScreen(
         }
 
         val zoomBar = @Composable {
-            if (activePanel == ActivePanel.NONE && !isXpan) {
+            if (!showNormalControls || isXpan) {
+                SideEffect { zoomBarBounds = null }
+            }
+            AnimatedVisibility(
+                visible = showNormalControls && !isXpan,
+                enter = fadeIn(tween(120)),
+                exit = ExitTransition.None
+            ) {
                 ZoomControlBar(
                     viewModel = viewModel,
                     zoomRatio = viewModel.zoomRatioByMain,
@@ -990,10 +1020,6 @@ fun CameraScreen(
                             zoomBarBounds = coordinates.boundsInRoot()
                         }
                 )
-            } else {
-                SideEffect {
-                    zoomBarBounds = null
-                }
             }
         }
 
@@ -1593,6 +1619,85 @@ fun CameraScreen(
             }
         }
 
+        val filterSelector: @Composable () -> Unit = {
+            val allPresets by viewModel.allPresets.collectAsState()
+            val defaultPresetName = stringResource(R.string.preset_new_preset_default)
+            val isVideoLog = isVideoMode && state.videoConfig.logProfile.isEnabled
+
+            // The same selector stays composed while switching between strip and grid.
+            LutSelector(
+                availableLuts = viewModel.selectableLutList,
+                currentLutId = currentLutId,
+                thumbnail = viewModel.previewThumbnail,
+                presetThumbnailInput = viewModel.presetThumbnailInput,
+                onLutSelected = { viewModel.setLut(it) },
+                allPresets = allPresets,
+                presetModeEnabled = !isVideoLog,
+                activePresetId = activePresetId,
+                activePresetModified = activePresetModified,
+                selectedMode = if (isVideoLog) LutSelectorMode.Style else lutSelectorMode,
+                onModeSelected = { viewModel.setLutSelectorMode(it) },
+                availableFrames = viewModel.availableFrameList,
+                currentFrameId = viewModel.currentFrameId,
+                onFrameSelected = if (isVideoLog) null else viewModel::setFrame,
+                onFrameManagementClick = {
+                    activePanel = ActivePanel.NONE
+                    onFrameManagementClick()
+                },
+                onPresetSelected = { preset ->
+                    discardTransientLookEdits()
+                    if (presetRequiresPreviewTransition(preset)) {
+                        runPreviewTransition { viewModel.applyPreset(preset) }
+                    } else {
+                        viewModel.applyPreset(preset)
+                    }
+                },
+                onCreatePresetClick = {
+                    activePanel = ActivePanel.NONE
+                    viewModel.prepareCurrentSettingsPresetDraft(defaultPresetName)
+                    onPresetEditClick(null)
+                },
+                onResetPresetClick = {
+                    discardTransientLookEdits()
+                    val preset = allPresets.firstOrNull { it.id == activePresetId }
+                    if (presetRequiresPreviewTransition(preset)) {
+                        runPreviewTransition { viewModel.resetActivePreset() }
+                    } else {
+                        viewModel.resetActivePreset()
+                    }
+                },
+                onSavePresetClick = viewModel::saveCurrentSettingsToActivePreset,
+                onPresetManagementClick = {
+                    activePanel = ActivePanel.NONE
+                    onPresetManagementClick()
+                },
+                onEditClick = {
+                    activePanel = ActivePanel.EDIT
+                },
+                onManageClick = { lutId ->
+                    activePanel = ActivePanel.NONE
+                    onFilterManagementClick(lutId)
+                },
+                categoryOrder = categoryOrder,
+                headerContent = if (isVideoLog) {
+                    {
+                        VideoLogLutModeSelector(
+                            mode = state.videoConfig.logLutMode,
+                            enabled = !state.videoRecordingState.isRecording &&
+                                !state.videoRecordingState.isProcessing,
+                            onModeSelected = viewModel::setVideoLogLutMode
+                        )
+                    }
+                } else null,
+                presentation = if (filtersExpanded) LutSelectorPresentation.Expanded else LutSelectorPresentation.Compact,
+                onExpandedChange = { expanded ->
+                    if (expanded) filtersExpanded = true else collapseFilters()
+                },
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .pointerInput(Unit) { detectTapGestures { } }
+            )
+        }
 
         val controls = @Composable { modifier: Modifier ->
             Controls(
@@ -1605,13 +1710,18 @@ fun CameraScreen(
                 onGalleryThumbnailBoundsChanged = { bounds ->
                     galleryThumbnailBounds = bounds
                 },
-                onCaptureButtonBoundsChanged = { bounds ->
-                    captureButtonBounds = bounds
-                },
                 onFilterClick = {
-                    activePanel = if (activePanel == ActivePanel.FILTERS) ActivePanel.NONE else ActivePanel.FILTERS
+                    if (activePanel == ActivePanel.FILTERS) {
+                        activePanel = ActivePanel.NONE
+                    } else {
+                        collapseFilters()
+                        showParameterRuler = false
+                        activePanel = ActivePanel.FILTERS
+                    }
                 },
                 isFilterPanelOpen = activePanel == ActivePanel.FILTERS,
+                filterPanelTransition = filterPanelTransition,
+                filterSelector = filterSelector,
                 onCaptureModeSelected = ::setShootingModeWithPreviewTransition,
                 modeSwitchEnabled = !previewTransitionActive && !lensSwitchTransition.isActive,
                 onCaptureTap = {
@@ -1676,6 +1786,16 @@ fun CameraScreen(
                 viewfinder()
             }
 
+            // Keep dismissal behind the controls, including the inline look browser.
+            if (activePanel == ActivePanel.FILTERS) {
+                PanelDismissPreviewOverlay(
+                    bounds = if (isXpan) viewfinderAreaBounds ?: previewBounds else previewBounds,
+                    parentBounds = cameraScreenBounds,
+                    dimBackground = false,
+                    onDismiss = { activePanel = ActivePanel.NONE }
+                )
+            }
+
             topBar()
 
             CameraBottomControlsLayout(
@@ -1714,7 +1834,11 @@ fun CameraScreen(
                     }
                 },
                 parameterBar = {
-                    if (!isXpan) {
+                    AnimatedVisibility(
+                        visible = showNormalControls && !isXpan,
+                        enter = fadeIn(tween(120)),
+                        exit = ExitTransition.None
+                    ) {
                         parameterBar(selectedParameter.takeIf { showParameterRuler }, onParameterClick)
                     }
                 },
@@ -1729,7 +1853,7 @@ fun CameraScreen(
             previewBounds
         }
 
-        if (activePanel != ActivePanel.NONE) {
+        if (activePanel != ActivePanel.NONE && activePanel != ActivePanel.FILTERS) {
             PanelDismissPreviewOverlay(
                 bounds = panelDismissBounds,
                 parentBounds = cameraScreenBounds,
@@ -1741,6 +1865,7 @@ fun CameraScreen(
         // TopSheet for settings
         CameraTopSheet(
             visible = activePanel == ActivePanel.SETTINGS,
+            visibilityState = settingsPanelVisibility,
             captureMode = state.captureMode,
             aspectRatio = state.aspectRatio,
             topSheetAspectRatios = topSheetAspectRatios,
@@ -1825,109 +1950,6 @@ fun CameraScreen(
             onMultipleExposureToggle = { viewModel.setUseMultipleExposure(it) },
             contentTopPadding = CameraTopBarBaseTopPadding + topSafePadding
         )
-
-        // During navigation measurement or window resizing, the viewport can be
-        // shorter than the toolbar. The panel then has no available vertical space.
-        val filterPanelTop = minOf(
-            if (!isXpan && !isVideoMode) topBarHeight else 0.dp,
-            maxHeight
-        )
-        val fallbackFilterPanelBottom = when {
-            isXpan -> maxHeight - 48.dp
-            isVideoMode -> maxHeight - 170.dp
-            else -> topBarHeight + cardHeight - 48.dp
-        }
-        // The filter entry now sits beside the shutter. Keep the panel above
-        // the entire capture row so both the shutter and panel toggle stay accessible.
-        val filterPanelAnchorY = captureButtonBounds?.top
-        val requestedFilterPanelBottom = filterPanelAnchorY?.let { anchorY ->
-            val parentTop = cameraScreenBounds?.top ?: 0f
-            with(density) { (anchorY - parentTop).toDp() - 8.dp }
-        } ?: fallbackFilterPanelBottom
-        val filterPanelBottom = requestedFilterPanelBottom.coerceIn(filterPanelTop, maxHeight)
-
-        AnimatedVisibility(
-            activePanel == ActivePanel.FILTERS,
-            enter = if (isXpan) {slideInVertically(initialOffsetY = { it })} else fadeIn(),
-            exit = if (isXpan) {slideOutVertically(targetOffsetY = { it })} else fadeOut()
-        ) {
-            Box(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(filterPanelBottom)
-                    .padding(top = filterPanelTop),
-                contentAlignment = Alignment.BottomCenter
-            ) {
-                val allPresets by viewModel.allPresets.collectAsState()
-                val defaultPresetName = stringResource(R.string.preset_new_preset_default)
-                val isVideoLog = isVideoMode && state.videoConfig.logProfile.isEnabled
-
-                // LUT 选择器 (内嵌 Presets 列表与统一控制，无多余背景遮挡)
-                LutSelector(
-                    availableLuts = viewModel.selectableLutList,
-                    currentLutId = currentLutId,
-                    thumbnail = viewModel.previewThumbnail,
-                    onLutSelected = { viewModel.setLut(it) },
-                    allPresets = allPresets,
-                    presetModeEnabled = !isVideoLog,
-                    activePresetId = activePresetId,
-                    activePresetModified = activePresetModified,
-                    selectedMode = if (isVideoLog) LutSelectorMode.Style else lutSelectorMode,
-                    onModeSelected = { viewModel.setLutSelectorMode(it) },
-                    availableFrames = viewModel.availableFrameList,
-                    currentFrameId = viewModel.currentFrameId,
-                    onFrameSelected = if (isVideoLog) null else viewModel::setFrame,
-                    onFrameManagementClick = {
-                        activePanel = ActivePanel.NONE
-                        onFrameManagementClick()
-                    },
-                    onPresetSelected = { preset ->
-                        discardTransientLookEdits()
-                        if (presetRequiresPreviewTransition(preset)) {
-                            runPreviewTransition { viewModel.applyPreset(preset) }
-                        } else {
-                            viewModel.applyPreset(preset)
-                        }
-                    },
-                    onCreatePresetClick = {
-                        viewModel.prepareCurrentSettingsPresetDraft(defaultPresetName)
-                        onPresetEditClick(null)
-                    },
-                    onResetPresetClick = {
-                        discardTransientLookEdits()
-                        val preset = allPresets.firstOrNull { it.id == activePresetId }
-                        if (presetRequiresPreviewTransition(preset)) {
-                            runPreviewTransition { viewModel.resetActivePreset() }
-                        } else {
-                            viewModel.resetActivePreset()
-                        }
-                    },
-                    onSavePresetClick = viewModel::saveCurrentSettingsToActivePreset,
-                    onPresetManagementClick = onPresetManagementClick,
-                    onEditClick = {
-                        activePanel = ActivePanel.EDIT
-                    },
-                    onManageClick = { lutId ->
-                        activePanel = ActivePanel.NONE
-                        onFilterManagementClick(lutId)
-                    },
-                    categoryOrder = categoryOrder,
-                    headerContent = if (isVideoLog) {
-                        {
-                            VideoLogLutModeSelector(
-                                mode = state.videoConfig.logLutMode,
-                                enabled = !state.videoRecordingState.isRecording &&
-                                    !state.videoRecordingState.isProcessing,
-                                onModeSelected = viewModel::setVideoLogLutMode
-                            )
-                        }
-                    } else null,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(start = 6.dp, top = 10.dp, end = 6.dp)
-                )
-            }
-        }
 
         if (activePanel == ActivePanel.EDIT) {
             LutEditBottomSheet(
@@ -2058,9 +2080,10 @@ private fun Controls(
     useMultipleExposure: Boolean,
     multipleExposureState: com.hinnka.mycamera.viewmodel.MultipleExposureSessionState,
     onGalleryThumbnailBoundsChanged: (Rect) -> Unit,
-    onCaptureButtonBoundsChanged: (Rect) -> Unit,
     onFilterClick: () -> Unit,
     isFilterPanelOpen: Boolean,
+    filterPanelTransition: Transition<Boolean>,
+    filterSelector: @Composable () -> Unit,
     onCaptureModeSelected: (CameraShootingMode) -> Unit,
     modeSwitchEnabled: Boolean,
     onCaptureTap: () -> Unit,
@@ -2139,9 +2162,6 @@ private fun Controls(
                     onTap = onCaptureTap,
                     onLongPressStart = { viewModel.startContinuousCapture() },
                     onLongPressEnd = { viewModel.stopContinuousCapture() },
-                    modifier = Modifier.onGloballyPositioned { coordinates ->
-                        onCaptureButtonBoundsChanged(coordinates.boundsInRoot())
-                    },
                 )
 
                 if (state.videoRecordingState.isRecording) {
@@ -2210,20 +2230,40 @@ private fun Controls(
                 }
             }
 
-            Spacer(modifier = Modifier.height(CameraControlsLayoutDefaults.ModeSwitcherSpacing))
-
-            CaptureModeSwitcher(
-                shootingMode = when {
-                    state.captureMode == CaptureMode.VIDEO -> CameraShootingMode.VIDEO
-                    state.useRaw && state.isRawSupported -> CameraShootingMode.PROFESSIONAL
-                    else -> CameraShootingMode.PHOTO
-                },
-                professionalModeEnabled = state.isRawSupported,
-                enabled = modeSwitchEnabled &&
-                    !state.videoRecordingState.isRecording &&
-                    !state.videoRecordingState.isProcessing,
-                onModeSelected = onCaptureModeSelected
-            )
+            filterPanelTransition.AnimatedContent(
+                modifier = Modifier.fillMaxWidth(),
+                contentAlignment = Alignment.TopCenter,
+                transitionSpec = {
+                    (fadeIn(tween(100, delayMillis = 100)) togetherWith fadeOut(tween(100)))
+                        .using(SizeTransform { _, _ -> tween(220) })
+                }
+            ) { panelOpen ->
+                Column(
+                    modifier = Modifier.fillMaxWidth()
+                        // In-panel strip/grid changes keep their own size animation.
+                        .then(if (panelOpen) Modifier.animateContentSize(tween(220)) else Modifier),
+                    horizontalAlignment = Alignment.CenterHorizontally
+                ) {
+                    if (panelOpen) {
+                        Spacer(Modifier.height(6.dp))
+                        filterSelector()
+                    } else {
+                        Spacer(Modifier.height(CameraControlsLayoutDefaults.ModeSwitcherSpacing))
+                        CaptureModeSwitcher(
+                            shootingMode = when {
+                                state.captureMode == CaptureMode.VIDEO -> CameraShootingMode.VIDEO
+                                state.useRaw && state.isRawSupported -> CameraShootingMode.PROFESSIONAL
+                                else -> CameraShootingMode.PHOTO
+                            },
+                            professionalModeEnabled = state.isRawSupported,
+                            enabled = modeSwitchEnabled &&
+                                !state.videoRecordingState.isRecording &&
+                                !state.videoRecordingState.isProcessing,
+                            onModeSelected = onCaptureModeSelected
+                        )
+                    }
+                }
+            }
         }
     }
 }
@@ -2307,7 +2347,6 @@ private fun GalleryProcessingOverlay(
         }
     }
 }
-
 
 /**
  * 拍照按钮
@@ -2752,7 +2791,6 @@ private fun <T> nextOption(current: T, options: List<T>): T? {
     }
 }
 
-
 fun Modifier.autoRotate(
     dx: Dp = 0.dp,
     dy: Dp = 0.dp,
@@ -2856,7 +2894,6 @@ private fun CornerOverlay(
         drawPath(frame, color)
     }
 }
-
 
 private fun Context.findActivity(): Activity? {
     var context = this

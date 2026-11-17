@@ -1421,11 +1421,13 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             } else availableLutList
         }
 
-    // LUT 预览图缓存（lutId -> 预览Bitmap）
+    // 未套引擎和滤镜的 ISP 预览帧，供滤镜与预设缩略图共用。
     var previewThumbnail by mutableStateOf<Bitmap?>(null)
 
-    // 是否正在生成预览
-    private var isGeneratingPreviews = false
+    // 新请求使先前相机/拍摄模式的异步回调失效。
+    private var thumbnailGeneration = 0L
+    var presetThumbnailInput by mutableStateOf<com.hinnka.mycamera.lut.PresetThumbnailInput?>(null)
+        private set
 
     // 边框相关状态
     var currentFrameId: String? by mutableStateOf(null)
@@ -4195,30 +4197,49 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     /**
      * 从相机捕获预览帧并生成所有 LUT 的预览图
      */
+    fun clearLookThumbnails() {
+        ++thumbnailGeneration
+        previewThumbnail = null
+        presetThumbnailInput = null
+    }
+
     fun generateThumbnail(onGenerated: ((Bitmap?) -> Unit)? = null) {
-        val isGeneralPreviewRequest = onGenerated == null
-        if (isGeneralPreviewRequest && isGeneratingPreviews) {
-            PLog.d(TAG, "Already generating previews, skipping")
+        clearLookThumbnails()
+        val generation = thumbnailGeneration
+        val glView = glSurfaceView
+        if (glView == null) {
+            onGenerated?.invoke(null)
             return
         }
-
-        if (isGeneralPreviewRequest) isGeneratingPreviews = true
-
-        val glView = glSurfaceView
-        if (glView != null) {
-            val thumbnailRotation = capturePreviewThumbnailRotation()
+        val cameraState = state.value
+        val prefs = userPreferencesRepository.current
+        val professional = cameraState.captureMode == CaptureMode.PHOTO &&
+            cameraState.useRaw && cameraState.isRawSupported && !prefs.phantomMode
+        val lensId = cameraState.currentCameraId
+        val thumbnailRotation = capturePreviewThumbnailRotation()
+        cameraController.captureEnginePreviewSource { cameraSource ->
             glView.captureOriginalPreviewFrame { bitmap ->
-                val thumbnail = bitmap?.let {
-                    rotatePreviewBitmapForCapture(it, thumbnailRotation)
+                viewModelScope.launch {
+                    if (generation != thumbnailGeneration) {
+                        bitmap?.recycle()
+                        onGenerated?.invoke(null)
+                        return@launch
+                    }
+                    val thumbnail = bitmap?.let { rotatePreviewBitmapForCapture(it, thumbnailRotation) }
+                    previewThumbnail = thumbnail
+                    presetThumbnailInput = thumbnail?.let {
+                        com.hinnka.mycamera.lut.PresetThumbnailInput(
+                            bitmap = it,
+                            professional = professional,
+                            camera = cameraSource,
+                            lensId = lensId,
+                            filmTunings = prefs.rawSpectralFilmTuningsByStock.toMap(),
+                            tone = prefs.rawToneMappingParameters,
+                        )
+                    }
+                    onGenerated?.invoke(thumbnail)
                 }
-                previewThumbnail = thumbnail
-                onGenerated?.invoke(thumbnail)
-                if (isGeneralPreviewRequest) isGeneratingPreviews = false
             }
-        } else {
-            previewThumbnail = null
-            onGenerated?.invoke(null)
-            if (isGeneralPreviewRequest) isGeneratingPreviews = false
         }
     }
 

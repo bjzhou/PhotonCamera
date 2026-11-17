@@ -1472,4 +1472,6 @@
     <string name="aesthetic_show_in_gallery_description">Évalue les photos en arrière-plan pendant la navigation.</string>
     <string name="aesthetic_note">Évalué par un modèle esthétique CLIP sur l\'appareil (LAION Aesthetic Predictor), entraîné sur un grand nombre de notes humaines. Il reflète l\'attrait visuel général plutôt que l\'intention artistique : à utiliser comme référence.</string>
     <string name="frequent_filters">Fréquents</string>
+    <string name="camera_looks_more">Plus</string>
+    <string name="camera_looks_collapse">Réduire</string>
 </resources>

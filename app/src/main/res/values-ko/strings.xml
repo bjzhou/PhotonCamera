@@ -489,4 +489,6 @@
     <!-- /Fotufilm controls -->
     <string name="save_as_preset">프리셋으로 저장</string>
     <string name="frequent_filters">자주 사용</string>
+    <string name="camera_looks_more">더 보기</string>
+    <string name="camera_looks_collapse">접기</string>
 </resources>

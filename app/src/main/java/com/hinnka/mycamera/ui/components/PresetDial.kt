@@ -1,38 +1,29 @@
 package com.hinnka.mycamera.ui.components
 
-import androidx.compose.animation.animateColorAsState
-import androidx.compose.foundation.background
-import androidx.compose.foundation.basicMarquee
-import androidx.compose.foundation.border
-import androidx.compose.foundation.combinedClickable
-import androidx.compose.foundation.horizontalScroll
+import android.graphics.Bitmap
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material3.*
+import androidx.compose.material3.Icon
 import androidx.compose.runtime.*
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextAlign
-import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
+import coil.compose.SubcomposeAsyncImage
+import coil.request.ImageRequest
+import coil.size.Size
+import coil.transform.Transformation
 import com.hinnka.mycamera.R
-import com.hinnka.mycamera.camera.AspectRatio
+import com.hinnka.mycamera.lut.PresetThumbnailInput
+import com.hinnka.mycamera.lut.PresetThumbnailRenderer
 import com.hinnka.mycamera.model.CameraPreset
-import com.hinnka.mycamera.raw.RawRenderingEngine
-import com.hinnka.mycamera.ui.camera.ViewfinderTextShadow
+import com.hinnka.mycamera.ui.icons.AppIcons
+import com.hinnka.mycamera.utils.PLog
+import kotlinx.coroutines.CancellationException
 
-/**
- * 拍摄预设面板组件 (取代原先的 PresetDial 拨盘)
- */
 @Composable
 fun PresetsPanel(
     activePresetId: String?,
@@ -40,131 +31,83 @@ fun PresetsPanel(
     allPresets: List<CameraPreset>,
     onPresetSelected: (CameraPreset?) -> Unit,
     onManagePresets: () -> Unit,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    expanded: Boolean = false,
+    compact: Boolean = false,
+    thumbnail: Bitmap? = null,
+    thumbnailInput: PresetThumbnailInput? = null
 ) {
+    val context = LocalContext.current
     val haptic = LocalHapticFeedback.current
-    val scrollState = rememberScrollState()
-
-    Column(
+    val source = remember(thumbnailInput, thumbnail) { thumbnailInput ?: thumbnail?.let(::PresetThumbnailInput) }
+    val renderer = remember(context) { PresetThumbnailRenderer(context.applicationContext) }
+    LookOptionList(
+        options = allPresets,
+        key = { it.id },
+        selectedIndex = allPresets.indexOfFirst { it.id == activePresetId },
+        expanded = expanded,
+        compact = compact,
+        itemFooterHeight = lookThumbnailFooterHeight(),
         modifier = modifier
-            .fillMaxWidth()
-            .padding(vertical = 2.dp),
-        horizontalAlignment = Alignment.CenterHorizontally
-    ) {
-        // 横向滑动的预设列表
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .horizontalScroll(scrollState)
-                .padding(horizontal = 4.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(8.dp)
-        ) {
-            // 各个预设卡片
-            allPresets.forEach { preset ->
-                val isSelected = activePresetId == preset.id
-                val presetBorderColor by animateColorAsState(
-                    targetValue = if (isSelected) LutPanelOptionSelectedBorder else LutPanelOptionBorder,
-                    label = "presetBorderColor"
-                )
-
-                // 翻译内置预设名字
-                val displayName = when (preset.id) {
-                    "builtin_default" -> stringResource(R.string.default_text)
-                    "builtin_hasselblad_natural" -> stringResource(R.string.preset_builtin_hasselblad_natural)
-                    "builtin_portrait" -> stringResource(R.string.preset_builtin_portrait)
-                    "builtin_classic_film" -> stringResource(R.string.preset_builtin_classic_film)
-                    "builtin_monochrome" -> stringResource(R.string.preset_builtin_monochrome)
-                    "builtin_cinematic" -> stringResource(R.string.preset_builtin_cinematic)
-                    "builtin_leica_m9_moment" -> stringResource(R.string.preset_builtin_leica_m9_moment)
-                    else -> preset.name
-                }
-
-                Card(
-                    shape = LutPanelOptionShape,
-                    colors = CardDefaults.cardColors(
-                        containerColor = if (isSelected) {
-                            LutPanelOptionSelectedSurface
-                        } else {
-                            LutPanelOptionSurface
-                        }
-                    ),
-                    modifier = Modifier
-                        .size(LutPanelOptionSize)
-                        .clip(LutPanelOptionShape)
-                        .combinedClickable(
-                            onClick = {
-                                haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                                onPresetSelected(preset)
-                            },
-                            onLongClick = {
-                                haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                                onManagePresets()
-                            }
-                        )
-                        .border(if (isSelected) 1.5.dp else 1.dp, presetBorderColor, LutPanelOptionShape)
-                ) {
-                    Column(
-                        modifier = Modifier
-                            .fillMaxSize()
-                            .padding(horizontal = 4.dp, vertical = 5.dp),
-                        verticalArrangement = Arrangement.SpaceBetween,
-                        horizontalAlignment = Alignment.CenterHorizontally
-                    ) {
-                        // 预设名
-                        Text(
-                            text = if (isSelected && activePresetModified) "$displayName*" else displayName,
-                            color = Color.White,
-                            fontSize = 10.sp,
-                            fontWeight = FontWeight.SemiBold,
-                            textAlign = TextAlign.Center,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                            style = LocalTextStyle.current.copy(shadow = ViewfinderTextShadow),
-                            modifier = Modifier.padding(horizontal = 2.dp).basicMarquee()
-                        )
-
-                        // 包含的特性微小徽章（Film, Lut, DCP等）
-                        Row(
-                            horizontalArrangement = Arrangement.spacedBy(2.dp),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            val rawRenderingEngine = RawRenderingEngine.fromPersistedName(preset.rawRenderingEngine)
-                            FeatureBadge(text = AspectRatio.valueOf(preset.aspectRatio).getDisplayName())
-                            if (rawRenderingEngine == RawRenderingEngine.Spektrafilm ||
-                                rawRenderingEngine == RawRenderingEngine.Fotufilm
-                            ) {
-                                FeatureBadge(text = "FILM")
-                            }
-                            if (rawRenderingEngine == RawRenderingEngine.AdobeCurve && preset.hasRawDcpSelection()) {
-                                FeatureBadge(text = "DCP")
-                            } else if (preset.lutId != null) {
-                                FeatureBadge(text = "LUT")
-                            } else if (preset.frameId != null) {
-                                FeatureBadge(text = "FRAME")
-                            }
+    ) { preset ->
+        val selected = activePresetId == preset.id
+        val name = when (preset.id) {
+            "builtin_default" -> stringResource(R.string.default_text)
+            "builtin_hasselblad_natural" -> stringResource(R.string.preset_builtin_hasselblad_natural)
+            "builtin_portrait" -> stringResource(R.string.preset_builtin_portrait)
+            "builtin_classic_film" -> stringResource(R.string.preset_builtin_classic_film)
+            "builtin_monochrome" -> stringResource(R.string.preset_builtin_monochrome)
+            "builtin_cinematic" -> stringResource(R.string.preset_builtin_cinematic)
+            "builtin_leica_m9_moment" -> stringResource(R.string.preset_builtin_leica_m9_moment)
+            else -> preset.name
+        }
+        val request = remember(source, preset) {
+            source?.let { snapshot ->
+                val transformation = object : Transformation {
+                    override val cacheKey = "preset-preview:${snapshot.cacheKey}:${preset.toJson()}"
+                    override suspend fun transform(input: Bitmap, size: Size): Bitmap {
+                        try {
+                            return renderer.render(preset, snapshot, input)
+                        } catch (cancelled: CancellationException) {
+                            throw cancelled
+                        } catch (error: Exception) {
+                            PLog.e("PresetThumbnail", "Cannot render preset=${preset.id}, engine=${preset.rawRenderingEngine}", error)
+                            throw error
                         }
                     }
                 }
+                ImageRequest.Builder(context).data(snapshot.bitmap)
+                    .transformations(transformation).crossfade(true).build()
             }
+        }
+        LookThumbnailItem(
+            name = if (selected && activePresetModified) "$name*" else name,
+            selected = selected,
+            onClick = {
+                haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                onPresetSelected(preset)
+            },
+            onLongClick = {
+                haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                onManagePresets()
+            },
+            modifier = if (expanded) Modifier.fillMaxWidth() else Modifier
+        ) {
+            SubcomposeAsyncImage(
+                model = request,
+                contentDescription = name,
+                contentScale = ContentScale.Crop,
+                modifier = Modifier.fillMaxSize(),
+                loading = { PresetThumbnailPlaceholder() },
+                error = { PresetThumbnailPlaceholder() }
+            )
         }
     }
 }
 
 @Composable
-private fun FeatureBadge(text: String) {
-    Box(
-        modifier = Modifier
-            .clip(RoundedCornerShape(3.dp))
-            .background(Color.White.copy(alpha = 0.12f))
-            .padding(horizontal = 4.dp)
-    ) {
-        Text(
-            text = text,
-            color = Color.White,
-            fontSize = 6.sp,
-            fontWeight = FontWeight.Bold,
-            style = LocalTextStyle.current.copy(shadow = ViewfinderTextShadow)
-        )
+private fun PresetThumbnailPlaceholder() {
+    Box(Modifier.fillMaxSize(), contentAlignment = androidx.compose.ui.Alignment.Center) {
+        Icon(AppIcons.Image, null, tint = Color.White.copy(alpha = 0.3f), modifier = Modifier.size(20.dp))
     }
 }

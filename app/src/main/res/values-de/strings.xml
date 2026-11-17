@@ -488,4 +488,6 @@
     <!-- /Fotufilm controls -->
     <string name="save_as_preset">Als Preset speichern</string>
     <string name="frequent_filters">Häufig</string>
+    <string name="camera_looks_more">Mehr</string>
+    <string name="camera_looks_collapse">Einklappen</string>
 </resources>
