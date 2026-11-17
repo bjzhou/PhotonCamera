@@ -54,7 +54,6 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlin.math.abs
-import kotlin.math.roundToInt
 
 /**
  * The Fotufilm edit: upstream's Android control catalogue resolved for the document's film and
@@ -70,9 +69,9 @@ fun FotufilmControls(
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
-    var catalogue by remember { mutableStateOf<FotufilmCatalogue?>(null) }
+    var catalogue by remember(document.stockId) { mutableStateOf<FotufilmCatalogue?>(null) }
     // Slider positions while a drag is in flight; the document changes when the drag ends.
-    val dragging = remember { mutableStateMapOf<String, Float>() }
+    val dragging = remember(document.stockId) { mutableStateMapOf<String, Float>() }
 
     LaunchedEffect(document) {
         catalogue = withContext(Dispatchers.Default) {
@@ -149,6 +148,22 @@ private fun FotufilmControl(
         is FotufilmCatalogue.Kind.Slider -> {
             val scale = kind.scale
             val stored = (control.value as? FotufilmDocument.Value.Number)?.value ?: scale.neutral
+            // Push/pull selects complete development curves, not an interpolated value.
+            // Other sliders (e.g. age) use stops only as suggested detents.
+            if (control.field == PUSH_FIELD) {
+                val stops = scale.stops.distinct()
+                FotufilmChips(
+                    title = title,
+                    description = description,
+                    options = stops.map { it to FotufilmStrings.formatValue(context, scale, it.toFloat()) },
+                    selected = stops.firstOrNull { matchesDevelopmentStop(it, stored) },
+                    onSelected = { value ->
+                        onValue(if (value == scale.neutral) null else FotufilmDocument.Value.Number(value))
+                    },
+                    modifier = indent,
+                )
+                return
+            }
             SliderSettingItem(
                 title = title,
                 description = description,
@@ -371,9 +386,9 @@ private fun FotufilmDocument.withValue(control: FotufilmCatalogue.Control, value
 /**
  * The document on another film: the edit carries over, less every value the new film cannot take
  * — a control it does not admit or its medium does not offer, a menu choice it does not list (a
- * shutter time without a stated reciprocity), a number outside its admitted range (a push it has
- * no development for). Dropping one can change the medium and with it what is offered, so the
- * check repeats until the document is stable; upstream then accepts it or says why not.
+ * shutter time without a stated reciprocity), a number outside its admitted range or a push
+ * without a matching development condition. Dropping one can change the medium and with it what
+ * is offered, so the check repeats until the document is stable; upstream then accepts it or says why not.
  */
 private fun documentForStock(
     context: android.content.Context,
@@ -402,7 +417,8 @@ private fun FotufilmCatalogue.accepts(field: String, value: FotufilmDocument.Val
             value is FotufilmDocument.Value.Choice && kind.choices.any { it.id == value.id }
         is FotufilmCatalogue.Kind.Slider ->
             value is FotufilmDocument.Value.Number &&
-                value.value in kind.scale.admittedMin..kind.scale.admittedMax
+                value.value in kind.scale.admittedMin..kind.scale.admittedMax &&
+                (field != PUSH_FIELD || kind.scale.stops.any { matchesDevelopmentStop(it, value.value) })
         is FotufilmCatalogue.Kind.Chips ->
             value is FotufilmDocument.Value.Number &&
                 value.value in kind.scale.admittedMin..kind.scale.admittedMax
@@ -411,10 +427,15 @@ private fun FotufilmCatalogue.accepts(field: String, value: FotufilmDocument.Val
     }
 }
 
+/** Matches FilmStock::supportsDevelopment and developmentCondition in PushPull.cpp. */
+private fun matchesDevelopmentStop(stop: Double, value: Double): Boolean =
+    if (stop == 0.0) value.toFloat() == 0f else abs(stop.toFloat() - value.toFloat()) <= 1e-4f
+
 private fun sectionOf(control: FotufilmCatalogue.Control): String =
     if (control.field in SHOWN_LIGHT_FIELDS) LIGHT_SECTION else control.section
 
 private const val TAG = "FotufilmControls"
+private const val PUSH_FIELD = "push"
 private const val STOCK_MENU = "stocks"
 private const val LIGHT_SECTION = "lightExposure"
 private val SHOWN_SECTIONS = setOf(
