@@ -70,6 +70,9 @@ public:
         return found == values.end() ? nullptr : &found->second;
     }
 
+    /// A viewing lamp selected on another medium stays in the edit until that medium can use it.
+    const Value* effectiveValue(EditorControlField field, PrintPaper paper) const;
+
     /// `EditDocument.init(from:)` over a JSON object. Throws DecodingError on malformed text and
     /// Failure on an unknown field.
     static EditDocument decode(const JsonValue& json);

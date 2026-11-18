@@ -56,6 +56,22 @@ EditDocument EditDocument::decode(const JsonValue& json) {
 
 EditDocument EditDocument::decode(const std::string& text) { return decode(parseJson(text)); }
 
+const EditDocument::Value* EditDocument::effectiveValue(EditorControlField field, PrintPaper paper) const {
+    const Value* value = (*this)[field];
+    if (field != EditorControlField::printLight || !value || value->type != Value::Type::choice) return value;
+
+    const auto offersLight = [&](PrintPaper medium) {
+        const auto& lights = EditorControlCatalogue::viewingLights(medium);
+        return std::any_of(lights.begin(), lights.end(), [&](const EditorMenuChoice& light) {
+            return light.id == value->choice;
+        });
+    };
+    if (offersLight(paper)) return value;
+    // Only a known lamp can be dormant. Leave malformed choices for engineValue to diagnose.
+    const auto& media = allPrintPapers();
+    return std::any_of(media.begin(), media.end(), offersLight) ? nullptr : value;
+}
+
 bool EditDocument::isComposed(EditorControlField field) {
     switch (field) {
         case EditorControlField::gauge:
@@ -110,12 +126,13 @@ FotufilmEngine::Options EditDocument::options(const FilmStock& stock,
     for (const auto& entry : sorted) {
         const EditorControlField field = entry.second;
         if (isComposed(field)) continue;
-        const Value& input = values.at(field);
+        const Value* input = effectiveValue(field, paper);
+        if (!input) continue;
         auto found = stockControls.find(static_cast<int>(field));
         const EditorControl* control =
             found != stockControls.end() ? &found->second : EditorControlCatalogue::control(field);
         if (!control || !control->binding) throw Failure(std::string("Unsupported control: ") + rawValue(field));
-        const EditorControlValue value = engineValue(input, *control, stock, paper);
+        const EditorControlValue value = engineValue(*input, *control, stock, paper);
         if (field == EditorControlField::push) {
             std::optional<double> stops = value.number();
             if (stops && !stock.supportsDevelopment(static_cast<float>(*stops))) {

@@ -631,13 +631,16 @@ std::string shutterName(double seconds) {
     return buffer;
 }
 
-std::vector<EditorMenuChoice> viewingLights(PrintPaper paper) {
+const std::vector<EditorMenuChoice>& viewingLights(PrintPaper paper) {
     if (!acceptsViewingIlluminant(paper)) {
-        return {EditorMenuChoice(std::nullopt, "Display White \xC2\xB7 D65",
-                                 "The display's fixed white point; no viewing lamp is added", std::string("reference"))};
+        static const std::vector<EditorMenuChoice> display = {
+            EditorMenuChoice(std::nullopt, "Display White \xC2\xB7 D65",
+                             "The display's fixed white point; no viewing lamp is added", std::string("reference")),
+        };
+        return display;
     }
     if (isProjected(paper)) {
-        return {
+        static const std::vector<EditorMenuChoice> projected = {
             EditorMenuChoice(std::nullopt, "Reference Projector \xC2\xB7 Xenon 5400 K",
                              "How a cinema release print is intended to look on screen", std::string("reference")),
             EditorMenuChoice(6504.0, "Light Table \xC2\xB7 D65", "See the film directly under cool daylight",
@@ -647,14 +650,16 @@ std::vector<EditorMenuChoice> viewingLights(PrintPaper paper) {
             EditorMenuChoice(2856.0, "Tungsten \xC2\xB7 2856 K", "See the print under a warm indoor lamp",
                              std::string("tungsten")),
         };
+        return projected;
     }
-    return {
+    static const std::vector<EditorMenuChoice> reflective = {
         EditorMenuChoice(std::nullopt, "Reference Booth \xC2\xB7 D50", "Standard neutral light for judging photo prints",
                          std::string("reference")),
         EditorMenuChoice(6504.0, "Daylight \xC2\xB7 D65", "See the print in cooler daylight", std::string("d65")),
         EditorMenuChoice(2856.0, "Tungsten \xC2\xB7 2856 K", "See the print under a warm indoor lamp",
                          std::string("tungsten")),
     };
+    return reflective;
 }
 
 const std::vector<EditorControl>& all() {

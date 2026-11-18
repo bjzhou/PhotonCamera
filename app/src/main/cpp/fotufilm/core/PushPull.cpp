@@ -47,8 +47,14 @@ std::vector<float> FilmStock::supportedDevelopmentStops() const {
 
 bool FilmStock::hasDevelopmentConditions() const { return !supportedDevelopmentStops().empty(); }
 
+std::optional<float> FilmStock::matchingDevelopmentStop(float stops) const {
+    if (stops == 0) return 0.0f;
+    if (const auto* condition = developmentCondition(stops)) return condition->stops;
+    return std::nullopt;
+}
+
 bool FilmStock::supportsDevelopment(float stops) const {
-    return stops == 0 || developmentCondition(stops) != nullptr;
+    return matchingDevelopmentStop(stops).has_value();
 }
 
 FilmStock FilmStock::pushed(float stops) const {
