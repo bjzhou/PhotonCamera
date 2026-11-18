@@ -26,3 +26,4 @@ __pycache__
 /scripts/scunet_denoise_tflite/out
 /scripts/colorfm_tflite/out
 /scripts/ffdnet_denoise_tflite/out
+/tools/dcp_lut/output
