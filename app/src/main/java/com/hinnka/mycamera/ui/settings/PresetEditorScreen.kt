@@ -81,6 +81,7 @@ fun PresetEditorScreen(
     }
 
     var presetName by remember { mutableStateOf(sourcePreset.name) }
+    var professionalModeOnly by remember { mutableStateOf(sourcePreset.professionalModeOnly) }
     var selectedLutId by remember { mutableStateOf(sourcePreset.lutId) }
     var colorRecipe by remember { mutableStateOf(sourcePreset.colorRecipe) }
     var effects by remember { mutableStateOf(sourcePreset.effects) }
@@ -134,6 +135,7 @@ fun PresetEditorScreen(
     val encodedDocument by remember { derivedStateOf { FotufilmDocumentStorage.encode(rawFotufilmDocument) } }
     val editedPreset = sourcePreset.copy(
         name = presetName,
+        professionalModeOnly = professionalModeOnly,
         lutId = selectedLutId,
         colorRecipe = colorRecipe,
         effects = effects,
@@ -250,6 +252,11 @@ fun PresetEditorScreen(
                         .background(Color.White.copy(alpha = 0.05f), RoundedCornerShape(8.dp))
                         .border(1.dp, Color.White.copy(alpha = 0.1f), RoundedCornerShape(8.dp))
                         .padding(horizontal = 12.dp, vertical = 12.dp)
+                )
+                SwitchSettingItem(
+                    title = stringResource(R.string.preset_professional_mode_only),
+                    checked = professionalModeOnly,
+                    onCheckedChange = { professionalModeOnly = it },
                 )
             }
 

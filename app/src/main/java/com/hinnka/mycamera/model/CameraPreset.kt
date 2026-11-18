@@ -62,8 +62,11 @@ data class CameraPreset(
     // 专业模式基准色彩校正
     val rawBaselineLutId: String? = null,
     // 是否为内置预设
-    val isBuiltIn: Boolean = false
+    val isBuiltIn: Boolean = false,
+    val professionalModeOnly: Boolean = false,
 ) {
+    fun isAvailableInMode(isProfessionalMode: Boolean): Boolean = !professionalModeOnly || isProfessionalMode
+
     fun toJson(): String = gson.toJson(normalizedForPersistence())
 
     fun withoutLegacyHdf(): CameraPreset {
@@ -209,32 +212,6 @@ data class CameraPreset(
                 lutId = "standard",
                 colorRecipe = ColorRecipeParams.DEFAULT,
                 effects = EffectParams.DEFAULT,
-                frameId = null,
-                rawDcpId = null,
-                isBuiltIn = true
-            ),
-            CameraPreset(
-                id = "builtin_hasselblad_natural",
-                name = "builtin_hasselblad_natural",
-                lutId = null,
-                colorRecipe = ColorRecipeParams.DEFAULT,
-                effects = EffectParams.DEFAULT,
-                rawRenderingEngine = RawRenderingEngine.Hncs.name,
-                isBuiltIn = true
-            ),
-            CameraPreset(
-                id = "builtin_portrait",
-                name = "builtin_portrait",
-                lutId = "canon_portrait",
-                colorRecipe = ColorRecipeParams.DEFAULT.copy(
-                    tonality = -0.6f,
-                    sharpness = -0.2f
-                ),
-                effects = EffectParams.DEFAULT.copy(
-                    clarity = -0.2f,
-                ),
-                frameId = "polaroid",
-                rawDcpId = null,
                 isBuiltIn = true
             ),
             CameraPreset(
@@ -255,44 +232,16 @@ data class CameraPreset(
                     vignette = -0.2f,
                 ),
                 frameId = "leica",
-                rawDcpId = null,
-                rawDROMode = "DR100",
                 isBuiltIn = true
             ),
             CameraPreset(
                 id = "builtin_cinematic",
                 name = "builtin_cinematic",
-                lutId = "sony_fl2",
-                colorRecipe = ColorRecipeParams.DEFAULT.copy(
-                    shadows = -0.08f,
-                    highlights = 0.05f
-                ),
+                lutId = "film_kodak_5207",
+                colorRecipe = ColorRecipeParams.DEFAULT,
                 effects = EffectParams.DEFAULT,
                 frameId = "xpan",
                 aspectRatio = AspectRatio.XPAN.name,
-                rawDcpId = null,
-                rawDROMode = "DR100",
-                isBuiltIn = true
-            ),
-            CameraPreset(
-                id = "builtin_classic_film",
-                name = "builtin_classic_film",
-                lutId = null,
-                colorRecipe = ColorRecipeParams.DEFAULT.copy(
-                    temperature = 0.08f,
-                    contrast = 1.05f
-                ),
-                effects = EffectParams.DEFAULT.copy(
-                    vignette = -0.25f,
-                    filmGrain = 0.25f,
-                    halation = 0.25f,
-                ),
-                frameId = "time",
-                rawDcpId = null,
-                rawRenderingEngine = RawRenderingEngine.Spektrafilm.name,
-                rawSpectralFilmStock = "kodak_gold_200",
-                rawSpectralFilmPrint = "kodak_2383",
-                rawDROMode = "OFF",
                 isBuiltIn = true
             ),
             CameraPreset(
@@ -300,12 +249,37 @@ data class CameraPreset(
                 name = "builtin_monochrome",
                 lutId = "monochrome",
                 colorRecipe = ColorRecipeParams.DEFAULT.copy(
-                    contrast = 1.2f
+                    contrast = 1.2f,
+                    masterCurvePoints = floatArrayOf(0.1f, 0f, 0.9f, 1f),
                 ),
                 effects = EffectParams.DEFAULT,
                 frameId = "black_border",
-                rawDcpId = null,
-                rawDROMode = "DR100",
+                isBuiltIn = true
+            ),
+            CameraPreset(
+                id = "builtin_hasselblad_natural",
+                name = "builtin_hasselblad_natural",
+                lutId = null,
+                colorRecipe = ColorRecipeParams.DEFAULT.copy(
+                    masterCurvePoints = floatArrayOf(0f, 0f, 0.33f, 0.28f, 0.65f, 0.70f, 1f, 1f),
+                ),
+                effects = EffectParams.DEFAULT,
+                frameId = "hasselblad",
+                rawRenderingEngine = RawRenderingEngine.Hncs.name,
+                rawHncsColorMatchingEnabled = false,
+                professionalModeOnly = true,
+                isBuiltIn = true
+            ),
+            CameraPreset(
+                id = "builtin_classic_film",
+                name = "builtin_classic_film",
+                lutId = null,
+                colorRecipe = ColorRecipeParams.DEFAULT,
+                effects = EffectParams.DEFAULT,
+                frameId = "time",
+                rawRenderingEngine = RawRenderingEngine.Fotufilm.name,
+                rawFotufilmDocument = """{"stock":"ultramax400","paper":"endura-premier"}""",
+                professionalModeOnly = true,
                 isBuiltIn = true
             ),
         )

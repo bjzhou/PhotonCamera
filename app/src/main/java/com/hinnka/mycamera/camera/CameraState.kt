@@ -407,6 +407,9 @@ data class CameraState(
     val effectiveMeteringMode: MeteringMode
         get() = if (meteringPoint != null) MeteringMode.SPOT else meteringMode
 
+    val isProfessionalMode: Boolean
+        get() = captureMode == CaptureMode.PHOTO && useRaw && isRawSupported
+
     val meteringReferencePoint: Pair<Float, Float>?
         get() = meteringPoint ?: focusPoint?.takeIf { focusPointSource == FocusPointSource.MANUAL }
 

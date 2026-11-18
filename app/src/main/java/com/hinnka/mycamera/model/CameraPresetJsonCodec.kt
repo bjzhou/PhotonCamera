@@ -48,6 +48,7 @@ internal object CameraPresetJsonCodec {
         return CameraPreset(
             id = id,
             name = name,
+            professionalModeOnly = obj.boolean("professionalModeOnly", false),
             lutId = obj.stringOrNull("lutId"),
             colorRecipe = parseColorRecipe(obj.get("colorRecipe")),
             effects = parseEffects(obj.get("effects")),

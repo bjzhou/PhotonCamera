@@ -46,6 +46,7 @@ import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -98,6 +99,8 @@ fun PresetManagementScreen(
     modifier: Modifier = Modifier
 ) {
     val allPresets by viewModel.allPresets.collectAsState()
+    val cameraState by viewModel.state.collectAsState()
+    val isProfessionalMode by remember(viewModel) { derivedStateOf { cameraState.isProfessionalMode } }
     val activePresetId by preferenceValue { it.activePresetId }
     val activePresetModified by viewModel.isActivePresetModified.collectAsState()
     val context = LocalContext.current
@@ -277,12 +280,15 @@ fun PresetManagementScreen(
         ) {
             itemsIndexed(localPresets, key = { _, preset -> preset.id }) { _, preset ->
                 val displayName = presetDisplayName(preset)
+                val selectable = preset.isAvailableInMode(isProfessionalMode)
+                val isActive = selectable && activePresetId == preset.id
                 ReorderableItem(reorderableLazyListState, key = preset.id) { isDragging ->
                     PresetManagementItem(
                         preset = preset,
                         displayName = displayName,
-                        isActive = activePresetId == preset.id,
-                        isModified = activePresetModified && activePresetId == preset.id,
+                        selectable = selectable,
+                        isActive = isActive,
+                        isModified = isActive && activePresetModified,
                         isDragging = isDragging,
                         isExporting = exportingPresetId == preset.id,
                         dragModifier = Modifier.draggableHandle(),
@@ -368,6 +374,7 @@ fun PresetManagementScreen(
 private fun PresetManagementItem(
     preset: CameraPreset,
     displayName: String,
+    selectable: Boolean,
     isActive: Boolean,
     isModified: Boolean,
     isDragging: Boolean,
@@ -388,7 +395,7 @@ private fun PresetManagementItem(
     Card(
         modifier = Modifier
             .fillMaxWidth()
-            .clickable(onClick = onSelect)
+            .clickable(enabled = selectable, onClick = onSelect)
             .border(1.dp, borderColor, RoundedCornerShape(10.dp)),
         shape = RoundedCornerShape(10.dp),
         colors = CardDefaults.cardColors(containerColor = cardColor)
@@ -431,6 +438,7 @@ private fun PresetManagementItem(
 
                 FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalArrangement = Arrangement.spacedBy(3.dp)) {
                     val rawRenderingEngine = RawRenderingEngine.fromPersistedName(preset.rawRenderingEngine)
+                    if (preset.professionalModeOnly) PresetFeatureText(stringResource(R.string.preset_professional_mode_only))
                     PresetFeatureText(preset.aspectRatio.removePrefix("RATIO_").replace("_", ":"))
                     if (rawRenderingEngine == RawRenderingEngine.Spektrafilm ||
                         rawRenderingEngine == RawRenderingEngine.Fotufilm

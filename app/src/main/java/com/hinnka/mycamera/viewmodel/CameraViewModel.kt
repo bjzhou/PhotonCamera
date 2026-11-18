@@ -481,6 +481,7 @@ private data class PresetMatchSnapshot(
 private data class ActivePresetMatchState(
     val prefs: UserPreferences,
     val presets: List<com.hinnka.mycamera.model.CameraPreset>,
+    val isProfessionalMode: Boolean,
     val aspectRatio: String,
     val lutId: String,
     val recipe: ColorRecipeParams,
@@ -520,7 +521,7 @@ internal fun resolveLutIdForCaptureMode(
 
 private data class CameraFeatureUpdate(
     val captureMode: SettingValue<CaptureMode>? = null,
-    val lutId: SettingValue<String?>? = null,
+    val lutId: String? = null, // null leaves the selection unchanged; "none" explicitly disables the LUT.
     val colorRecipe: SettingValue<ColorRecipeParams>? = null,
     val effects: SettingValue<EffectParams>? = null,
     val aspectRatio: SettingValue<AspectRatio>? = null,
@@ -685,6 +686,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                     builtInsById[saved.id]?.let { builtin ->
                         builtin.copy(
                             name = saved.name,
+                            professionalModeOnly = saved.professionalModeOnly,
                             lutId = saved.lutId,
                             colorRecipe = saved.colorRecipe,
                             effects = saved.effects,
@@ -758,17 +760,18 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         ) { prefs, presets, initialized ->
             if (initialized) prefs to presets else null
         },
-        state.map { it.aspectRatio.name }.distinctUntilChanged(),
+        state.map { it.aspectRatio.name to it.isProfessionalMode }.distinctUntilChanged(),
         currentLutId.flatMapLatest { lutId ->
             contentRepository.lutManager.getColorRecipeParams(lutId).map { recipe ->
                 lutId to recipe
             }
         }
-    ) { inputs, aspectRatio, (lutId, recipe) ->
+    ) { inputs, (aspectRatio, isProfessionalMode), (lutId, recipe) ->
         inputs?.let { (prefs, presets) ->
             ActivePresetMatchState(
                 prefs = prefs,
                 presets = presets,
+                isProfessionalMode = isProfessionalMode,
                 aspectRatio = aspectRatio,
                 lutId = lutId,
                 recipe = recipe,
@@ -794,7 +797,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             val presetId = matchState?.prefs?.activePresetId ?: return@combine false
             val preset = matchState.presets.firstOrNull { it.id == presetId }
                 ?: return@combine false
-            !matchState.toPresetMatchSnapshot().matches(preset)
+            preset.isAvailableInMode(matchState.isProfessionalMode) && !matchState.toPresetMatchSnapshot().matches(preset)
         }
     }
         .distinctUntilChanged()
@@ -886,8 +889,8 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                     }
                     val currentState = state.value
                     val includePhotoSettings = currentState.captureMode == CaptureMode.PHOTO
-                    val includeProfessionalSettings = includePhotoSettings &&
-                        userPreferencesRepository.current.useRaw && currentState.isRawSupported
+                    val includeProfessionalSettings = currentState.isProfessionalMode
+                    if (preset != null && !preset.isAvailableInMode(includeProfessionalSettings)) return@withLock
                     PLog.d(
                         TAG,
                         "Applying preset id=${preset?.id}, captureMode=${currentState.captureMode}, " +
@@ -904,8 +907,9 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
 
                 if (applied && presetApplyGeneration == applyGeneration) {
                     activePresetMatchState.filterNotNull().first { matchState ->
-                        matchState.prefs.activePresetId == preset?.id &&
-                            (preset == null || matchState.toPresetMatchSnapshot().matches(preset))
+                        (preset != null && !preset.isAvailableInMode(matchState.isProfessionalMode)) ||
+                            (matchState.prefs.activePresetId == preset?.id &&
+                                (preset == null || matchState.toPresetMatchSnapshot().matches(preset)))
                     }
                 }
             } finally {
@@ -931,7 +935,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             null
         }
         val sharedUpdate = CameraFeatureUpdate(
-            lutId = SettingValue(CameraPreset.normalizeLutId(this?.lutId)),
+            lutId = CameraPreset.normalizeLutId(this?.lutId) ?: "none",
             colorRecipe = SettingValue(this?.colorRecipe ?: ColorRecipeParams.DEFAULT),
             effects = SettingValue(this?.effects ?: EffectParams.DEFAULT),
             aspectRatio = ratio?.let(::SettingValue),
@@ -1043,8 +1047,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         val currentState = state.value
         val targetCaptureMode = update.captureMode?.value ?: currentState.captureMode
         val captureModeWillChange = targetCaptureMode != currentState.captureMode
-        val persistLutInVideoSlot = currentState.captureMode == CaptureMode.VIDEO &&
-            prefs.separateVideoLutEnabled && update.lutId != null
+        val persistLutInVideoSlot = currentState.captureMode == CaptureMode.VIDEO && prefs.separateVideoLutEnabled
         val targetAspectRatio = update.aspectRatio?.value
         val needsCameraReopen =
             targetAspectRatio != null && targetAspectRatio != currentState.aspectRatio ||
@@ -1052,17 +1055,13 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 desiredMultiFrameOutputScale != currentState.multiFrameOutputScale
 
         update.colorRecipe?.let {
-            val recipeLutId = if (update.lutId != null) {
-                update.lutId.value ?: "none"
-            } else {
-                currentLutId.value
-            }
+            val recipeLutId = update.lutId ?: currentLutId.value
             val recipeWithEffects = update.effects?.value?.applyTo(it.value) ?: it.value
             contentRepository.lutManager.saveColorRecipeParams(recipeLutId, recipeWithEffects)
         }
 
         update.lutId?.let {
-            setLut(it.value, persist = false)
+            setLut(it, persist = false)
         }
 
         update.aspectRatio?.let {
@@ -1167,7 +1166,9 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
 
         userPreferencesRepository.update {
             update.captureMode?.let { captureMode = it.value }
-            if (!persistLutInVideoSlot) update.lutId?.let { lutId = it.value }
+            update.lutId?.let {
+                if (persistLutInVideoSlot) videoLutId = it else lutId = it
+            }
             update.effects?.let { activeEffectParams = it.value }
             update.aspectRatio?.let { aspectRatio = it.value.name }
             if (update.useRaw != null || desiredUseRaw != prefs.useRaw) useRaw = desiredUseRaw
@@ -1203,8 +1204,8 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             }
             update.activePresetId?.let { activePresetId = it.value }
         }
-        if (persistLutInVideoSlot) {
-            userPreferencesRepository.update { videoLutId = update.lutId.value ?: "none" }
+        if (update.lutId != null && !persistLutInVideoSlot) {
+            PhotonLookContract.notifyLookChanged(getApplication<Application>())
         }
 
         if (reconfigureCameraIfNeeded && needsCameraReopen && !captureModeWillChange) {
@@ -1246,11 +1247,13 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
 
     fun unsavedCameraPreset(preset: CameraPreset): CameraPreset? {
         val matchState = activePresetMatchState.value ?: return null
+        if (!preset.isAvailableInMode(matchState.isProfessionalMode)) return null
         if (presetApplyInProgress.value || matchState.prefs.activePresetId != preset.id) return null
         val snapshot = matchState.toPresetMatchSnapshot()
         if (snapshot.matches(preset)) return null
         if (snapshot.isProfessionalMode) {
             return createPresetFromCurrentSettings(preset.id, preset.name, preset.isBuiltIn)
+                .copy(professionalModeOnly = preset.professionalModeOnly)
         }
         // Only merge fields this shooting mode actually applied from the preset.
         return preset.copy(
@@ -1357,8 +1360,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             effects = effects,
             captureMode = prefs.captureMode,
             aspectRatio = aspectRatio,
-            isProfessionalMode = prefs.captureMode == CaptureMode.PHOTO &&
-                prefs.useRaw && prefs.useRawMax,
+            isProfessionalMode = isProfessionalMode,
             ultraHdrGainMapEnabled = prefs.ultraHdrGainMapEnabled,
             frameId = prefs.frameId,
             rawDcpId = prefs.rawDcpId,
@@ -4140,10 +4142,12 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
 
     fun updateLut() {
         viewModelScope.launch {
-            val preferences = userPreferencesRepository.userPreferences.first()
-            val newLutId = resolveLutIdForMode(preferences, state.value.captureMode) ?: return@launch
-            if (currentLutId.value != newLutId) {
-                setLut(newLutId, persist = false)
+            presetApplyMutex.withLock {
+                val preferences = userPreferencesRepository.userPreferences.first()
+                val newLutId = resolveLutIdForMode(preferences, state.value.captureMode) ?: return@withLock
+                if (currentLutId.value != newLutId) {
+                    setLut(newLutId, persist = false)
+                }
             }
         }
     }

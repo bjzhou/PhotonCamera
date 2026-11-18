@@ -264,7 +264,6 @@ fun CameraScreen(
     val lutSelectorMode by viewModel.lutSelectorMode.collectAsState()
     val activePresetId by preferenceValue { it.activePresetId }
     val activePresetModified by viewModel.isActivePresetModified.collectAsState()
-    val customPresets by preferenceValue { it.customPresets }
     val currentBaselineRecipeParams by viewModel.currentBaselineRecipeParams.collectAsState()
     val categoryOrder by preferenceValue { it.categoryOrder }
     val useRaw by preferenceValue { it.useRaw }
@@ -1621,6 +1620,9 @@ fun CameraScreen(
 
         val filterSelector: @Composable () -> Unit = {
             val allPresets by viewModel.allPresets.collectAsState()
+            val selectablePresets = remember(allPresets, state.isProfessionalMode) {
+                allPresets.filter { it.isAvailableInMode(state.isProfessionalMode) }
+            }
             val defaultPresetName = stringResource(R.string.preset_new_preset_default)
             val isVideoLog = isVideoMode && state.videoConfig.logProfile.isEnabled
 
@@ -1631,7 +1633,7 @@ fun CameraScreen(
                 thumbnail = viewModel.previewThumbnail,
                 presetThumbnailInput = viewModel.presetThumbnailInput,
                 onLutSelected = { viewModel.setLut(it) },
-                allPresets = allPresets,
+                allPresets = selectablePresets,
                 presetModeEnabled = !isVideoLog,
                 activePresetId = activePresetId,
                 activePresetModified = activePresetModified,
@@ -2246,7 +2248,7 @@ private fun Controls(
                         CaptureModeSwitcher(
                             shootingMode = when {
                                 state.captureMode == CaptureMode.VIDEO -> CameraShootingMode.VIDEO
-                                state.useRaw && state.isRawSupported -> CameraShootingMode.PROFESSIONAL
+                                state.isProfessionalMode -> CameraShootingMode.PROFESSIONAL
                                 else -> CameraShootingMode.PHOTO
                             },
                             professionalModeEnabled = state.isRawSupported,
