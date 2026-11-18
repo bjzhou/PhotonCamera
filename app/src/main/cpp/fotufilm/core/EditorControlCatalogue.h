@@ -33,7 +33,7 @@ const std::vector<double>& shutterLadder();
 std::vector<double> shutterTimes(const FilmStock* stock);
 std::string shutterName(double seconds);
 
-std::vector<EditorMenuChoice> viewingLights(PrintPaper paper);
+const std::vector<EditorMenuChoice>& viewingLights(PrintPaper paper);
 
 const std::vector<EditorControl>& all();
 

@@ -294,6 +294,7 @@ struct FilmStock {
     /// The exact non-reference conditions this stock can render, in slider order.
     std::vector<float> supportedDevelopmentStops() const;
     bool hasDevelopmentConditions() const;
+    std::optional<float> matchingDevelopmentStop(float stops) const;
     bool supportsDevelopment(float stops) const;
     /// The stock after the requested development; throws FilmDevelopmentError.
     FilmStock pushed(float stops) const;

@@ -376,8 +376,9 @@ private fun FotufilmMenu(
 /** Sets a slider's value; the resting value is the field's absence, as upstream stores it. */
 private fun FotufilmDocument.withNumber(control: FotufilmCatalogue.Control, value: Double): FotufilmDocument {
     val kind = control.kind as FotufilmCatalogue.Kind.Slider
-    return if (value == kind.scale.neutral) without(control.field)
-    else with(control.field, FotufilmDocument.Value.Number(value))
+    val bounded = value.coerceIn(kind.scale.min, kind.scale.max)
+    return if (bounded == kind.scale.neutral) without(control.field)
+    else with(control.field, FotufilmDocument.Value.Number(bounded))
 }
 
 private fun FotufilmDocument.withValue(control: FotufilmCatalogue.Control, value: FotufilmDocument.Value?): FotufilmDocument =

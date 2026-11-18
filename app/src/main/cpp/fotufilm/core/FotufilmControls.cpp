@@ -14,7 +14,7 @@
 //     "menu"?: "fixed" | dynamic menu name, "choices"?: [{"id", "label", "detail", "value" (number | null)}],
 //     "defaultChoice"?: id,
 //     "value": the document's value, else the resting value or default choice,
-//     "isSet": whether the document carries the field, "moved"?: slider/chips off neutral,
+//     "isSet": whether the document sets the field for this medium, "moved"?: slider/chips off neutral,
 //     "admitted": the stock admits it, "offered": the current medium offers it,
 //     "available": both
 //   }]
@@ -22,6 +22,7 @@
 #include "FotufilmControls.h"
 
 #include <charconv>
+#include <algorithm>
 #include <cstdio>
 #include <vector>
 #include <cmath>
@@ -158,17 +159,68 @@ FilmStock registeredStock(const std::string& stockID) {
     return *stock;
 }
 
+/// Reconcile persisted edits against the current catalogue before either UI or rendering reads them.
+void reconcileDocument(EditDocument& document, const FilmStock& stock) {
+    using Field = EditorControlField;
+    using Type = EditDocument::Value::Type;
+    auto paperField = document.values.find(Field::paper);
+    if (paperField != document.values.end() && paperField->second.type == Type::choice &&
+        !printPaperPreset(paperField->second.choice)) {
+        document.values.erase(paperField);
+    }
+    const auto selectedPaper = document.choice(Field::paper);
+    const PrintPaper paper = resolved(selectedPaper ? *printPaperPreset(*selectedPaper) : defaultPrintPaper(stock), stock);
+    for (auto entry = document.values.begin(); entry != document.values.end();) {
+        const Field field = entry->first;
+        auto& value = entry->second;
+        const EditorControl* control = EditorControlCatalogue::control(field);
+        bool supported = true;
+        if (field == Field::gauge && value.type == Type::choice) {
+            supported = FilmFormat::preset(value.choice).has_value();
+        } else if (field == Field::lensFilterStack && value.type == Type::choices) {
+            supported = value.choices.empty();
+        } else if (field == Field::metering) {
+            // Metering only qualifies lens filters, which this port does not implement.
+        } else if (!control || (!control->binding && !EditDocument::isComposed(field))) {
+            supported = false;
+        } else if (field == Field::push && value.type == Type::number) {
+            const auto stop = stock.matchingDevelopmentStop(static_cast<float>(value.number));
+            supported = stop.has_value();
+            if (stop) value.number = *stop;
+        } else if (const auto* scale = control->kind.scale(); scale && value.type == Type::number) {
+            value.number = std::clamp(value.number, scale->admittedLower, scale->admittedUpper);
+        } else if (control->kind.type == EditorControlKind::Type::menu && value.type == Type::choice &&
+                   field != Field::paper && field != Field::gauge) {
+            const auto menu = field == Field::sceneLight
+                                  ? std::optional<std::vector<EditorMenuChoice>>(EditorControlCatalogue::sourceLights())
+                                  : WebProfileCatalogue::choices(field, &stock, paper);
+            supported = menu && std::any_of(menu->begin(), menu->end(), [&](const EditorMenuChoice& item) {
+                return item.id == value.choice;
+            });
+        } else if (control->kind.type == EditorControlKind::Type::curve && value.type == Type::curve) {
+            const auto& curve = control->kind.curveValue;
+            supported = value.curve.size() == curve.handles.size();
+            for (double& point : value.curve) {
+                point = std::clamp(point, curve.rangeLower, curve.rangeUpper);
+            }
+        }
+        if (supported) ++entry;
+        else entry = document.values.erase(entry);
+    }
+}
+
 /// Decodes the document and takes out its `stock`, which must name `stockID`.
-EditDocument documentFor(const std::string& stockID, const std::string& documentJSON) {
+EditDocument documentFor(const std::string& stockID, const FilmStock& stock, const std::string& documentJSON) {
     EditDocument document =
         documentJSON.empty() ? EditDocument() : EditDocument::decode(documentJSON);
-    auto stock = document.values.find(EditorControlField::stock);
-    if (stock != document.values.end()) {
-        if (stock->second.type != EditDocument::Value::Type::choice || stock->second.choice != stockID) {
+    auto stockField = document.values.find(EditorControlField::stock);
+    if (stockField != document.values.end()) {
+        if (stockField->second.type != EditDocument::Value::Type::choice || stockField->second.choice != stockID) {
             throw EditDocument::Failure("The document's film is not " + stockID + ".");
         }
-        document.values.erase(stock);
+        document.values.erase(stockField);
     }
+    reconcileDocument(document, stock);
     return document;
 }
 
@@ -242,7 +294,7 @@ std::vector<EditorMenuChoice> dynamicChoices(EditorDynamicMenu menu, const FilmS
 
 std::string fotufilmCatalogueJSON(const std::string& stockID, const std::string& documentJSON) {
     const FilmStock stock = registeredStock(stockID);
-    const EditDocument document = documentFor(stockID, documentJSON);
+    const EditDocument document = documentFor(stockID, stock, documentJSON);
 
     // The medium the gates read: the document's choice resolved for this film, as options(for:) does.
     std::optional<std::string> paperChoice = document.choice(EditorControlField::paper);
@@ -292,7 +344,7 @@ std::string fotufilmCatalogueJSON(const std::string& stockID, const std::string&
         const EditorControl& control = adjusted ? *adjusted : base;
         const bool isAdmitted = adjusted != nullptr;
         const bool isOffered = EditorControlCatalogue::medium(paper, control.field, &stock, digitalReference);
-        const EditDocument::Value* value = document[control.field];
+        const EditDocument::Value* value = document.effectiveValue(control.field, paper);
 
         writer.beginObject();
         writer.field("field", rawValue(control.field));
@@ -408,7 +460,7 @@ std::string fotufilmCatalogueJSON(const std::string& stockID, const std::string&
 
 FotufilmEngine::Options optionsFromDocument(const std::string& stockID, const std::string& documentJSON) {
     const FilmStock stock = registeredStock(stockID);
-    const EditDocument document = documentFor(stockID, documentJSON);
+    const EditDocument document = documentFor(stockID, stock, documentJSON);
     return document.options(stock, FilmFormat::nativeID(stockID));
 }
 
