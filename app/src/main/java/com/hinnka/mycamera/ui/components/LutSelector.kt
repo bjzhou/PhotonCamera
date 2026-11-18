@@ -6,6 +6,7 @@ import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -39,8 +40,6 @@ import com.hinnka.mycamera.R
 import com.hinnka.mycamera.data.ContentRepository
 import com.hinnka.mycamera.frame.FrameInfo
 import com.hinnka.mycamera.lut.BaselineColorCorrectionTarget
-import com.hinnka.mycamera.lut.frequentLuts
-import com.hinnka.mycamera.ui.prefs.preferenceValue
 import com.hinnka.mycamera.lut.LutInfo
 import com.hinnka.mycamera.model.CameraPreset
 import com.hinnka.mycamera.model.LutSelectorMode
@@ -52,7 +51,6 @@ import com.hinnka.mycamera.ui.icons.AppIcons
 enum class LutSelectorPresentation { Horizontal, Compact, Expanded }
 
 private sealed class LutCategoryTab {
-    data object Frequent : LutCategoryTab()
     data object Favorite : LutCategoryTab()
     data object BuiltIn : LutCategoryTab()
     data object Uncategorized : LutCategoryTab()
@@ -60,7 +58,6 @@ private sealed class LutCategoryTab {
 }
 
 private fun LutCategoryTab.stableKey(): String = when (this) {
-    LutCategoryTab.Frequent -> "fixed:frequent"
     LutCategoryTab.Favorite -> "fixed:favorite"
     LutCategoryTab.BuiltIn -> "fixed:built_in"
     LutCategoryTab.Uncategorized -> "fixed:uncategorized"
@@ -139,7 +136,6 @@ private fun LutPanelIconButton(
 private fun LutPanelPresetActionButton(
     text: String,
     onClick: () -> Unit,
-    showAddIcon: Boolean = true,
     modifier: Modifier = Modifier
 ) {
     val shape = RoundedCornerShape(12.dp)
@@ -153,14 +149,12 @@ private fun LutPanelPresetActionButton(
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(3.dp)
     ) {
-        if (showAddIcon) {
-            Icon(
-                imageVector = Icons.Default.Add,
-                contentDescription = null,
-                tint = Color.White,
-                modifier = Modifier.size(12.dp)
-            )
-        }
+        Icon(
+            imageVector = Icons.Default.Add,
+            contentDescription = null,
+            tint = Color.White,
+            modifier = Modifier.size(12.dp)
+        )
         Text(
             text = text,
             color = Color.White,
@@ -195,8 +189,6 @@ fun LutSelector(
     onFrameManagementClick: (() -> Unit)? = null,
     onPresetSelected: (CameraPreset?) -> Unit = {},
     onCreatePresetClick: () -> Unit = {},
-    onResetPresetClick: () -> Unit = {},
-    onSavePresetClick: () -> Unit = {},
     onPresetManagementClick: () -> Unit = {},
     onEditClick: (() -> Unit)? = null,
     onManageClick: ((String) -> Unit)? = null,
@@ -205,11 +197,9 @@ fun LutSelector(
     modifier: Modifier = Modifier,
     presentation: LutSelectorPresentation = LutSelectorPresentation.Horizontal,
     onExpandedChange: (Boolean) -> Unit = {},
-    presetThumbnailInput: com.hinnka.mycamera.lut.PresetThumbnailInput? = null
+    presetThumbnailInput: com.hinnka.mycamera.lut.PresetThumbnailInput? = null,
+    onEditPreset: ((String) -> Unit)? = null
 ) {
-    val frequentUsage by preferenceValue { it.frequentLutUsage }
-    val frequentItems = remember(availableLuts, frequentUsage) { frequentLuts(availableLuts, frequentUsage) }
-    val frequentText = stringResource(R.string.frequent_filters)
     val favoriteText = stringResource(R.string.favorite)
     val builtInText = stringResource(R.string.built_in)
     val uncategorizedText = stringResource(R.string.uncategorized)
@@ -218,8 +208,8 @@ fun LutSelector(
     val presetText = stringResource(R.string.preset_title)
 
     // 分类逻辑
-    val categoryTabs = remember(availableLuts, categoryOrder, frequentText, favoriteText, builtInText, uncategorizedText) {
-        val reservedCategoryNames = setOf(frequentText, favoriteText, builtInText, uncategorizedText)
+    val categoryTabs = remember(availableLuts, categoryOrder, favoriteText, builtInText, uncategorizedText) {
+        val reservedCategoryNames = setOf(favoriteText, builtInText, uncategorizedText)
         val dynamicCategories = availableLuts.map { it.category }
             .distinct()
             .filter { it.isNotEmpty() && it !in reservedCategoryNames }
@@ -228,7 +218,6 @@ fun LutSelector(
         val remainingDynamic = dynamicCategories.filterNot { it in orderedEntries }.sorted()
 
         buildList {
-            add(LutCategoryTab.Frequent)
             add(LutCategoryTab.Favorite)
             if (orderedEntries.isEmpty()) {
                 add(LutCategoryTab.BuiltIn)
@@ -250,7 +239,6 @@ fun LutSelector(
         }
     }
     fun LutCategoryTab.contains(lut: LutInfo): Boolean = when (this) {
-        LutCategoryTab.Frequent -> frequentItems.any { it.id == lut.id }
         LutCategoryTab.Favorite -> lut.isFavorite
         LutCategoryTab.BuiltIn -> lut.isBuiltIn
         LutCategoryTab.Uncategorized -> !lut.isBuiltIn && lut.category.isEmpty()
@@ -258,14 +246,12 @@ fun LutSelector(
     }
 
     fun preferredCategoryFor(lut: LutInfo): LutCategoryTab = when {
-        frequentItems.any { it.id == lut.id } -> LutCategoryTab.Frequent
         lut.isFavorite -> LutCategoryTab.Favorite
-        lut.category.isNotEmpty() -> LutCategoryTab.Category(lut.category)
+        LutCategoryTab.Category(lut.category) in categoryTabs -> LutCategoryTab.Category(lut.category)
         lut.isBuiltIn -> LutCategoryTab.BuiltIn
         else -> LutCategoryTab.Uncategorized
     }
 
-    var selectedCategory by remember { mutableStateOf<LutCategoryTab>(LutCategoryTab.Frequent) }
     val activeLutId = currentLutId
     val supportsFrames = onFrameSelected != null
     val supportsPresets = presetModeEnabled
@@ -277,32 +263,28 @@ fun LutSelector(
         LutSelectorMode.Presets -> if (supportsPresets) LutSelectorMode.Presets else LutSelectorMode.Style
     }
 
-    LaunchedEffect(activeLutId, availableLuts, categoryTabs, compact, frequentUsage != null) {
-        if (frequentUsage == null || compact) return@LaunchedEffect
-        val selectedLut = availableLuts.find { it.id == activeLutId }
-        selectedCategory = when {
-            selectedLut != null && selectedCategory.contains(selectedLut) -> selectedCategory
-            selectedLut != null -> preferredCategoryFor(selectedLut)
-            selectedCategory in categoryTabs -> selectedCategory
-            else -> LutCategoryTab.Frequent
+    val selectedLut = remember(availableLuts, activeLutId) { availableLuts.find { it.id == activeLutId } }
+    var browsedCategory by remember(expanded, expanded && actualMode == LutSelectorMode.Style) {
+        mutableStateOf<LutCategoryTab?>(if (expanded) null else LutCategoryTab.BuiltIn)
+    }
+    val selectedCategory = browsedCategory?.takeIf { it in categoryTabs }
+        ?: selectedLut?.let(::preferredCategoryFor) ?: LutCategoryTab.BuiltIn
+    LaunchedEffect(activeLutId, availableLuts, compact) {
+        if (!compact && selectedLut != null && !selectedCategory.contains(selectedLut)) {
+            browsedCategory = null
         }
     }
 
-    val filteredLuts = remember(selectedCategory, availableLuts, frequentItems) {
-        when (selectedCategory) {
-            LutCategoryTab.Frequent -> frequentItems
+    val lutOptions = remember(selectedCategory, availableLuts) {
+        when (val category = selectedCategory) {
             LutCategoryTab.Favorite -> availableLuts.filter { it.isFavorite }
             LutCategoryTab.BuiltIn -> availableLuts.filter { it.isBuiltIn }
             LutCategoryTab.Uncategorized -> availableLuts.filter { !it.isBuiltIn && it.category.isEmpty() }
-            is LutCategoryTab.Category -> {
-                val categoryName = (selectedCategory as LutCategoryTab.Category).name
-                availableLuts.filter { it.category == categoryName }
-            }
+            is LutCategoryTab.Category -> availableLuts.filter { it.category == category.name }
         }
     }
 
     val lutFooterHeight = lookThumbnailFooterHeight()
-    val lutOptions = if (compact) frequentItems else filteredLuts
     val optionContent = @Composable {
         when (actualMode) {
             LutSelectorMode.Style -> LookOptionList(
@@ -310,9 +292,8 @@ fun LutSelector(
                 key = { it.id },
                 selectedIndex = lutOptions.indexOfFirst { it.id == activeLutId },
                 expanded = expanded,
-                compact = compact,
                 itemFooterHeight = lutFooterHeight,
-                contentKey = if (compact) LutCategoryTab.Frequent else selectedCategory
+                contentKey = selectedCategory
             ) { lut ->
                 var lastManageClickTime by remember { mutableLongStateOf(0L) }
                 LutItem(
@@ -321,10 +302,11 @@ fun LutSelector(
                     previewBitmap = thumbnail,
                     isSelected = activeLutId == lut.id,
                     isVip = lut.isVip,
-                    isCustom = !lut.isBuiltIn,
                     onClick = {
-                        if (activeLutId != lut.id) onLutSelected(lut.id)
-                        else if (presentation == LutSelectorPresentation.Horizontal || lut.id != "none") {
+                        if (activeLutId != lut.id) {
+                            browsedCategory = selectedCategory
+                            onLutSelected(lut.id)
+                        } else if (presentation == LutSelectorPresentation.Horizontal || lut.id != "none") {
                             onEditClick?.invoke()
                         }
                     },
@@ -358,7 +340,8 @@ fun LutSelector(
                 thumbnail = thumbnail,
                 thumbnailInput = presetThumbnailInput,
                 expanded = expanded,
-                compact = compact
+                compact = compact,
+                onEditPreset = onEditPreset
             )
         }
     }
@@ -399,16 +382,28 @@ fun LutSelector(
     }
     val browserContent = @Composable {
         if (actualMode == LutSelectorMode.Style) {
+            val tabIndex = categoryTabs.indexOf(selectedCategory).coerceAtLeast(0)
+            val tabListState = rememberLazyListState(initialFirstVisibleItemIndex = if (expanded) tabIndex else 0)
+            if (expanded) {
+                LaunchedEffect(selectedCategory, tabIndex, activeLutId) {
+                    val layout = tabListState.layoutInfo
+                    val fullyVisible = layout.visibleItemsInfo.any {
+                        it.key == selectedCategory.stableKey() && it.offset >= layout.viewportStartOffset &&
+                            it.offset + it.size <= layout.viewportEndOffset
+                    }
+                    if (!fullyVisible) tabListState.scrollToItem(tabIndex)
+                }
+            }
             // 分类使用白色文字保证取景画面上的可读性，选中项以金色区分。
             LazyRow(
                 modifier = Modifier.fillMaxWidth(),
+                state = tabListState,
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
                 contentPadding = PaddingValues(horizontal = 8.dp)
             ) {
                 items(categoryTabs, key = { it.stableKey() }) { category ->
                     val isSelected = selectedCategory == category
                     val categoryName = when (category) {
-                        LutCategoryTab.Frequent -> frequentText
                         LutCategoryTab.Favorite -> favoriteText
                         LutCategoryTab.BuiltIn -> builtInText
                         LutCategoryTab.Uncategorized -> uncategorizedText
@@ -426,7 +421,7 @@ fun LutSelector(
                                 interactionSource = remember { MutableInteractionSource() },
                                 indication = null
                             ) {
-                                selectedCategory = category
+                                browsedCategory = category
                             }
                             .padding(horizontal = 9.dp, vertical = 3.dp)
                     )
@@ -454,6 +449,7 @@ fun LutSelector(
         }
     }
 
+    val activePreset = allPresets.firstOrNull { it.id == activePresetId }
     val cameraModeRail = @Composable {
         CameraLookModeRail(
             selectedMode = actualMode,
@@ -468,25 +464,73 @@ fun LutSelector(
     if (compact) {
         Column(modifier = modifier.fillMaxWidth()) {
             headerContent?.invoke()
-            Row(
+            Box(
                 modifier = Modifier.fillMaxWidth()
+                    .heightIn(min = if (supportsPresets) 84.dp else 64.dp)
                     .clip(RoundedCornerShape(topStart = 16.dp, topEnd = 16.dp))
                     .background(CameraLookPanelSurface),
-                horizontalArrangement = Arrangement.spacedBy(4.dp),
-                verticalAlignment = Alignment.CenterVertically
+                contentAlignment = Alignment.Center
             ) {
-                cameraModeRail()
+                Column(
+                    modifier = Modifier.fillMaxWidth()
+                        .padding(horizontal = CameraLookModeRailWidth + 4.dp, vertical = 8.dp),
+                    verticalArrangement = Arrangement.spacedBy(6.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally
+                ) {
+                    if (actualMode == LutSelectorMode.Style) {
+                        val compactLuts = remember(availableLuts) {
+                            availableLuts.sortedWith(
+                                compareBy<LutInfo> { it.id != "none" }.thenByDescending { it.isFavorite }
+                            )
+                        }
+                        CompactLookCarousel(
+                            options = compactLuts,
+                            key = { it.id },
+                            selectedId = activeLutId ?: "none",
+                            onSelected = { onLutSelected(it.id) }
+                        ) { lut, selected, click, cardModifier ->
+                            LutItem(
+                                id = lut.id, name = lut.getName(), previewBitmap = thumbnail,
+                                isSelected = selected, isVip = lut.isVip, thumbnailOnly = true,
+                                onClick = click,
+                                onEditClick = onEditClick.takeUnless { lut.id == "none" },
+                                onManageClick = onManageClick?.let { manage -> { manage(lut.id) } },
+                                modifier = cardModifier
+                            )
+                        }
+                    } else {
+                        optionContent()
+                    }
+                    val caption = when (actualMode) {
+                        LutSelectorMode.Style -> availableLuts.firstOrNull { it.id == (activeLutId ?: "none") }?.getName()
+                        LutSelectorMode.Presets -> activePreset?.let {
+                            val name = presetDisplayName(it)
+                            if (activePresetModified) "$name*" else name
+                        }
+                        LutSelectorMode.Frame -> null
+                    }
+                    if (caption != null) {
+                        Text(
+                            caption,
+                            modifier = Modifier.fillMaxWidth()
+                                .basicMarquee(iterations = Int.MAX_VALUE),
+                            color = Color.White, fontSize = 12.sp, lineHeight = 15.sp,
+                            fontWeight = FontWeight.Medium, maxLines = 1, textAlign = TextAlign.Center
+                        )
+                    }
+                }
                 Row(
-                    modifier = Modifier.weight(1f)
-                        .padding(vertical = 6.dp),
+                    modifier = Modifier.matchParentSize(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Box(Modifier.weight(1f)) { optionContent() }
+                    cameraModeRail()
                     Column(
-                        modifier = Modifier.width(52.dp)
+                        modifier = Modifier.width(CameraLookModeRailWidth)
                             .clip(RoundedCornerShape(12.dp))
                             .clickable { onExpandedChange(true) }
-                            .padding(vertical = 12.dp),
+                            .padding(vertical = 8.dp),
+                        verticalArrangement = Arrangement.spacedBy(2.dp),
                         horizontalAlignment = Alignment.CenterHorizontally
                     ) {
                         Icon(AppIcons.ExpandLess, stringResource(R.string.camera_looks_more), tint = Color.White)
@@ -513,6 +557,7 @@ fun LutSelector(
                     verticalArrangement = Arrangement.spacedBy(4.dp)
                 ) {
                     browserContent()
+
                 }
             }
         }
@@ -600,19 +645,8 @@ fun LutSelector(
                         }
                     }
                     LutSelectorMode.Presets -> {
-                        val currentPreset = allPresets.find { it.id == activePresetId }
-                        val currentName = currentPreset?.let { preset ->
-                            when (preset.id) {
-                                "builtin_default" -> stringResource(R.string.default_text)
-                                "builtin_hasselblad_natural" -> stringResource(R.string.preset_builtin_hasselblad_natural)
-                                "builtin_portrait" -> stringResource(R.string.preset_builtin_portrait)
-                                "builtin_classic_film" -> stringResource(R.string.preset_builtin_classic_film)
-                                "builtin_monochrome" -> stringResource(R.string.preset_builtin_monochrome)
-                                "builtin_cinematic" -> stringResource(R.string.preset_builtin_cinematic)
-                                "builtin_leica_m9_moment" -> stringResource(R.string.preset_builtin_leica_m9_moment)
-                                else -> preset.name
-                            }
-                        } ?: ""
+                        val currentPreset = activePreset
+                        val currentName = currentPreset?.let { presetDisplayName(it) }.orEmpty()
                         Text(
                             text = if (currentPreset != null && activePresetModified) {
                                 "$currentName*"
@@ -632,27 +666,10 @@ fun LutSelector(
                             verticalAlignment = Alignment.CenterVertically,
                             horizontalArrangement = Arrangement.spacedBy(6.dp)
                         ) {
-                            if (currentPreset != null && activePresetModified) {
-                                LutPanelPresetActionButton(
-                                    text = stringResource(R.string.preset_reset),
-                                    onClick = onResetPresetClick,
-                                    showAddIcon = false
-                                )
-                                LutPanelPresetActionButton(
-                                    text = stringResource(R.string.preset_update),
-                                    onClick = onSavePresetClick,
-                                    showAddIcon = false
-                                )
-                                LutPanelPresetActionButton(
-                                    text = stringResource(R.string.preset_save_as),
-                                    onClick = onCreatePresetClick
-                                )
-                            } else {
-                                LutPanelPresetActionButton(
-                                    text = stringResource(R.string.preset_new),
-                                    onClick = onCreatePresetClick
-                                )
-                            }
+                            LutPanelPresetActionButton(
+                                text = stringResource(if (activePresetModified) R.string.preset_save_as else R.string.preset_new),
+                                onClick = onCreatePresetClick
+                            )
 
                             LutPanelIconButton(
                                 imageVector = Icons.Default.Settings,
@@ -721,7 +738,7 @@ private fun LutSelectorModeTab(
  */
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
-private fun LutItem(
+internal fun LutItem(
     id: String,
     name: String,
     previewBitmap: Bitmap?,
@@ -731,7 +748,7 @@ private fun LutItem(
     onManageClick: (() -> Unit)? = null,
     onEditClick: (() -> Unit)? = null,
     recipeTarget: BaselineColorCorrectionTarget? = null,
-    isCustom: Boolean = false,
+    thumbnailOnly: Boolean = false,
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
@@ -743,6 +760,7 @@ private fun LutItem(
         onLongClick = onManageClick,
         onEditClick = onEditClick,
         isVip = isVip,
+        thumbnailOnly = thumbnailOnly,
         modifier = modifier
     ) {
         if (!isNone && previewBitmap != null) {

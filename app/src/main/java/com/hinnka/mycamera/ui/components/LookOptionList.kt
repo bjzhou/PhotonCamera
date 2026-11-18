@@ -30,7 +30,6 @@ private val LookOptionVerticalPadding = 4.dp
 private val LookOptionColumnSpacing = 8.dp
 private val LookOptionRowSpacing = 6.dp
 private val LookOptionExpandedSize = 48.dp
-private val LookOptionCompactSize = 40.dp
 
 private fun lookOptionCellWidth(width: Dp, density: Density): Dp = with(density) {
     // Round down in pixels so five compact cards never clip the last card at fractional densities.
@@ -54,7 +53,6 @@ internal fun <T> LookOptionList(
     key: (T) -> String,
     selectedIndex: Int,
     expanded: Boolean,
-    compact: Boolean = false,
     itemFooterHeight: Dp = 0.dp,
     modifier: Modifier = Modifier,
     contentKey: Any? = null,
@@ -70,10 +68,9 @@ internal fun <T> LookOptionList(
         }
     }
     BoxWithConstraints(modifier.fillMaxWidth()) {
-        val cellWidth = lookOptionCellWidth(maxWidth, LocalDensity.current)
-        val itemWidth = minOf(cellWidth, if (expanded) LookOptionExpandedSize else LookOptionCompactSize)
-        val cellHeight = itemWidth + itemFooterHeight
         if (expanded) {
+            val itemWidth = minOf(lookOptionCellWidth(maxWidth, LocalDensity.current), LookOptionExpandedSize)
+            val cellHeight = itemWidth + itemFooterHeight
             LazyVerticalGrid(
                 columns = GridCells.Fixed(LookOptionColumns),
                 state = gridState,
@@ -98,17 +95,7 @@ internal fun <T> LookOptionList(
                 contentPadding = PaddingValues(horizontal = LookOptionPadding),
                 horizontalArrangement = Arrangement.spacedBy(LookOptionColumnSpacing)
             ) {
-                items(options, key = key) {
-                    Box(
-                        modifier = if (compact) Modifier.width(cellWidth) else Modifier,
-                        contentAlignment = Alignment.TopCenter
-                    ) {
-                        Box(
-                            modifier = if (compact) Modifier.width(itemWidth) else Modifier,
-                            propagateMinConstraints = compact
-                        ) { content(it) }
-                    }
-                }
+                items(options, key = key) { content(it) }
             }
         }
     }

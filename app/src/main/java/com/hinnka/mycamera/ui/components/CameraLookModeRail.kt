@@ -33,7 +33,7 @@ import com.hinnka.mycamera.ui.theme.AccentColor
 internal val CameraLookModeRailWidth = 44.dp
 internal val CameraLookPanelSurface = Color(0xFF0A0C0F)
 
-/** Expanded tabs split the measured browser height into equal, full-width hit regions. */
+/** Each mode gets an equal share of the panel height. */
 @Composable
 internal fun CameraLookModeRail(
     selectedMode: LutSelectorMode,
@@ -45,15 +45,11 @@ internal fun CameraLookModeRail(
 ) {
     Column(
         modifier = Modifier.width(CameraLookModeRailWidth)
-            .then(if (expanded) Modifier.fillMaxHeight() else Modifier)
+            .fillMaxHeight()
             .selectableGroup(),
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
-        val tabModifier = if (expanded) {
-            Modifier.fillMaxWidth().weight(1f)
-        } else {
-            Modifier.size(width = CameraLookModeRailWidth, height = 36.dp)
-        }
+        val tabModifier = Modifier.fillMaxWidth().weight(1f)
         CameraLookModeButton(
             icon = AppIcons.ColorFilters,
             label = stringResource(R.string.filter),

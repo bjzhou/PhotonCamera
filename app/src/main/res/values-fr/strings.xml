@@ -1339,6 +1339,7 @@
     <string name="preset_builtin_leica_m9_moment">Instant Leica</string>
     <string name="preset_save">Enregistrer</string>
     <string name="preset_reset">Réinitialiser</string>
+    <string name="preset_revert">Rétablir</string>
     <string name="preset_update">Mettre à jour</string>
     <string name="preset_save_as">Enregistrer sous</string>
     <string name="preset_editor_title">Modifier le préréglage</string>

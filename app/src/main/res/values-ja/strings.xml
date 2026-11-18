@@ -999,6 +999,7 @@
     <string name="preset_builtin_cinematic">シネマティック</string>
     <string name="preset_save">保存</string>
     <string name="preset_reset">リセット</string>
+    <string name="preset_revert">元に戻す</string>
     <string name="preset_update">更新</string>
     <string name="preset_save_as">別名で保存</string>
     <string name="preset_editor_title">プリセットを編集</string>

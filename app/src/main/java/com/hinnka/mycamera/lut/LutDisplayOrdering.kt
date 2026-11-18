@@ -16,9 +16,8 @@ fun orderedLutCategoryTitles(
     uncategorizedText: String,
     favoriteText: String? = null,
     includeEmptyCategories: Boolean = false,
-    frequentText: String? = null
 ): List<String> {
-    val reservedCategoryNames = setOfNotNull(builtInText, uncategorizedText, favoriteText, frequentText)
+    val reservedCategoryNames = setOfNotNull(builtInText, uncategorizedText, favoriteText)
     val dynamicCategories = luts.map { it.category }
         .distinct()
         .filter { it.isNotEmpty() && it !in reservedCategoryNames }
@@ -31,7 +30,6 @@ fun orderedLutCategoryTitles(
     val remainingDynamic = dynamicCategories.filterNot { it in orderedKnownCategories }.sorted()
 
     return buildList {
-        frequentText?.let { add(it) }
         favoriteText?.let { add(it) }
         if (orderedKnownCategories.isEmpty()) {
             add(builtInText)
@@ -53,8 +51,6 @@ fun groupLutsForDisplay(
     builtInText: String,
     uncategorizedText: String,
     favoriteText: String? = null,
-    frequentText: String? = null,
-    frequentUsage: Map<String, Long>? = null
 ): List<Pair<String, List<LutInfo>>> {
     val categories = orderedLutCategoryTitles(
         luts = luts,
@@ -62,11 +58,9 @@ fun groupLutsForDisplay(
         builtInText = builtInText,
         uncategorizedText = uncategorizedText,
         favoriteText = favoriteText,
-        frequentText = frequentText
     )
     return categories.mapNotNull { category ->
         val items = when (category) {
-            frequentText -> frequentLuts(luts, frequentUsage)
             favoriteText -> luts.filter { it.isFavorite }
             builtInText -> luts.filter { it.isBuiltIn }
             uncategorizedText -> luts.filter { !it.isBuiltIn && it.category.isEmpty() }

@@ -491,4 +491,5 @@
     <string name="frequent_filters">Frequentes</string>
     <string name="camera_looks_more">Mais</string>
     <string name="camera_looks_collapse">Recolher</string>
+    <string name="preset_revert">Reverter</string>
 </resources>

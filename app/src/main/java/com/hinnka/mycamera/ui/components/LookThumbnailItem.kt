@@ -4,7 +4,6 @@ import androidx.compose.animation.animateColorAsState
 import androidx.compose.foundation.background
 import androidx.compose.foundation.basicMarquee
 import androidx.compose.foundation.border
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
@@ -22,6 +21,8 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -46,14 +47,22 @@ internal fun LookThumbnailItem(
     onLongClick: (() -> Unit)? = null,
     onEditClick: (() -> Unit)? = null,
     isVip: Boolean = false,
+    thumbnailOnly: Boolean = false,
     content: @Composable BoxScope.() -> Unit
 ) {
     val shape = RoundedCornerShape(12.dp)
+    val highlight = selected && !thumbnailOnly
+    val edit = onEditClick.takeIf { selected }
     val border = animateColorAsState(
-        if (selected) AccentColor else Color.White.copy(alpha = 0.15f), label = "lookItemBorder"
+        if (highlight) AccentColor else Color.White.copy(alpha = 0.15f), label = "lookItemBorder"
     )
     Column(
-        modifier = modifier.width(56.dp).combinedClickable(onClick = onClick, onLongClick = onLongClick),
+        modifier = modifier.width(56.dp).combinedClickable(
+            onClick = edit ?: onClick,
+            onClickLabel = if (edit != null) stringResource(R.string.edit) else null,
+            onLongClick = onLongClick
+        )
+            .then(if (thumbnailOnly) Modifier.semantics { contentDescription = name } else Modifier),
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.spacedBy(4.dp)
     ) {
@@ -64,16 +73,10 @@ internal fun LookThumbnailItem(
         ) {
             content()
             // Draw the border above the preview image, so selection remains visible.
-            Box(Modifier.matchParentSize().border(if (selected) 1.2.dp else 1.dp, border.value, shape))
-            if (selected && onEditClick != null) {
-                Box(
-                    modifier = Modifier.align(Alignment.BottomEnd).padding(2.dp).size(28.dp)
-                        .clip(CircleShape).background(Color.Black.copy(alpha = 0.7f)).clickable(onClick = onEditClick),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Icon(Icons.Default.Edit, stringResource(R.string.edit), tint = Color.White, modifier = Modifier.size(15.dp))
-                }
-            } else if (selected) {
+            Box(Modifier.matchParentSize().border(if (highlight) 1.2.dp else 1.dp, border.value, shape))
+            if (edit != null) {
+                Icon(Icons.Default.Edit, null, tint = AccentColor, modifier = Modifier.align(Alignment.Center).size(18.dp))
+            } else if (highlight) {
                 Icon(
                     Icons.Default.Check, null, tint = Color.Black,
                     modifier = Modifier.align(Alignment.BottomEnd).padding(5.dp).size(18.dp)
@@ -90,7 +93,7 @@ internal fun LookThumbnailItem(
                 )
             }
         }
-        Text(
+        if (!thumbnailOnly) Text(
             name, color = if (selected) AccentColor else Color.White,
             fontSize = 9.sp, lineHeight = 11.sp,
             fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,

@@ -26,9 +26,6 @@ import androidx.compose.ui.unit.sp
 import com.hinnka.mycamera.ui.theme.AccentColor
 import com.hinnka.mycamera.R
 import com.hinnka.mycamera.camera.AspectRatio
-import com.hinnka.mycamera.model.CameraPreset
-import com.hinnka.mycamera.model.ColorRecipeParams
-import com.hinnka.mycamera.model.EffectParams
 import com.hinnka.mycamera.ui.components.ColorRecipePanel
 import com.hinnka.mycamera.ui.components.LutSelector
 import com.hinnka.mycamera.ui.components.CurveChannel
@@ -36,7 +33,6 @@ import com.hinnka.mycamera.raw.HncsFilmCurveMode
 import com.hinnka.mycamera.raw.RawProfileToneMapMode
 import com.hinnka.mycamera.raw.LumixPhotoStyle
 import com.hinnka.mycamera.raw.CanonPictureStyle
-import com.hinnka.mycamera.raw.RawToneMappingParameters
 import com.hinnka.mycamera.raw.RawRenderingEngine
 import com.hinnka.mycamera.raw.RawDenoiseDefaults
 import com.hinnka.mycamera.raw.RawSharpeningDefaults
@@ -57,7 +53,6 @@ import com.hinnka.mycamera.ui.components.rawDcpLensOptions
 import com.hinnka.mycamera.ui.camera.LutEditBottomSheet
 import com.hinnka.mycamera.ui.camera.LutEditorTarget
 import com.hinnka.mycamera.viewmodel.CameraViewModel
-import java.util.UUID
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -76,169 +71,110 @@ fun PresetEditorScreen(
     val context = androidx.compose.ui.platform.LocalContext.current
     val defaultNewPresetName = stringResource(R.string.preset_new_preset_default)
 
-    // 寻找是否存在编辑目标，如果不存在（新建预设），则尝试从 ViewModel.draftPreset 初始化，或者基于当前状态新建
-    val sourcePreset = remember(presetId, allPresets, defaultNewPresetName) {
-        if (presetId != null) {
-            allPresets.find { it.id == presetId }
-        } else {
-            viewModel.draftPreset ?: viewModel.prepareCurrentSettingsPresetDraft(defaultNewPresetName)
-        }
+    val storedPreset = allPresets.firstOrNull { it.id == presetId }
+    // Capture the camera changes once so later preference updates cannot replace edits in the form.
+    val cameraEdits = remember(storedPreset) { storedPreset?.let(viewModel::unsavedCameraPreset) }
+    val sourcePreset = if (presetId != null) {
+        cameraEdits ?: storedPreset ?: return
+    } else {
+        remember { viewModel.draftPreset ?: viewModel.prepareCurrentSettingsPresetDraft(defaultNewPresetName) }
     }
 
-    // 在编辑状态中维护各个字段，以便保存
-    var presetName by remember {
-        mutableStateOf(
-            sourcePreset?.name ?: defaultNewPresetName
-        )
-    }
+    var presetName by remember { mutableStateOf(sourcePreset.name) }
+    var selectedLutId by remember { mutableStateOf(sourcePreset.lutId) }
+    var colorRecipe by remember { mutableStateOf(sourcePreset.colorRecipe) }
+    var effects by remember { mutableStateOf(sourcePreset.effects) }
+    var aspectRatio by remember { mutableStateOf(sourcePreset.aspectRatio) }
+    var ultraHdrGainMapEnabled by remember { mutableStateOf(sourcePreset.ultraHdrGainMapEnabled) }
+    var frameId by remember { mutableStateOf(sourcePreset.frameId) }
 
-    var selectedLutId by remember { mutableStateOf(sourcePreset?.lutId) }
-    var colorRecipe by remember { mutableStateOf(sourcePreset?.colorRecipe ?: ColorRecipeParams.DEFAULT) }
-    var effects by remember { mutableStateOf(sourcePreset?.effects ?: EffectParams.DEFAULT) }
-
-
-    // 相机参数
-    var aspectRatio by remember { mutableStateOf(sourcePreset?.aspectRatio ?: AspectRatio.RATIO_4_3.name) }
-    var ultraHdrGainMapEnabled by remember {
-        mutableStateOf(sourcePreset?.ultraHdrGainMapEnabled ?: false)
-    }
-    var frameId by remember { mutableStateOf(sourcePreset?.frameId) }
-
-    // 专业模式参数
-    var rawDcpId by remember { mutableStateOf(sourcePreset?.rawDcpId) }
-    var rawDcpIdsByLens by remember { mutableStateOf(sourcePreset?.rawDcpIdsByLens ?: emptyMap()) }
-    var rawMaxSharpening by remember {
-        mutableStateOf(
-            sourcePreset?.rawMaxSharpening ?: RawSharpeningDefaults.DEFAULT_STRENGTH
-        )
-    }
-    var rawMaxNoiseReduction by remember {
-        mutableStateOf(
-            sourcePreset?.rawMaxNoiseReduction ?: RawDenoiseDefaults.RAW_MAX_LUMA_STRENGTH
-        )
-    }
-    var rawMaxChromaNoiseReduction by remember {
-        mutableStateOf(
-            sourcePreset?.rawMaxChromaNoiseReduction
-                ?: RawDenoiseDefaults.RAW_MAX_CHROMA_STRENGTH
-        )
-    }
-    var rawExposureCompensation by remember {
-        mutableStateOf(sourcePreset?.rawExposureCompensation ?: 0f)
-    }
-    var rawHighlightsAdjustment by remember {
-        mutableStateOf(sourcePreset?.rawHighlightsAdjustment ?: 0f)
-    }
-    var rawShadowsAdjustment by remember {
-        mutableStateOf(sourcePreset?.rawShadowsAdjustment ?: 0f)
-    }
-    var rawBlackPointCorrection by remember {
-        mutableStateOf(sourcePreset?.rawBlackPointCorrection ?: 0f)
-    }
-    var rawWhitePointCorrection by remember {
-        mutableStateOf(sourcePreset?.rawWhitePointCorrection ?: 0f)
-    }
-    var rawHncsFilmCurveMode by remember {
-        mutableStateOf(HncsFilmCurveMode.fromPersistedValue(sourcePreset?.rawHncsFilmCurveMode))
-    }
-    var rawHncsColorMatchingEnabled by remember {
-        mutableStateOf(sourcePreset?.rawHncsColorMatchingEnabled ?: true)
-    }
-    var rawLumixColorMatchingEnabled by remember {
-        mutableStateOf(sourcePreset?.rawLumixColorMatchingEnabled ?: true)
-    }
-    var rawEngineToneCurve by remember {
-        mutableStateOf(sourcePreset?.rawEngineToneCurve() ?: RawToneMappingParameters.DEFAULT)
-    }
-    var rawRenderingEngine by remember {
-        mutableStateOf(RawRenderingEngine.fromPersistedName(sourcePreset?.rawRenderingEngine))
-    }
-    var rawLumixPhotoStyle by remember {
-        mutableStateOf(LumixPhotoStyle.fromPersistedValue(sourcePreset?.rawLumixPhotoStyle))
-    }
-    var rawCanonPictureStyle by remember {
-        mutableStateOf(CanonPictureStyle.fromPersistedValue(sourcePreset?.rawCanonPictureStyle))
-    }
-    var rawCanonUseR5ColorMatrix by remember {
-        mutableStateOf(sourcePreset?.rawCanonUseR5ColorMatrix ?: false)
-    }
-    var rawLeicaUseM9ColorMatrix by remember {
-        mutableStateOf(sourcePreset?.rawLeicaUseM9ColorMatrix ?: false)
-    }
-    var rawCanonExposureCompensationEv by remember {
-        mutableStateOf(sourcePreset?.rawCanonExposureCompensationEv
-            ?: RawToneMappingParameters.CANON_EXPOSURE_COMPENSATION_DEFAULT)
-    }
-    var rawOppoMasterToneMap by remember { mutableStateOf(sourcePreset?.rawOppoMasterToneMap ?: false) }
-    var rawSpectralFilmStock by remember { mutableStateOf(sourcePreset?.rawSpectralFilmStock ?: "kodak_portra_400") }
-    var rawSpectralFilmPrint by remember { mutableStateOf(sourcePreset?.rawSpectralFilmPrint ?: "kodak_2383") }
+    var rawDcpId by remember { mutableStateOf(sourcePreset.rawDcpId) }
+    var rawDcpIdsByLens by remember { mutableStateOf(sourcePreset.rawDcpIdsByLens) }
+    var rawMaxSharpening by remember { mutableStateOf(sourcePreset.rawMaxSharpening) }
+    var rawMaxNoiseReduction by remember { mutableStateOf(sourcePreset.rawMaxNoiseReduction) }
+    var rawMaxChromaNoiseReduction by remember { mutableStateOf(sourcePreset.rawMaxChromaNoiseReduction) }
+    var rawExposureCompensation by remember { mutableStateOf(sourcePreset.rawExposureCompensation) }
+    var rawHighlightsAdjustment by remember { mutableStateOf(sourcePreset.rawHighlightsAdjustment) }
+    var rawShadowsAdjustment by remember { mutableStateOf(sourcePreset.rawShadowsAdjustment) }
+    var rawBlackPointCorrection by remember { mutableStateOf(sourcePreset.rawBlackPointCorrection) }
+    var rawWhitePointCorrection by remember { mutableStateOf(sourcePreset.rawWhitePointCorrection) }
+    var rawHncsFilmCurveMode by remember { mutableStateOf(HncsFilmCurveMode.fromPersistedValue(sourcePreset.rawHncsFilmCurveMode)) }
+    var rawHncsColorMatchingEnabled by remember { mutableStateOf(sourcePreset.rawHncsColorMatchingEnabled) }
+    var rawLumixColorMatchingEnabled by remember { mutableStateOf(sourcePreset.rawLumixColorMatchingEnabled) }
+    var rawEngineToneCurve by remember { mutableStateOf(sourcePreset.rawEngineToneCurve()) }
+    var rawRenderingEngine by remember { mutableStateOf(RawRenderingEngine.fromPersistedName(sourcePreset.rawRenderingEngine)) }
+    var rawLumixPhotoStyle by remember { mutableStateOf(LumixPhotoStyle.fromPersistedValue(sourcePreset.rawLumixPhotoStyle)) }
+    var rawCanonPictureStyle by remember { mutableStateOf(CanonPictureStyle.fromPersistedValue(sourcePreset.rawCanonPictureStyle)) }
+    var rawCanonUseR5ColorMatrix by remember { mutableStateOf(sourcePreset.rawCanonUseR5ColorMatrix) }
+    var rawLeicaUseM9ColorMatrix by remember { mutableStateOf(sourcePreset.rawLeicaUseM9ColorMatrix) }
+    var rawCanonExposureCompensationEv by remember { mutableStateOf(sourcePreset.rawCanonExposureCompensationEv) }
+    var rawOppoMasterToneMap by remember { mutableStateOf(sourcePreset.rawOppoMasterToneMap) }
+    var rawSpectralFilmStock by remember { mutableStateOf(sourcePreset.rawSpectralFilmStock) }
+    var rawSpectralFilmPrint by remember { mutableStateOf(sourcePreset.rawSpectralFilmPrint) }
     var rawFotufilmDocument by remember {
         mutableStateOf(
-            FotufilmDocumentStorage.decode(sourcePreset?.rawFotufilmDocument, "preset ${sourcePreset?.id}")
-                ?: if (RawRenderingEngine.fromPersistedName(sourcePreset?.rawRenderingEngine) == RawRenderingEngine.Fotufilm) {
+            FotufilmDocumentStorage.decode(sourcePreset.rawFotufilmDocument, "preset ${sourcePreset.id}")
+                ?: if (RawRenderingEngine.fromPersistedName(sourcePreset.rawRenderingEngine) == RawRenderingEngine.Fotufilm) {
                     FotufilmDocumentStorage.defaultDocument()
                 } else {
                     null
                 }
         )
     }
-    var rawDROMode by remember { mutableStateOf(sourcePreset?.rawDROMode ?: "OFF") }
+    var rawDROMode by remember { mutableStateOf(sourcePreset.rawDROMode) }
 
     // 专业模式基准色彩校正
-    var rawBaselineLutId by remember { mutableStateOf(sourcePreset?.rawBaselineLutId) }
+    var rawBaselineLutId by remember { mutableStateOf(sourcePreset.rawBaselineLutId) }
 
     // 折叠卡片展开控制
     var expandProfessionalSettings by remember { mutableStateOf(false) }
     var baselineRecipeEditLutId by remember { mutableStateOf<String?>(null) }
     var baselineRecipeEditorTarget by remember { mutableStateOf<LutEditorTarget?>(null) }
 
-    // 保存方法
+    val encodedDocument by remember { derivedStateOf { FotufilmDocumentStorage.encode(rawFotufilmDocument) } }
+    val editedPreset = sourcePreset.copy(
+        name = presetName,
+        lutId = selectedLutId,
+        colorRecipe = colorRecipe,
+        effects = effects,
+        aspectRatio = aspectRatio,
+        ultraHdrGainMapEnabled = ultraHdrGainMapEnabled,
+        frameId = frameId,
+        rawDcpId = rawDcpId,
+        rawDcpIdsByLens = rawDcpIdsByLens,
+        rawHncsFilmCurveMode = rawHncsFilmCurveMode.persistedValue,
+        rawRenderingEngine = rawRenderingEngine.name,
+        rawMaxSharpening = rawMaxSharpening,
+        rawMaxNoiseReduction = rawMaxNoiseReduction,
+        rawMaxChromaNoiseReduction = rawMaxChromaNoiseReduction,
+        rawExposureCompensation = rawExposureCompensation,
+        rawHighlightsAdjustment = rawHighlightsAdjustment,
+        rawShadowsAdjustment = rawShadowsAdjustment,
+        rawBlackPointCorrection = rawBlackPointCorrection,
+        rawWhitePointCorrection = rawWhitePointCorrection,
+        rawOppoMasterToneMap = rawOppoMasterToneMap,
+        rawLumixPhotoStyle = rawLumixPhotoStyle.assetName,
+        rawCanonPictureStyle = rawCanonPictureStyle.persistedValue,
+        rawCanonExposureCompensationEv = rawCanonExposureCompensationEv,
+        rawLumixColorMatchingEnabled = rawLumixColorMatchingEnabled,
+        rawHncsColorMatchingEnabled = rawHncsColorMatchingEnabled,
+        rawCanonUseR5ColorMatrix = rawCanonUseR5ColorMatrix,
+        rawLeicaUseM9ColorMatrix = rawLeicaUseM9ColorMatrix,
+        rawAgxBlackRelativeExposure = rawEngineToneCurve.agxBlackRelativeExposure,
+        rawAgxWhiteRelativeExposure = rawEngineToneCurve.agxWhiteRelativeExposure,
+        rawAgxToe = rawEngineToneCurve.agxToe,
+        rawAgxShoulder = rawEngineToneCurve.agxShoulder,
+        rawFilmicBlackRelativeExposure = rawEngineToneCurve.filmicBlackRelativeExposure,
+        rawFilmicWhiteRelativeExposure = rawEngineToneCurve.filmicWhiteRelativeExposure,
+        rawSpectralFilmStock = rawSpectralFilmStock,
+        rawSpectralFilmPrint = rawSpectralFilmPrint,
+        rawFotufilmDocument = encodedDocument,
+        rawDROMode = rawDROMode,
+        rawBaselineLutId = rawBaselineLutId
+    )
+    val initialForm = remember(sourcePreset) { editedPreset }
     val onSave = {
-        val newPresetId = presetId ?: sourcePreset?.id ?: UUID.randomUUID().toString()
-        val isBuiltInFlag = sourcePreset?.isBuiltIn ?: false // 如果是内置预设的修改，依然保留 isBuiltIn 以展示内置标签
-        val savedPreset = CameraPreset(
-            id = newPresetId,
-            name = presetName,
-            lutId = selectedLutId,
-            colorRecipe = colorRecipe,
-            effects = effects,
-            aspectRatio = aspectRatio,
-            ultraHdrGainMapEnabled = ultraHdrGainMapEnabled,
-            frameId = frameId,
-            rawDcpId = rawDcpId,
-            rawDcpIdsByLens = rawDcpIdsByLens,
-            rawHncsFilmCurveMode = rawHncsFilmCurveMode.persistedValue,
-            rawRenderingEngine = rawRenderingEngine.name,
-            rawMaxSharpening = rawMaxSharpening,
-            rawMaxNoiseReduction = rawMaxNoiseReduction,
-            rawMaxChromaNoiseReduction = rawMaxChromaNoiseReduction,
-            rawExposureCompensation = rawExposureCompensation,
-            rawHighlightsAdjustment = rawHighlightsAdjustment,
-            rawShadowsAdjustment = rawShadowsAdjustment,
-            rawBlackPointCorrection = rawBlackPointCorrection,
-            rawWhitePointCorrection = rawWhitePointCorrection,
-            rawOppoMasterToneMap = rawOppoMasterToneMap,
-            rawLumixPhotoStyle = rawLumixPhotoStyle.assetName,
-            rawCanonPictureStyle = rawCanonPictureStyle.persistedValue,
-            rawCanonExposureCompensationEv = rawCanonExposureCompensationEv,
-            rawLumixColorMatchingEnabled = rawLumixColorMatchingEnabled,
-            rawHncsColorMatchingEnabled = rawHncsColorMatchingEnabled,
-            rawCanonUseR5ColorMatrix = rawCanonUseR5ColorMatrix,
-            rawLeicaUseM9ColorMatrix = rawLeicaUseM9ColorMatrix,
-            rawAgxBlackRelativeExposure = rawEngineToneCurve.agxBlackRelativeExposure,
-            rawAgxWhiteRelativeExposure = rawEngineToneCurve.agxWhiteRelativeExposure,
-            rawAgxToe = rawEngineToneCurve.agxToe,
-            rawAgxShoulder = rawEngineToneCurve.agxShoulder,
-            rawFilmicBlackRelativeExposure = rawEngineToneCurve.filmicBlackRelativeExposure,
-            rawFilmicWhiteRelativeExposure = rawEngineToneCurve.filmicWhiteRelativeExposure,
-            rawSpectralFilmStock = rawSpectralFilmStock,
-            rawSpectralFilmPrint = rawSpectralFilmPrint,
-            rawFotufilmDocument = FotufilmDocumentStorage.encode(rawFotufilmDocument),
-            rawDROMode = rawDROMode,
-            rawBaselineLutId = rawBaselineLutId,
-            isBuiltIn = isBuiltInFlag
-        )
-        viewModel.savePreset(savedPreset)
+        viewModel.savePreset(editedPreset)
         viewModel.draftPreset = null
         haptic.performHapticFeedback(HapticFeedbackType.LongPress)
         onBack()
@@ -265,6 +201,14 @@ fun PresetEditorScreen(
                     }
                 },
                 actions = {
+                    if (storedPreset != null && (cameraEdits != null || editedPreset != initialForm)) {
+                        TextButton(onClick = {
+                            if (cameraEdits != null) viewModel.applyPreset(storedPreset)
+                            onBack()
+                        }) {
+                            Text(stringResource(R.string.preset_revert))
+                        }
+                    }
                     TextButton(onClick = { onSave() }) {
                         Text(
                             text = stringResource(R.string.preset_save),
@@ -524,8 +468,8 @@ fun PresetEditorScreen(
                         engineNames.entries.find { it.value == selectedName }?.key?.let { engine ->
                             rawRenderingEngine = engine
                             if (engine == RawRenderingEngine.Spektrafilm) {
-                                if (rawSpectralFilmStock.isBlank()) rawSpectralFilmStock = "kodak_portra_400"
-                                if (rawSpectralFilmPrint.isBlank()) rawSpectralFilmPrint = "kodak_2383"
+                                if (rawSpectralFilmStock.isNullOrBlank()) rawSpectralFilmStock = "kodak_portra_400"
+                                if (rawSpectralFilmPrint.isNullOrBlank()) rawSpectralFilmPrint = "kodak_2383"
                             }
                             if (engine == RawRenderingEngine.Fotufilm && rawFotufilmDocument == null) {
                                 rawFotufilmDocument = FotufilmDocumentStorage.defaultDocument()
@@ -690,7 +634,7 @@ fun PresetEditorScreen(
 
                 AnimatedVisibility(visible = rawRenderingEngine == RawRenderingEngine.Spektrafilm) {
                     Column(modifier = Modifier.fillMaxWidth()) {
-                        val currentStockLabel = SpectralFilmUiInfo.getFilmDisplayName(rawSpectralFilmStock)
+                        val currentStockLabel = SpectralFilmUiInfo.getFilmDisplayName(rawSpectralFilmStock ?: "kodak_portra_400")
                         val stockMap = SpectralFilmUiInfo.availableFilms.associateWith { SpectralFilmUiInfo.getFilmDisplayName(it) }
                         DropdownSettingItem(
                             title = stringResource(R.string.settings_negative_film),
@@ -710,7 +654,7 @@ fun PresetEditorScreen(
                             Column(modifier = Modifier.fillMaxWidth()) {
                                 HorizontalDivider(color = Color.White.copy(alpha = 0.05f), modifier = Modifier.padding(vertical = 8.dp))
 
-                                val currentPrintLabel = SpectralFilmUiInfo.getPrintDisplayName(rawSpectralFilmPrint)
+                                val currentPrintLabel = SpectralFilmUiInfo.getPrintDisplayName(rawSpectralFilmPrint ?: "kodak_2383")
                                 val printMap = SpectralFilmUiInfo.availablePrints.associateWith { SpectralFilmUiInfo.getPrintDisplayName(it) }
                                 DropdownSettingItem(
                                     title = stringResource(R.string.settings_print_paper),

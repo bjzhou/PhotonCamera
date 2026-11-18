@@ -35,32 +35,19 @@ fun PresetsPanel(
     expanded: Boolean = false,
     compact: Boolean = false,
     thumbnail: Bitmap? = null,
-    thumbnailInput: PresetThumbnailInput? = null
+    thumbnailInput: PresetThumbnailInput? = null,
+    onEditPreset: ((String) -> Unit)? = null
 ) {
     val context = LocalContext.current
     val haptic = LocalHapticFeedback.current
     val source = remember(thumbnailInput, thumbnail) { thumbnailInput ?: thumbnail?.let(::PresetThumbnailInput) }
     val renderer = remember(context) { PresetThumbnailRenderer(context.applicationContext) }
-    LookOptionList(
-        options = allPresets,
-        key = { it.id },
-        selectedIndex = allPresets.indexOfFirst { it.id == activePresetId },
-        expanded = expanded,
-        compact = compact,
-        itemFooterHeight = lookThumbnailFooterHeight(),
-        modifier = modifier
-    ) { preset ->
-        val selected = activePresetId == preset.id
-        val name = when (preset.id) {
-            "builtin_default" -> stringResource(R.string.default_text)
-            "builtin_hasselblad_natural" -> stringResource(R.string.preset_builtin_hasselblad_natural)
-            "builtin_portrait" -> stringResource(R.string.preset_builtin_portrait)
-            "builtin_classic_film" -> stringResource(R.string.preset_builtin_classic_film)
-            "builtin_monochrome" -> stringResource(R.string.preset_builtin_monochrome)
-            "builtin_cinematic" -> stringResource(R.string.preset_builtin_cinematic)
-            "builtin_leica_m9_moment" -> stringResource(R.string.preset_builtin_leica_m9_moment)
-            else -> preset.name
-        }
+    val select: (CameraPreset) -> Unit = { preset ->
+        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+        onPresetSelected(preset)
+    }
+    val item: @Composable (CameraPreset, Boolean, () -> Unit, Modifier) -> Unit = { preset, selected, click, cardModifier ->
+        val name = presetDisplayName(preset)
         val request = remember(source, preset) {
             source?.let { snapshot ->
                 val transformation = object : Transformation {
@@ -83,15 +70,14 @@ fun PresetsPanel(
         LookThumbnailItem(
             name = if (selected && activePresetModified) "$name*" else name,
             selected = selected,
-            onClick = {
-                haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                onPresetSelected(preset)
-            },
+            onClick = click,
+            onEditClick = onEditPreset?.let { edit -> { edit(preset.id) } },
+            thumbnailOnly = compact,
             onLongClick = {
                 haptic.performHapticFeedback(HapticFeedbackType.LongPress)
                 onManagePresets()
             },
-            modifier = if (expanded) Modifier.fillMaxWidth() else Modifier
+            modifier = cardModifier
         ) {
             SubcomposeAsyncImage(
                 model = request,
@@ -103,11 +89,48 @@ fun PresetsPanel(
             )
         }
     }
+    if (compact) {
+        CompactLookCarousel(
+            options = allPresets,
+            key = { it.id },
+            selectedId = activePresetId,
+            onSelected = select,
+            // Applying a preset can reconfigure the camera. Only apply the one the user lands on.
+            selectOnSettle = true,
+            modifier = modifier,
+            content = item
+        )
+    } else {
+        LookOptionList(
+            options = allPresets,
+            key = { it.id },
+            selectedIndex = allPresets.indexOfFirst { it.id == activePresetId },
+            expanded = expanded,
+            itemFooterHeight = lookThumbnailFooterHeight(),
+            modifier = modifier
+        ) { preset ->
+            item(preset, activePresetId == preset.id, { select(preset) }, if (expanded) Modifier.fillMaxWidth() else Modifier)
+        }
+    }
 }
 
 @Composable
 private fun PresetThumbnailPlaceholder() {
     Box(Modifier.fillMaxSize(), contentAlignment = androidx.compose.ui.Alignment.Center) {
         Icon(AppIcons.Image, null, tint = Color.White.copy(alpha = 0.3f), modifier = Modifier.size(20.dp))
+    }
+}
+
+@Composable
+internal fun presetDisplayName(preset: CameraPreset): String {
+    return when (preset.id) {
+        "builtin_default" -> stringResource(R.string.default_text)
+        "builtin_hasselblad_natural" -> stringResource(R.string.preset_builtin_hasselblad_natural)
+        "builtin_portrait" -> stringResource(R.string.preset_builtin_portrait)
+        "builtin_classic_film" -> stringResource(R.string.preset_builtin_classic_film)
+        "builtin_monochrome" -> stringResource(R.string.preset_builtin_monochrome)
+        "builtin_cinematic" -> stringResource(R.string.preset_builtin_cinematic)
+        "builtin_leica_m9_moment" -> stringResource(R.string.preset_builtin_leica_m9_moment)
+        else -> preset.name
     }
 }

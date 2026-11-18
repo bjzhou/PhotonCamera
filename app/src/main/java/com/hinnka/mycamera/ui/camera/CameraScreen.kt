@@ -1657,16 +1657,10 @@ fun CameraScreen(
                     viewModel.prepareCurrentSettingsPresetDraft(defaultPresetName)
                     onPresetEditClick(null)
                 },
-                onResetPresetClick = {
-                    discardTransientLookEdits()
-                    val preset = allPresets.firstOrNull { it.id == activePresetId }
-                    if (presetRequiresPreviewTransition(preset)) {
-                        runPreviewTransition { viewModel.resetActivePreset() }
-                    } else {
-                        viewModel.resetActivePreset()
-                    }
+                onEditPreset = { presetId ->
+                    activePanel = ActivePanel.NONE
+                    onPresetEditClick(presetId)
                 },
-                onSavePresetClick = viewModel::saveCurrentSettingsToActivePreset,
                 onPresetManagementClick = {
                     activePanel = ActivePanel.NONE
                     onPresetManagementClick()

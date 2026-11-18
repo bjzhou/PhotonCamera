@@ -798,16 +798,12 @@ private fun ApplyLutScreen(
     val listState = rememberLazyListState()
     val builtInText = androidx.compose.ui.res.stringResource(R.string.built_in)
     val uncategorizedText = androidx.compose.ui.res.stringResource(R.string.uncategorized)
-    val frequentText = androidx.compose.ui.res.stringResource(R.string.frequent_filters)
-    val frequentUsage by com.hinnka.mycamera.ui.prefs.preferenceValue { it.frequentLutUsage }
-    val groupedLuts = remember(lutData.first, lutData.second, builtInText, uncategorizedText, frequentText, frequentUsage) {
+    val groupedLuts = remember(lutData.first, lutData.second, builtInText, uncategorizedText) {
         groupLutsForDisplay(
             luts = lutData.first,
             categoryOrder = lutData.second,
             builtInText = builtInText,
             uncategorizedText = uncategorizedText,
-            frequentText = frequentText,
-            frequentUsage = frequentUsage
         )
     }
 

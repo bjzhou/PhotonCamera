@@ -1244,21 +1244,21 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         }
     }
 
-    fun resetActivePreset() {
-        val presetId = userPreferencesRepository.current.activePresetId ?: return
-        val preset = allPresets.value.firstOrNull { it.id == presetId } ?: return
-        applyPreset(preset)
-    }
-
-    fun saveCurrentSettingsToActivePreset() {
-        val presetId = userPreferencesRepository.current.activePresetId ?: return
-        val preset = allPresets.value.firstOrNull { it.id == presetId } ?: return
-        savePreset(
-            createPresetFromCurrentSettings(
-                id = preset.id,
-                name = preset.name,
-                isBuiltIn = preset.isBuiltIn
-            )
+    fun unsavedCameraPreset(preset: CameraPreset): CameraPreset? {
+        val matchState = activePresetMatchState.value ?: return null
+        if (presetApplyInProgress.value || matchState.prefs.activePresetId != preset.id) return null
+        val snapshot = matchState.toPresetMatchSnapshot()
+        if (snapshot.matches(preset)) return null
+        if (snapshot.isProfessionalMode) {
+            return createPresetFromCurrentSettings(preset.id, preset.name, preset.isBuiltIn)
+        }
+        // Only merge fields this shooting mode actually applied from the preset.
+        return preset.copy(
+            lutId = snapshot.lutId,
+            colorRecipe = snapshot.colorRecipe.withoutIndependentEffects(),
+            effects = snapshot.effects,
+            frameId = snapshot.frameId,
+            aspectRatio = if (snapshot.captureMode == CaptureMode.PHOTO) snapshot.aspectRatio else preset.aspectRatio
         )
     }
 
