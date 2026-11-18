@@ -86,7 +86,6 @@ class CustomImportManager(private val context: Context) {
         private const val MAX_RAW_NOISE_PROFILE_CHARS = 1024 * 1024
         private const val CATEGORY_OVERRIDES_CONFIG = "category_overrides.json"
         private const val FAVORITE_OVERRIDES_CONFIG = "favorite_overrides.json"
-        private const val BUILT_IN_LUT_CATEGORY_INITIALIZED_CONFIG = "built_in_lut_categories_initialized.json"
 
         // 自定义字体目录
         private const val CUSTOM_FONT_DIR = "custom_fonts"
@@ -172,46 +171,6 @@ class CustomImportManager(private val context: Context) {
         } catch (e: Exception) {
             PLog.e(TAG, "Failed to get category overrides", e)
             emptyMap()
-        }
-    }
-
-    fun initializeBuiltInLutCategoriesIfNeeded(luts: List<LutInfo>) {
-        try {
-            val categorizedLuts = luts
-                .filter { it.isBuiltIn && it.category.isNotEmpty() }
-                .associate { it.id to it.category }
-            if (categorizedLuts.isEmpty()) return
-
-            val initializedFile = File(context.filesDir, BUILT_IN_LUT_CATEGORY_INITIALIZED_CONFIG)
-            val initializedJson = if (initializedFile.exists()) {
-                JSONObject(initializedFile.readText())
-            } else {
-                JSONObject()
-            }
-
-            val overridesFile = File(context.filesDir, CATEGORY_OVERRIDES_CONFIG)
-            val overridesJson = if (overridesFile.exists()) {
-                JSONObject(overridesFile.readText())
-            } else {
-                JSONObject()
-            }
-
-            var updatedCount = 0
-            categorizedLuts.forEach { (id, category) ->
-                if (!initializedJson.optBoolean(id, false)) {
-                    overridesJson.put(id, category)
-                    initializedJson.put(id, true)
-                    updatedCount++
-                }
-            }
-
-            if (updatedCount > 0) {
-                overridesFile.writeText(overridesJson.toString())
-                initializedFile.writeText(initializedJson.toString())
-            }
-            PLog.d(TAG, "Built-in LUT categories initialized: $updatedCount")
-        } catch (e: Exception) {
-            PLog.e(TAG, "Failed to initialize built-in LUT categories", e)
         }
     }
 
@@ -1111,17 +1070,14 @@ class CustomImportManager(private val context: Context) {
     }
 
     /**
-     * 更新 LUT 分类（支持内置和自定义）
+     * 更新自定义 LUT 分类
      */
     fun updateLutCategory(lutId: String, newCategory: String): Boolean {
+        if (!isCustomLutId(lutId)) return false
         return try {
-            val sanitizedCategory = if (isCustomLutId(lutId)) {
-                sanitizeCustomLutCategory(newCategory)
-            } else {
-                newCategory.trim()
-            }
+            val sanitizedCategory = sanitizeCustomLutCategory(newCategory)
 
-            // 1. 同步到分类重写文件 (核心：支持内置)
+            // 同步到分类重写文件，兼容已有备份。
             val overridesFile = File(context.filesDir, CATEGORY_OVERRIDES_CONFIG)
             val overridesJson = if (overridesFile.exists()) {
                 JSONObject(overridesFile.readText())
@@ -1131,7 +1087,7 @@ class CustomImportManager(private val context: Context) {
             overridesJson.put(lutId, sanitizedCategory)
             overridesFile.writeText(overridesJson.toString())
 
-            // 2. 如果是自定义滤镜，也同步更新 custom_luts.json (保持一致性)
+            // 同步更新 custom_luts.json。
             val configFile = File(context.filesDir, CUSTOM_LUT_CONFIG)
             if (configFile.exists()) {
                 val configJson = configFile.readText()

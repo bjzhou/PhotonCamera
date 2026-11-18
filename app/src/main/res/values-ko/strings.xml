@@ -250,6 +250,8 @@
     <string name="delete_category_title">카테고리 삭제</string>
     <string name="delete_category_message">카테고리 \"%s\"을(를) 삭제하시겠습니까? 이 카테고리의 LUT는 분류되지 않음으로 초기화됩니다.</string>
     <string name="built_in">내장</string>
+    <string name="lut_category_digital">디지털</string>
+    <string name="lut_category_film">필름</string>
     <string name="custom">사용자 정의</string>
     <string name="input_curve">입력 곡선</string>
     

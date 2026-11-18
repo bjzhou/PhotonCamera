@@ -4035,12 +4035,13 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     private fun resolveLutIdForMode(preferences: UserPreferences, mode: CaptureMode): String? {
+        val lutManager = contentRepository.lutManager
         return resolveLutIdForCaptureMode(
-            photoLutId = preferences.lutId,
-            videoLutId = preferences.videoLutId,
+            photoLutId = preferences.lutId?.takeIf { lutManager.getLutInfo(it) != null },
+            videoLutId = preferences.videoLutId?.takeIf { lutManager.getLutInfo(it) != null },
             separateVideoLutEnabled = preferences.separateVideoLutEnabled,
             captureMode = mode,
-            defaultLutId = availableLutList.firstOrNull { it.isDefault }?.id,
+            defaultLutId = lutManager.getAvailableLuts().firstOrNull { it.isDefault }?.id,
         )
     }
 

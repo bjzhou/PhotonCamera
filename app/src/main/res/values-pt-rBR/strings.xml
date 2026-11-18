@@ -250,6 +250,8 @@
     <string name="delete_category_title">Excluir Categoria</string>
     <string name="delete_category_message">Tem certeza de que deseja excluir a categoria \"%s\"? Os LUTs nesta categoria serão redefinidos para sem categoria.</string>
     <string name="built_in">Integrado</string>
+    <string name="lut_category_digital">Digital</string>
+    <string name="lut_category_film">Filme</string>
     <string name="custom">Personalizado</string>
     <string name="input_curve">Curva de Entrada</string>
     

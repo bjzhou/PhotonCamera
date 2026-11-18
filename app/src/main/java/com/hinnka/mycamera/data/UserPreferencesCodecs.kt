@@ -6,15 +6,13 @@ import com.hinnka.mycamera.MyCameraApplication
 import com.hinnka.mycamera.R
 import com.hinnka.mycamera.camera.AspectRatio
 import com.hinnka.mycamera.color.TransferCurve
+import com.hinnka.mycamera.lut.withDefaultBuiltInLutCategoryOrder
 import com.hinnka.mycamera.model.CameraPreset
 import com.hinnka.mycamera.raw.SpectralFilmTuning
 import org.json.JSONArray
 import org.json.JSONObject
 
 // UserPreferences 字段的解析 / 序列化函数，Repository 的写入方法与 UserPreferences 的读取共用。
-
-/** 内置分类在当前语言下的显示名；持久化时以稳定标识存储。 */
-internal fun builtInCategoryLabel(): String = MyCameraApplication.instance.getString(R.string.built_in)
 
 // 使用数组保存首次加入顺序，避免依赖 JSON 对象键的顺序。
 internal fun parseFrequentLutUsage(value: String?): Map<String, Long>? {
@@ -223,27 +221,20 @@ internal fun parseTopSheetAspectRatios(
 }
 
 internal fun readCategoryOrder(preferences: Preferences): List<String> {
-    val json = preferences[PreferenceKeys.CATEGORY_ORDER_JSON]
-    return if (json != null) {
-        val array = JSONArray(json)
-        List(array.length()) { index ->
-            if (array.optJSONObject(index)?.optString("type") == "built_in") {
-                builtInCategoryLabel()
-            } else {
-                array.getString(index)
-            }
-        }
+    val array = preferences[PreferenceKeys.CATEGORY_ORDER_JSON]?.let { JSONArray(it) }
+    val legacyBuiltInLabel = MyCameraApplication.instance.getString(R.string.built_in)
+    val order = if (array != null) {
+        (0 until array.length()).mapNotNull { array.opt(it) as? String }
     } else {
         preferences[PreferenceKeys.CATEGORY_ORDER]?.split(",").orEmpty()
-    }.filter { it.isNotBlank() }.distinct()
+    }
+    val isLegacyOrder = array == null ||
+        (0 until array.length()).any { array.optJSONObject(it)?.optString("type") == "built_in" }
+    return withDefaultBuiltInLutCategoryOrder(
+        order.filter { it.isNotBlank() && it != legacyBuiltInLabel }.distinct(),
+        isLegacyOrder = isLegacyOrder,
+    )
 }
 
-internal fun serializeCategoryOrder(order: List<String>): String {
-    val builtInText = builtInCategoryLabel()
-    val array = JSONArray()
-    order.filter { it.isNotBlank() }.distinct().forEach { category ->
-        // 系统分类使用稳定标识，切换语言后不会变成一个自定义空分类。
-        array.put(if (category == builtInText) JSONObject().put("type", "built_in") else category)
-    }
-    return array.toString()
-}
+internal fun serializeCategoryOrder(order: List<String>): String =
+    JSONArray(order.filter { it.isNotBlank() }.distinct()).toString()

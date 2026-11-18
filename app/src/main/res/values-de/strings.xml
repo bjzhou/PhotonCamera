@@ -249,6 +249,8 @@
     <string name="delete_category_title">Kategorie löschen</string>
     <string name="delete_category_message">Sind Sie sicher, dass Sie die Kategorie \"%s\" löschen möchten? LUTs in dieser Kategorie werden auf unkategorisiert zurückgesetzt.</string>
     <string name="built_in">Integriert</string>
+    <string name="lut_category_digital">Digital</string>
+    <string name="lut_category_film">Film</string>
     <string name="custom">Eigene</string>
     <string name="input_curve">Eingangskurve</string>
     

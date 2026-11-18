@@ -65,6 +65,7 @@ import com.hinnka.mycamera.livephoto.VivoLivePhotoCreator
 import com.hinnka.mycamera.lut.LutInfo
 import com.hinnka.mycamera.lut.groupLutsForDisplay
 import com.hinnka.mycamera.lut.sortLutsByUserOrder
+import com.hinnka.mycamera.ui.components.lutCategoryTitle
 import com.hinnka.mycamera.ui.theme.PhotonCameraTheme
 import com.hinnka.mycamera.utils.PLog
 import kotlinx.coroutines.Dispatchers
@@ -796,13 +797,11 @@ private fun ApplyLutScreen(
     }
     val lutData by sortedLutsFlow.collectAsState(initial = Triple(emptyList(), emptyList(), null))
     val listState = rememberLazyListState()
-    val builtInText = androidx.compose.ui.res.stringResource(R.string.built_in)
     val uncategorizedText = androidx.compose.ui.res.stringResource(R.string.uncategorized)
-    val groupedLuts = remember(lutData.first, lutData.second, builtInText, uncategorizedText) {
+    val groupedLuts = remember(lutData.first, lutData.second, uncategorizedText) {
         groupLutsForDisplay(
             luts = lutData.first,
             categoryOrder = lutData.second,
-            builtInText = builtInText,
             uncategorizedText = uncategorizedText,
         )
     }
@@ -853,7 +852,7 @@ private fun ApplyLutScreen(
                     groupedLuts.forEach { (groupTitle, luts) ->
                         item(key = "header_$groupTitle") {
                             Text(
-                                text = groupTitle,
+                                text = lutCategoryTitle(groupTitle),
                                 style = MaterialTheme.typography.labelMedium,
                                 color = Color.White.copy(alpha = 0.6f),
                                 modifier = Modifier.padding(top = 4.dp, bottom = 2.dp)

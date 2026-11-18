@@ -40,7 +40,12 @@ import com.hinnka.mycamera.R
 import com.hinnka.mycamera.data.ContentRepository
 import com.hinnka.mycamera.frame.FrameInfo
 import com.hinnka.mycamera.lut.BaselineColorCorrectionTarget
+import com.hinnka.mycamera.lut.DIGITAL_LUT_CATEGORY
+import com.hinnka.mycamera.lut.FILM_LUT_CATEGORY
 import com.hinnka.mycamera.lut.LutInfo
+import com.hinnka.mycamera.lut.builtInLutCategories
+import com.hinnka.mycamera.lut.inLutCategory
+import com.hinnka.mycamera.lut.orderedLutCategoryTitles
 import com.hinnka.mycamera.model.CameraPreset
 import com.hinnka.mycamera.model.LutSelectorMode
 import kotlinx.coroutines.Dispatchers
@@ -50,18 +55,11 @@ import com.hinnka.mycamera.ui.icons.AppIcons
 /** Camera browsing is opt-in; editors and external camera integrations keep their horizontal layout. */
 enum class LutSelectorPresentation { Horizontal, Compact, Expanded }
 
-private sealed class LutCategoryTab {
-    data object Favorite : LutCategoryTab()
-    data object BuiltIn : LutCategoryTab()
-    data object Uncategorized : LutCategoryTab()
-    data class Category(val name: String) : LutCategoryTab()
-}
-
-private fun LutCategoryTab.stableKey(): String = when (this) {
-    LutCategoryTab.Favorite -> "fixed:favorite"
-    LutCategoryTab.BuiltIn -> "fixed:built_in"
-    LutCategoryTab.Uncategorized -> "fixed:uncategorized"
-    is LutCategoryTab.Category -> "category:$name"
+@Composable
+internal fun lutCategoryTitle(category: String): String = when (category) {
+    DIGITAL_LUT_CATEGORY -> stringResource(R.string.lut_category_digital)
+    FILM_LUT_CATEGORY -> stringResource(R.string.lut_category_film)
+    else -> category
 }
 
 private val LutPanelSurface = Color.Black.copy(alpha = 0.15f)
@@ -201,55 +199,13 @@ fun LutSelector(
     onEditPreset: ((String) -> Unit)? = null
 ) {
     val favoriteText = stringResource(R.string.favorite)
-    val builtInText = stringResource(R.string.built_in)
     val uncategorizedText = stringResource(R.string.uncategorized)
     val styleText = stringResource(R.string.filter)
     val frameText = stringResource(R.string.frame)
     val presetText = stringResource(R.string.preset_title)
 
-    // 分类逻辑
-    val categoryTabs = remember(availableLuts, categoryOrder, favoriteText, builtInText, uncategorizedText) {
-        val reservedCategoryNames = setOf(favoriteText, builtInText, uncategorizedText)
-        val dynamicCategories = availableLuts.map { it.category }
-            .distinct()
-            .filter { it.isNotEmpty() && it !in reservedCategoryNames }
-        val hasUncategorizedLuts = availableLuts.any { !it.isBuiltIn && it.category.isEmpty() }
-        val orderedEntries = categoryOrder.filter { it == builtInText || dynamicCategories.contains(it) }
-        val remainingDynamic = dynamicCategories.filterNot { it in orderedEntries }.sorted()
-
-        buildList {
-            add(LutCategoryTab.Favorite)
-            if (orderedEntries.isEmpty()) {
-                add(LutCategoryTab.BuiltIn)
-                addAll(remainingDynamic.map(LutCategoryTab::Category))
-            } else {
-                orderedEntries.forEach { entry ->
-                    when (entry) {
-                        builtInText -> add(LutCategoryTab.BuiltIn)
-                        else -> add(LutCategoryTab.Category(entry))
-                    }
-                }
-                if (builtInText !in orderedEntries) add(LutCategoryTab.BuiltIn)
-                addAll(remainingDynamic.map(LutCategoryTab::Category))
-            }
-
-            if (hasUncategorizedLuts) {
-                add(LutCategoryTab.Uncategorized)
-            }
-        }
-    }
-    fun LutCategoryTab.contains(lut: LutInfo): Boolean = when (this) {
-        LutCategoryTab.Favorite -> lut.isFavorite
-        LutCategoryTab.BuiltIn -> lut.isBuiltIn
-        LutCategoryTab.Uncategorized -> !lut.isBuiltIn && lut.category.isEmpty()
-        is LutCategoryTab.Category -> lut.category == name
-    }
-
-    fun preferredCategoryFor(lut: LutInfo): LutCategoryTab = when {
-        lut.isFavorite -> LutCategoryTab.Favorite
-        LutCategoryTab.Category(lut.category) in categoryTabs -> LutCategoryTab.Category(lut.category)
-        lut.isBuiltIn -> LutCategoryTab.BuiltIn
-        else -> LutCategoryTab.Uncategorized
+    val categoryTabs = remember(availableLuts, categoryOrder, favoriteText, uncategorizedText) {
+        orderedLutCategoryTitles(availableLuts, categoryOrder, uncategorizedText, favoriteText)
     }
 
     val activeLutId = currentLutId
@@ -265,22 +221,19 @@ fun LutSelector(
 
     val selectedLut = remember(availableLuts, activeLutId) { availableLuts.find { it.id == activeLutId } }
     var browsedCategory by remember(expanded, expanded && actualMode == LutSelectorMode.Style) {
-        mutableStateOf<LutCategoryTab?>(if (expanded) null else LutCategoryTab.BuiltIn)
+        mutableStateOf<String?>(null)
     }
     val selectedCategory = browsedCategory?.takeIf { it in categoryTabs }
-        ?: selectedLut?.let(::preferredCategoryFor) ?: LutCategoryTab.BuiltIn
-    LaunchedEffect(activeLutId, availableLuts, compact) {
-        if (!compact && selectedLut != null && !selectedCategory.contains(selectedLut)) {
-            browsedCategory = null
-        }
+        ?: selectedLut?.let { if (it.isFavorite) favoriteText else it.category.ifEmpty { uncategorizedText } }
+            ?.takeIf { it in categoryTabs }
+        ?: builtInLutCategories.firstOrNull { it in categoryTabs }
+        ?: categoryTabs.first()
+    val lutOptions = remember(selectedCategory, availableLuts, favoriteText, uncategorizedText) {
+        availableLuts.inLutCategory(selectedCategory, uncategorizedText, favoriteText)
     }
-
-    val lutOptions = remember(selectedCategory, availableLuts) {
-        when (val category = selectedCategory) {
-            LutCategoryTab.Favorite -> availableLuts.filter { it.isFavorite }
-            LutCategoryTab.BuiltIn -> availableLuts.filter { it.isBuiltIn }
-            LutCategoryTab.Uncategorized -> availableLuts.filter { !it.isBuiltIn && it.category.isEmpty() }
-            is LutCategoryTab.Category -> availableLuts.filter { it.category == category.name }
+    LaunchedEffect(activeLutId, availableLuts, compact) {
+        if (!compact && selectedLut != null && selectedLut !in lutOptions) {
+            browsedCategory = null
         }
     }
 
@@ -388,7 +341,7 @@ fun LutSelector(
                 LaunchedEffect(selectedCategory, tabIndex, activeLutId) {
                     val layout = tabListState.layoutInfo
                     val fullyVisible = layout.visibleItemsInfo.any {
-                        it.key == selectedCategory.stableKey() && it.offset >= layout.viewportStartOffset &&
+                        it.key == selectedCategory && it.offset >= layout.viewportStartOffset &&
                             it.offset + it.size <= layout.viewportEndOffset
                     }
                     if (!fullyVisible) tabListState.scrollToItem(tabIndex)
@@ -401,17 +354,10 @@ fun LutSelector(
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
                 contentPadding = PaddingValues(horizontal = 8.dp)
             ) {
-                items(categoryTabs, key = { it.stableKey() }) { category ->
+                items(categoryTabs, key = { it }) { category ->
                     val isSelected = selectedCategory == category
-                    val categoryName = when (category) {
-                        LutCategoryTab.Favorite -> favoriteText
-                        LutCategoryTab.BuiltIn -> builtInText
-                        LutCategoryTab.Uncategorized -> uncategorizedText
-                        is LutCategoryTab.Category -> category.name
-                    }
-
                     Text(
-                        text = categoryName,
+                        text = lutCategoryTitle(category),
                         color = if (isSelected) AccentColor else Color.White,
                         fontSize = 11.sp,
                         fontWeight = if (isSelected) FontWeight.SemiBold else FontWeight.Medium,
@@ -436,7 +382,7 @@ fun LutSelector(
                 ) {
                     Text(
                         text = stringResource(
-                            if (selectedCategory == LutCategoryTab.Favorite) R.string.favorite_empty_title
+                            if (selectedCategory == favoriteText) R.string.favorite_empty_title
                             else R.string.category_empty_title
                         ),
                         color = Color.White.copy(alpha = 0.6f),

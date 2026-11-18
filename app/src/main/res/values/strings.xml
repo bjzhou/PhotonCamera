@@ -711,6 +711,8 @@
     <string name="favorite_empty_title">No favorites yet</string>
     <string name="favorite_empty_message">Tap the star on a filter to find it here.</string>
     <string name="built_in">Built-in</string>
+    <string name="lut_category_digital">Digital</string>
+    <string name="lut_category_film">Film</string>
     <string name="custom">Custom</string>
     <string name="uncategorized">Uncategorized</string>
     <string name="input_curve">Input Curve</string>

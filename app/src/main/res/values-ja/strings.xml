@@ -287,6 +287,8 @@
     <string name="delete_category_message">カテゴリ「%s」を削除してもよろしいですか？このカテゴリ内のLUTは未分類にリセットされます。</string>
     <string name="favorite_empty_message">フィルターの☆をタップするとここに表示されます。</string>
     <string name="built_in">プリセット</string>
+    <string name="lut_category_digital">デジタル</string>
+    <string name="lut_category_film">フィルム</string>
     <string name="custom">カスタム</string>
     <string name="uncategorized">未分類</string>
     <string name="input_curve">入力カーブ</string>

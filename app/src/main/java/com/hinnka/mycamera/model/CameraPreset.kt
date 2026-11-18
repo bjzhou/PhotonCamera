@@ -216,7 +216,7 @@ data class CameraPreset(
             CameraPreset(
                 id = "builtin_hasselblad_natural",
                 name = "builtin_hasselblad_natural",
-                lutId = "Hasselblad",
+                lutId = null,
                 colorRecipe = ColorRecipeParams.DEFAULT,
                 effects = EffectParams.DEFAULT,
                 rawRenderingEngine = RawRenderingEngine.Hncs.name,
@@ -225,7 +225,7 @@ data class CameraPreset(
             CameraPreset(
                 id = "builtin_portrait",
                 name = "builtin_portrait",
-                lutId = "astia",
+                lutId = "canon_portrait",
                 colorRecipe = ColorRecipeParams.DEFAULT.copy(
                     tonality = -0.6f,
                     sharpness = -0.2f
@@ -262,7 +262,7 @@ data class CameraPreset(
             CameraPreset(
                 id = "builtin_cinematic",
                 name = "builtin_cinematic",
-                lutId = "ricoh_yellow",
+                lutId = "sony_fl2",
                 colorRecipe = ColorRecipeParams.DEFAULT.copy(
                     shadows = -0.08f,
                     highlights = 0.05f

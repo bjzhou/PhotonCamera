@@ -195,9 +195,7 @@ class LutManager(private val context: Context) {
      * 初始化，扫描可用的 LUT 文件（包括内置和自定义）
      */
     fun initialize() {
-        val configuredBuiltInLuts = LutParser.listAvailableLuts(context, BUILT_IN_LUT_FOLDER)
-        customImportManager.initializeBuiltInLutCategoriesIfNeeded(configuredBuiltInLuts)
-        val builtInLuts = configuredBuiltInLuts.map { it.copy(category = "") }
+        val builtInLuts = LutParser.listAvailableLuts(context, BUILT_IN_LUT_FOLDER)
         val customLuts = customImportManager.getCustomLuts()
         val categoryOverrides = customImportManager.getCategoryOverrides()
         val favoriteOverrides = customImportManager.getFavoriteOverrides()
@@ -205,9 +203,9 @@ class LutManager(private val context: Context) {
         // 合并列表并以 ID 去重，避免 ID 重复导致的 Jetpack Compose 主键重复崩溃
         val allLuts = (customLuts + builtInLuts).distinctBy { it.id }
 
-        // 应用分类重写 (用户手动创建的分类会通过这里恢复)
+        // 自定义 LUT 恢复用户分类，内置 LUT 使用目录配置中的分类。
         availableLuts = allLuts.map { lut ->
-            val overriddenCategory = categoryOverrides[lut.id]
+            val overriddenCategory = categoryOverrides[lut.id].takeUnless { lut.isBuiltIn }
             val overriddenFavorite = favoriteOverrides[lut.id]
             val encoding = if (lut.fileName.isBlank()) null else runCatching {
                 val input = if (lut.isBuiltIn) context.assets.open(lut.fileName)
