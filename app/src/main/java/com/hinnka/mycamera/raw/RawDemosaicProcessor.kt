@@ -1545,10 +1545,16 @@ class RawDemosaicProcessor {
      * MGC GuidedUpsample develops the tone stage on its box-downsampled grid and regresses the
      * result back onto the full-resolution camera guide. Fotufilm's grain is film-plane texture
      * that no function of the guide carries, so the regression would average it away (and the
-     * smaller virtual frame would lay it at that grid's pitch); Fotufilm develops on the native grid.
+     * smaller virtual frame would lay it at that grid's pitch). Spektrafilm's spatial graph and
+     * scanner optics also operate at native pixel pitch, independently of the camera guide.
      */
-    private fun usesGuidedToneUpsample(geometry: RawOutputGeometry, colorEngine: RawRenderingEngine) =
-        geometry.mgcFinishResolution.needsGuidedUpsample && !colorEngine.isFotufilm
+    private fun usesGuidedToneUpsample(
+        geometry: RawOutputGeometry,
+        colorEngine: RawRenderingEngine,
+        spectralFilmLut: SpectralFilmLut?,
+    ) = geometry.mgcFinishResolution.needsGuidedUpsample && !colorEngine.isFotufilm &&
+        (spectralFilmLut == null ||
+            (spectralFilmLut.graph == null && SpektrafilmScannerPass.support(spectralFilmLut.tuning) == 0))
 
     private data class RawTileRenderConfig(
         val context: Context,
@@ -2622,7 +2628,8 @@ class RawDemosaicProcessor {
                     context,
                     spectralFilmStock,
                     spectralFilmPrint,
-                    spectralFilmTuning
+                    spectralFilmTuning,
+                    buildSpatialGraph = true,
                 )
             } else {
                 null
@@ -2673,7 +2680,10 @@ class RawDemosaicProcessor {
             else -> requestedColorEngine
         }
         // Fotufilm prints onto SDR media (upstream: paper output is SDR); it has no HDR reference.
-        val renderHdrReference = includeHdrReference && !colorEngine.isFotufilm
+        // A direct negative scan darkens as scene exposure increases. The synthesized HDR
+        // reference fits an increasing highlight response and cannot extend a negative scan.
+        val scansNegative = spektrafilmLut?.let { it.type == "negative" && it.tuning.scanFilm } == true
+        val renderHdrReference = includeHdrReference && !colorEngine.isFotufilm && !scansNegative
         val normalizedToneMappingParameters = rawToneMappingParameters.normalized()
         val photonHdrRequested = normalizedToneMappingParameters.usePhotonHdr
         val hasReusablePhotonPgtm = if (dngFile != null) {
@@ -2837,7 +2847,14 @@ class RawDemosaicProcessor {
                     measureFlareOnDevice = false,
                 ).frame.spatialSupport
             } ?: 0
-            val tileSupport = maxOf(RAW_TILE_SUPPORT_PX, fotufilmSupport)
+            val spektrafilmSupport = spektrafilmLut?.let { lut ->
+                if (lut.graph != null) {
+                    SpektrafilmGraphToneStage.support(lut, actualWidth, actualHeight)
+                } else {
+                    SpektrafilmScannerPass.support(lut.tuning)
+                }
+            } ?: 0
+            val tileSupport = maxOf(RAW_TILE_SUPPORT_PX + spektrafilmSupport, fotufilmSupport)
             val tileCoreEdge = maxOf(
                 RAW_TILE_MAX_CORE_EDGE_PX - 2 * (tileSupport - RAW_TILE_SUPPORT_PX),
                 RAW_TILE_MIN_FOTUFILM_CORE_EDGE_PX,
@@ -2855,7 +2872,7 @@ class RawDemosaicProcessor {
                 coreEdgePx = (tileCoreEdge / restoredOutputScale).toInt(),
                 supportPx = tileSupport + if (outputGeometry.resample) 3 else 0,
                 cfaPeriod = RawCfaCorrection.repeatPatternDim(actualMetadata.cfaPattern)[0],
-                processingPeriod = if (usesGuidedToneUpsample(outputGeometry, colorEngine)) {
+                processingPeriod = if (usesGuidedToneUpsample(outputGeometry, colorEngine, spektrafilmLut)) {
                     outputGeometry.mgcFinishResolution.processingPeriod
                 } else 1,
             )
@@ -3917,7 +3934,7 @@ class RawDemosaicProcessor {
             // the exact post-matrix 2^EV gain.
             checkGlError("Before LinearRcdPass")
 
-            if (usesGuidedToneUpsample(outputGeometry, colorEngine)) {
+            if (usesGuidedToneUpsample(outputGeometry, colorEngine, spektrafilmLut)) {
                 mgcSharpen.guided.prepare(denoiseProfileTextureId, actualWidth, actualHeight,
                     actualMetadata.whiteBalanceGains, outputGeometry.mgcFinishResolution)
                 renderLinearRcdPass(
@@ -4492,8 +4509,6 @@ class RawDemosaicProcessor {
             } else {
                 1f
             }
-            setupOutputFramebuffer(maximumOutputWidth, maximumOutputHeight)
-
             // One tile's source, developed up to the tone stage's input: CFA upload, demosaic,
             // denoise and the linear profile pass, leaving the result in demosaicTextureId.
             suspend fun prepareTileSource(tile: RawRenderTile) {
@@ -4562,7 +4577,7 @@ class RawDemosaicProcessor {
                     fullImageWidth = config.fullWidth,
                     fullImageHeight = config.fullHeight,
                 )
-                if (usesGuidedToneUpsample(config.outputGeometry, config.colorEngine)) {
+                if (usesGuidedToneUpsample(config.outputGeometry, config.colorEngine, config.spectralFilmLut)) {
                     val resolution = config.outputGeometry.mgcFinishResolution
                     check(working.left % resolution.processingPeriod == 0 &&
                         working.top % resolution.processingPeriod == 0)
@@ -4612,6 +4627,59 @@ class RawDemosaicProcessor {
                 linearOutputFramebufferId = tempFramebuffer
             }
 
+            val tileSpektrafilm = config.spectralFilmLut?.let { lut ->
+                if (lut.graph == null || lut.tuning.halation.boostEv <= 0f) {
+                    lut
+                } else {
+                    val meteringStartNs = System.nanoTime()
+                    val fullSource = RawTileRect(0, 0, config.fullWidth, config.fullHeight)
+                    val outputBounds = config.outputSourceBounds
+                    val meteringTiles = if (outputBounds == Rect(0, 0, config.fullWidth, config.fullHeight)) {
+                        config.tiles
+                    } else {
+                        // The highlight reference belongs to the entire exposed frame. Each
+                        // core is measured once, with a RAW apron around the demosaic input.
+                        RawTilePlanner.plan(
+                            sourceWidth = config.fullWidth,
+                            sourceHeight = config.fullHeight,
+                            outputSourceBounds = fullSource,
+                            rotation = 0,
+                            coreEdgePx = RAW_TILE_MAX_CORE_EDGE_PX,
+                            supportPx = RAW_TILE_SUPPORT_PX,
+                            cfaPeriod = RawCfaCorrection.repeatPatternDim(config.metadata.cfaPattern)[0],
+                        )
+                    }
+                    var maximum = 0f
+                    for (tile in meteringTiles) {
+                        currentCoroutineContext().ensureActive()
+                        prepareTileSource(tile)
+                        val working = tile.sourceWorking
+                        val core = tile.sourceCore
+                        maximum = maxOf(
+                            maximum,
+                            engineTonePass.measureSpectralMaximum(
+                                tileToneInput(config, demosaicTextureId, working),
+                                core.left - working.left,
+                                core.top - working.top,
+                                core.width,
+                                core.height,
+                            ),
+                        )
+                    }
+                    check(maximum.isFinite()) { "Invalid Spektrafilm frame maximum: $maximum" }
+                    if (rawTileTextureWidth != firstWorking.width || rawTileTextureHeight != firstWorking.height) {
+                        releaseTiledRenderFramebuffers()
+                        vgnDemosaicAlgorithm.setTileTexturePoolingEnabled(true)
+                    }
+                    PLog.i(
+                        TAG,
+                        "Spektrafilm tiled highlight reference: tiles=${meteringTiles.size} maximum=$maximum " +
+                            "elapsed=${(System.nanoTime() - meteringStartNs) / 1_000_000}ms",
+                    )
+                    lut.copy(frameMaximum = maximum)
+                }
+            }
+
             // Fotufilm meters the whole frame before any tile develops (Auto Levels, Lab Scan,
             // regional tone): every tile's core is developed to the tone input once and folded
             // into a reduced whole-frame image, then the frame is built from it for all tiles.
@@ -4629,10 +4697,8 @@ class RawDemosaicProcessor {
                         currentCoroutineContext().ensureActive()
                         prepareTileSource(tile)
                         val working = tile.sourceWorking
-                        val cells = meterFotufilmTile(
-                            config = config,
-                            inputTextureId = demosaicTextureId,
-                            working = working,
+                        val cells = engineTonePass.meterFotufilmTile(
+                            input = tileToneInput(config, demosaicTextureId, working),
                             coreLeft = tile.sourceCore.left - working.left,
                             coreTop = tile.sourceCore.top - working.top,
                             coreWidth = tile.sourceCore.width,
@@ -4651,37 +4717,18 @@ class RawDemosaicProcessor {
                 }
             }
 
-            for (tile in config.tiles) {
-                currentCoroutineContext().ensureActive()
-                val tileStartNs = System.nanoTime()
-                val scaledCore = config.outputGeometry.scaleRegion(tile.outputCore)
+            suspend fun developWorkingTile(tile: RawRenderTile): Boolean {
                 val working = tile.sourceWorking
                 val workWidth = working.width
                 val workHeight = working.height
                 prepareTileSource(tile)
-                val localSourceCore = Rect(
-                    tile.sourceCore.left - working.left,
-                    tile.sourceCore.top - working.top,
-                    tile.sourceCore.right - working.left,
-                    tile.sourceCore.bottom - working.top,
-                )
-                val localOutputBounds = localSourceCore.toOutputBounds(config.rotation)
-                check(
-                    localOutputBounds.width() == tile.outputCore.width &&
-                        localOutputBounds.height() == tile.outputCore.height
-                ) {
-                    "RAW tile rotation mapping mismatch: output=${tile.outputCore} " +
-                        "source=${tile.sourceCore}"
-                }
-
-
                 val combinedOutput = renderCombinedPass(
                     metadata = config.metadata,
                     inputTextureId = if (mgcSharpen.guided.isPrepared) mgcSharpen.guided.profileTexture else demosaicTextureId,
                     dcpRenderPlan = config.activeDcpRenderPlan,
                     applyDcpHueSatMap = config.deferDcpHueSatUntilAfterPgtm,
                     profileExposureUniforms = config.profileExposureUniforms,
-                    spectralFilmLut = config.spectralFilmLut,
+                    spectralFilmLut = tileSpektrafilm,
                     fotufilm = tileFotufilm,
                     hncsRenderPlan = config.hncsRenderPlan,
                     lumixRenderPlan = config.lumixRenderPlan,
@@ -4706,7 +4753,7 @@ class RawDemosaicProcessor {
                 )
                 if (combinedOutput == null) {
                     PLog.e(TAG, "Combined tile pass failed at tile=${tile.index}")
-                    return null
+                    return false
                 }
                 setupSharpenFramebuffer(workWidth, workHeight)
                 renderFinalSharpenPass(
@@ -4720,7 +4767,7 @@ class RawDemosaicProcessor {
                         metadata = config.metadata,
                         inputTextureId = demosaicTextureId,
                         dcpRenderPlan = config.activeDcpRenderPlan,
-                        spectralFilmLut = config.spectralFilmLut,
+                        spectralFilmLut = tileSpektrafilm,
                         hncsRenderPlan = config.hncsRenderPlan,
                         lumixRenderPlan = config.lumixRenderPlan,
                         canonRenderPlan = config.canonRenderPlan,
@@ -4740,6 +4787,55 @@ class RawDemosaicProcessor {
                         viewportWidth = workWidth,
                         viewportHeight = workHeight,
                     )
+                }
+                return true
+            }
+
+            // A large optical apron can make distinct output cores share one source rectangle.
+            // Keep those cores consecutive so they can read the same sharpened and HDR textures.
+            val canReuseWorkingTile = tileSpektrafilm?.let { lut ->
+                lut.graph?.let { graph ->
+                    lut.tuning.cameraDiffusion.active || (graph.printing && lut.tuning.enlargerDiffusion.active)
+                }
+            } == true
+            val outputTiles = if (canReuseWorkingTile) {
+                config.tiles.groupBy { it.sourceWorking }.values.flatten()
+            } else {
+                config.tiles
+            }
+            var lastDevelopedWorking: RawTileRect? = null
+            var developedWorkingTiles = 0
+            val tileRenderingStartNs = System.nanoTime()
+            setupOutputFramebuffer(maximumOutputWidth, maximumOutputHeight)
+            for (tile in outputTiles) {
+                currentCoroutineContext().ensureActive()
+                val tileStartNs = System.nanoTime()
+                val scaledCore = config.outputGeometry.scaleRegion(tile.outputCore)
+                val working = tile.sourceWorking
+                val workWidth = working.width
+                val workHeight = working.height
+                val localSourceCore = Rect(
+                    tile.sourceCore.left - working.left,
+                    tile.sourceCore.top - working.top,
+                    tile.sourceCore.right - working.left,
+                    tile.sourceCore.bottom - working.top,
+                )
+                val localOutputBounds = localSourceCore.toOutputBounds(config.rotation)
+                check(
+                    localOutputBounds.width() == tile.outputCore.width &&
+                        localOutputBounds.height() == tile.outputCore.height
+                ) {
+                    "RAW tile rotation mapping mismatch: output=${tile.outputCore} " +
+                        "source=${tile.sourceCore}"
+                }
+                val developWorking = !canReuseWorkingTile || working != lastDevelopedWorking
+                if (developWorking) {
+                    if (!developWorkingTile(tile)) return null
+                    lastDevelopedWorking = working
+                    developedWorkingTiles++
+                }
+
+                if (config.includeHdrReference) {
                     renderOutputPass(
                         rotation = config.rotation,
                         width = workWidth,
@@ -4872,6 +4968,7 @@ class RawDemosaicProcessor {
                     "RAW_TILE_DONE index=${tile.index + 1}/${config.tiles.size} " +
                         "output=${tile.outputCore} source=${tile.sourceCore} work=$working " +
                         "scaled=$scaledCore localCore=$localSourceCore " +
+                        "developed=$developWorking " +
                         "upscale=${if (config.outputGeometry.raisrUpsample) "raisr" else "lanczos"} " +
                         "tookMs=${(System.nanoTime() - tileStartNs) / 1_000_000}",
                 )
@@ -4879,7 +4976,9 @@ class RawDemosaicProcessor {
             completed = true
             PLog.i(
                 TAG,
-                "RAW_TILE_COMPLETE tiles=${config.tiles.size} output=${outputWidth}x$outputHeight",
+                "RAW_TILE_COMPLETE tiles=${config.tiles.size} output=${outputWidth}x$outputHeight " +
+                    "developedWorkingTiles=$developedWorkingTiles reusedCores=${config.tiles.size - developedWorkingTiles} " +
+                    "elapsedMs=${(System.nanoTime() - tileRenderingStartNs) / 1_000_000}",
             )
             return RawTileBitmapResult(
                 sdrBitmap = sdrBitmap,
@@ -7296,51 +7395,40 @@ class RawDemosaicProcessor {
         ) != null
     }
 
-    /** One tile's Fotufilm metering cells, from the same tone input the tile develops from. */
-    private fun meterFotufilmTile(
+    /** Meter from the same profile-corrected source used to develop the tile. */
+    private fun tileToneInput(
         config: RawTileRenderConfig,
         inputTextureId: Int,
         working: RawTileRect,
-        coreLeft: Int,
-        coreTop: Int,
-        coreWidth: Int,
-        coreHeight: Int,
-        cellSize: Int,
-    ): FotufilmMeterCells? {
-        val metadata = config.metadata
-        return engineTonePass.meterFotufilmTile(
-            RawEngineTonePass.Input(
-                textureId = inputTextureId,
-                targetFramebufferId = engineToneFramebufferId,
-                targetTextureId = engineToneTextureId,
-                colorEngine = config.colorEngine,
-                profileToEngineTransform = config.profileToEngineTransform,
-                outputTransform = computeWorkingToOutputTransform(config.engineWorkingColorSpace, ColorSpace.SRGB),
-                globalOriginX = working.left,
-                globalOriginY = working.top,
-                fullImageWidth = config.fullWidth,
-                fullImageHeight = config.fullHeight,
-                width = working.width,
-                height = working.height,
-                toneMappingParameters = config.rawToneMappingParameters,
-                profileExposure = config.profileExposureUniforms,
-                dcpRenderPlan = config.activeDcpRenderPlan,
-                applyDcpHueSatMap = config.deferDcpHueSatUntilAfterPgtm,
-                spectralFilmLut = null,
-                hncsRenderPlan = null,
-                fotufilm = config.fotufilm,
-                bindProfileGainTable = { program ->
-                    bindProfileGainTableMap(
-                        program = program,
-                        metadata = metadata,
-                        applyProfileGainTableMap = config.hasProfileGainTableMap,
-                        profileBaselineExposureOffsetEv = dcpBaselineExposureOffsetOrZero(config.activeDcpRenderPlan),
-                    )
-                },
-            ),
-            coreLeft, coreTop, coreWidth, coreHeight, cellSize,
-        )
-    }
+    ): RawEngineTonePass.Input = RawEngineTonePass.Input(
+        textureId = inputTextureId,
+        targetFramebufferId = engineToneFramebufferId,
+        targetTextureId = engineToneTextureId,
+        colorEngine = config.colorEngine,
+        profileToEngineTransform = config.profileToEngineTransform,
+        outputTransform = computeWorkingToOutputTransform(config.engineWorkingColorSpace, ColorSpace.SRGB),
+        globalOriginX = working.left,
+        globalOriginY = working.top,
+        fullImageWidth = config.fullWidth,
+        fullImageHeight = config.fullHeight,
+        width = working.width,
+        height = working.height,
+        toneMappingParameters = config.rawToneMappingParameters,
+        profileExposure = config.profileExposureUniforms,
+        dcpRenderPlan = config.activeDcpRenderPlan,
+        applyDcpHueSatMap = config.deferDcpHueSatUntilAfterPgtm,
+        spectralFilmLut = config.spectralFilmLut,
+        hncsRenderPlan = null,
+        fotufilm = config.fotufilm,
+        bindProfileGainTable = { program ->
+            bindProfileGainTableMap(
+                program = program,
+                metadata = config.metadata,
+                applyProfileGainTableMap = config.hasProfileGainTableMap,
+                profileBaselineExposureOffsetEv = dcpBaselineExposureOffsetOrZero(config.activeDcpRenderPlan),
+            )
+        },
+    )
 
     private fun needsAdjustmentPass(
         shadowsHighlightsParams: ShadowsHighlightsParams,

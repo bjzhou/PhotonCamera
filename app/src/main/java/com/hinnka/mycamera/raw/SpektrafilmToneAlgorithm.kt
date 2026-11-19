@@ -14,7 +14,6 @@ internal object SpektrafilmToneShader {
         uniform int uSpectralPrintSize;
         uniform float uSpectralInputScale;
         uniform float uSpectralPrintInputScale;
-        uniform vec3 uSpectralNegativeDensityGains;
     """.trimIndent()
 
     /** Maps linear ProPhoto RGB through the film (and print) stages back to linear ProPhoto RGB. */
@@ -51,16 +50,15 @@ internal object SpektrafilmToneShader {
                 spectralLutCoordinate(encodedColor, uSpectralFilmSize)
             ).rgb;
             if (uSpectralPrintSize > 1) {
-                // The film LUT contains normalized CMY densities. Apply the user's
-                // negative-density gain before the independent print/scanner LUT.
-                // Its lattice spans 0..1.5 to cover every supported density gain.
-                vec3 printInput = filmResult * uSpectralNegativeDensityGains / uSpectralPrintInputScale;
+                // The film LUT contains normalized CMY densities. Map those
+                // directly to the independent print/scanner lattice's domain.
+                vec3 printInput = filmResult / uSpectralPrintInputScale;
                 filmResult = texture(
                     uSpectralPrintTexture,
                     spectralLutCoordinate(printInput, uSpectralPrintSize)
                 ).rgb;
             }
-            // Positive film LUTs already include scanning; both paths end in
+            // Direct film LUTs already include scanning; both paths end in
             // encoded ProPhoto RGB and share the same linear output contract.
             return proPhotoToLinear(filmResult);
         }
@@ -109,7 +107,6 @@ internal data class SpectralFilmUniformLocations(
     val printSize: Int,
     val inputScale: Int,
     val printInputScale: Int,
-    val negativeDensityGains: Int,
 ) {
     companion object {
         fun query(program: Int) = SpectralFilmUniformLocations(
@@ -119,14 +116,13 @@ internal data class SpectralFilmUniformLocations(
             printSize = GLES30.glGetUniformLocation(program, "uSpectralPrintSize"),
             inputScale = GLES30.glGetUniformLocation(program, "uSpectralInputScale"),
             printInputScale = GLES30.glGetUniformLocation(program, "uSpectralPrintInputScale"),
-            negativeDensityGains = GLES30.glGetUniformLocation(program, "uSpectralNegativeDensityGains"),
         )
     }
 }
 
 /**
  * Owns the film and print 3D textures of one GL context. Stages are uploaded only when
- * their source asset changes; density tuning only updates uniforms.
+ * their source table changes.
  */
 internal class SpectralFilmStageTextures(filmUnit: Int, printUnit: Int) {
     private val filmTexture = LutTexture(filmUnit, "film")
@@ -139,11 +135,6 @@ internal class SpectralFilmStageTextures(filmUnit: Int, printUnit: Int) {
         GLES30.glUniform1i(locations.printSize, lut?.printTable?.size ?: 1)
         GLES30.glUniform1f(locations.inputScale, lut?.inputScale ?: 1f)
         GLES30.glUniform1f(locations.printInputScale, lut?.printInputScale ?: 1f)
-        val gains = lut?.negativeDensityGains
-        GLES30.glUniform3f(
-            locations.negativeDensityGains,
-            gains?.get(0) ?: 1f, gains?.get(1) ?: 1f, gains?.get(2) ?: 1f,
-        )
     }
 
     fun release() {
@@ -193,8 +184,7 @@ internal class SpectralFilmStageTextures(filmUnit: Int, printUnit: Int) {
                 check(textureId != 0) { "Unable to allocate Spektrafilm $stage texture" }
             }
             textureKey = null
-            // Only allocate/upload when the source asset changes, never for density
-            // adjustments or subsequent frames. Null stages bind a valid 1³ texture.
+            // Only allocate/upload when the source table changes. Null stages bind a valid 1³ texture.
             val buffer = ByteBuffer.allocateDirect(values.size * Float.SIZE_BYTES)
                 .order(ByteOrder.nativeOrder()).asFloatBuffer().apply {
                     put(values)

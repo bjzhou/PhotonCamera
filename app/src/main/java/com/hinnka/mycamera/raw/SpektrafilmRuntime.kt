@@ -23,7 +23,7 @@ internal data class SpectralModelAsset(
     val uncompressedBytes: Int,
 )
 
-internal data class SpectralRuntimeRequest(
+internal class SpectralRuntimeRequest(
     val algorithm: String,
     val upstreamCommit: String,
     val size: Int,
@@ -34,12 +34,42 @@ internal data class SpectralRuntimeRequest(
     val paperName: String,
     val paper: SpectralModelAsset?,
     val positive: Boolean,
+    stock: String,
+    tuning: SpectralFilmTuning,
+    val buildSpatialGraph: Boolean,
 ) {
     private val context = "schema4:$algorithm:$upstreamCommit:ProPhoto RGB:$size:$inputScale:$printInputScale"
     val sharedKey = digest("$context:shared:${shared.sha256}")
     val modelFilmKey = digest("$sharedKey:film:${film.sha256}:positive=$positive")
-    val filmKey = digest("$modelFilmKey:film-stage")
-    val printKey: String? = paper?.let { digest("$modelFilmKey:print-stage:$paperName:${it.sha256}") }
+    val filmOptions = tuning.filmOptions(stock)
+    val printOptions = tuning.printOptions()
+    val scanOptions = tuning.scanOptions(positive || paper != null)
+    val filmDyeOrder = tuning.filmDyeOrder.nativeIndex
+    val paperDyeOrder = tuning.printDyeOrder.nativeIndex
+    private val stockFilm = filmOptions.contentEquals(SpectralFilmTuning.DEFAULT.filmOptions(stock))
+    private val filmVariant = if (stockFilm) "" else ":film=${filmOptions.joinToString()}"
+    private val directNegative = if (!positive && paper == null) ":direct-scan" else ""
+    private val filmDyeVariant = if (filmDyeOrder == 0) "" else ":film-dyes=$filmDyeOrder"
+    private val scanVariant = if (scanOptions.contentEquals(SpectralFilmTuning.DEFAULT.scanOptions(true))) "" else
+        ":scan=${scanOptions.joinToString()}"
+    val filmKey = digest("$modelFilmKey:film-stage$filmVariant$directNegative" +
+        if (paper == null) filmDyeVariant + scanVariant else "")
+    val printKey: String? = paper?.let {
+        val printVariant = if (printOptions.contentEquals(SpectralFilmTuning.DEFAULT.printOptions())) "" else
+            ":print=${printOptions.joinToString()}"
+        // A tuned film uses the stock's full density range. DIR does not enter
+        // the enlarger's uncorrected midgray reference.
+        val printFilmVariant = if (stockFilm) "" else ":full-density-wire:gamma=${tuning.filmGamma}" +
+            ":optics=${filmOptions.sliceArray(6..14).joinToString()}"
+        val paperDyeVariant = if (paperDyeOrder == 0) "" else ":paper-dyes=$paperDyeOrder"
+        digest("$modelFilmKey:print-stage:$paperName:${it.sha256}$printFilmVariant$printVariant$filmDyeVariant$paperDyeVariant$scanVariant")
+    }
+    val needsGlare = paper != null && tuning.glare.active
+    val needsGrain = tuning.grain.active && tuning.grain.sublayers
+    val spatialTablesKey = if (buildSpatialGraph) {
+        digest("$filmKey:$printKey:stages:glare=$needsGlare:grainLayers=$needsGrain")
+    } else null
+    val graphKey = spatialTablesKey?.takeIf { tuning.needsSpatialGraph(paper != null) }
 }
 
 private fun digest(value: String): String = hex(MessageDigest.getInstance("SHA-256").digest(value.toByteArray(Charsets.UTF_8)))
@@ -57,8 +87,17 @@ internal object SpektrafilmNativeBridge {
         paperName: String,
         paperData: ByteArray?,
         positive: Boolean,
+        directScan: Boolean,
         buildFilm: Boolean,
         buildPrint: Boolean,
+        filmOptions: FloatArray,
+        printOptions: FloatArray,
+        filmDyeOrder: Int,
+        paperDyeOrder: Int,
+        scanOptions: FloatArray,
+        buildGraph: Boolean,
+        needsGlare: Boolean,
+        needsGrain: Boolean,
     ): Array<FloatArray>
 }
 
@@ -75,6 +114,7 @@ internal object SpektrafilmRuntime {
     private const val MAX_CACHE_FILE_BYTES = 65L * 65 * 65 * 4 * 4 + 64 * 1024
     private var loadedSharedKey: String? = null
     private var loadedFilmKey: String? = null
+    private var cachedGraph: SpectralFilmGraph? = null
 
     @Synchronized
     fun load(
@@ -82,7 +122,7 @@ internal object SpektrafilmRuntime {
         request: SpectralRuntimeRequest,
         currentFilm: SpectralLutTable?,
         currentPrint: SpectralLutTable?,
-    ): Pair<SpectralLutTable, SpectralLutTable?> {
+    ): Triple<SpectralLutTable, SpectralLutTable?, SpectralFilmGraph?> {
         val started = SystemClock.elapsedRealtime()
         val directory = File(context.cacheDir, CACHE_DIRECTORY)
         val film = currentFilm?.takeIf { it.sourceKey == request.filmKey }
@@ -97,10 +137,14 @@ internal object SpektrafilmRuntime {
         print?.let { cacheFile(directory, it.sourceKey).setLastModified(accessedAt) }
         val buildFilm = film == null
         val buildPrint = request.paper != null && print == null
-        if (!buildFilm && !buildPrint) {
+        // A bypass of the same film and paper can reuse its spatial tables if optics is re-enabled.
+        if (request.spatialTablesKey != null && request.spatialTablesKey != cachedGraph?.sourceKey) cachedGraph = null
+        val graph = request.graphKey?.let { key -> cachedGraph?.takeIf { it.sourceKey == key } }
+        val buildGraph = request.graphKey != null && graph == null
+        if (!buildFilm && !buildPrint && !buildGraph) {
             PLog.d(TAG, "Spektrafilm cacheHit, filmKey=${request.filmKey}, printKey=${request.printKey}, " +
                 "elapsed=${SystemClock.elapsedRealtime() - started}ms, upstream=${request.upstreamCommit}")
-            return requireNotNull(film) to print
+            return Triple(requireNotNull(film), print, graph)
         }
 
         // These temporary arrays live only through generate(). In particular the
@@ -111,12 +155,15 @@ internal object SpektrafilmRuntime {
             val filmBytes = if (sharedChanged || loadedFilmKey != request.modelFilmKey) {
                 loadModel(context, request.film)
             } else null
-            val paperBytes = if (buildPrint) loadModel(context, requireNotNull(request.paper)) else null
+            val paperBytes = if (buildPrint || buildGraph) request.paper?.let { loadModel(context, it) } else null
             val result = SpektrafilmNativeBridge.generate(
                 request.sharedKey, request.modelFilmKey, sharedBytes, filmBytes,
-                request.paperName, paperBytes, request.positive, buildFilm, buildPrint,
+                request.paperName, paperBytes, request.positive, request.paper == null, buildFilm, buildPrint,
+                request.filmOptions, request.printOptions,
+                request.filmDyeOrder, request.paperDyeOrder,
+                request.scanOptions, buildGraph, request.needsGlare, request.needsGrain,
             )
-            require(result.size == 2) { "Invalid native Spektrafilm stage count" }
+            require(result.size == if (buildGraph) 9 else 2) { "Invalid native Spektrafilm stage count" }
             validateGenerated(result[0], request.size, buildFilm)
             validateGenerated(result[1], request.size, buildPrint)
             loadedSharedKey = request.sharedKey
@@ -135,10 +182,13 @@ internal object SpektrafilmRuntime {
         val printResult = print ?: request.printKey?.let { key ->
             SpectralLutTable(key, request.size, generated[1]).also { writeCache(directory, it) }
         }
-        PLog.d(TAG, "Spektrafilm generated, film=$buildFilm, print=$buildPrint, " +
+        val graphResult = if (buildGraph) SpectralFilmGraph(
+            requireNotNull(request.graphKey), request.size, generated,
+        ).also { cachedGraph = it } else graph
+        PLog.d(TAG, "Spektrafilm generated, film=$buildFilm, print=$buildPrint, spatial=$buildGraph, " +
             "filmKey=${request.filmKey}, printKey=${request.printKey}, " +
             "elapsed=${SystemClock.elapsedRealtime() - started}ms, upstream=${request.upstreamCommit}")
-        return filmResult to printResult
+        return Triple(filmResult, printResult, graphResult)
     }
 
     private fun validateGenerated(values: FloatArray, size: Int, built: Boolean) {

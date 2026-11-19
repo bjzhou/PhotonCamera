@@ -817,9 +817,6 @@
     <string name="settings_print_paper">プリント媒体</string>
     <string name="settings_spectral_film_tuning">フィルム調整</string>
     <string name="settings_spectral_film_tuning_description">選択したフィルムストックの色応答を微調整</string>
-    <string name="settings_spectral_film_c_density_gain">シアン濃度</string>
-    <string name="settings_spectral_film_m_density_gain">マゼンタ濃度</string>
-    <string name="settings_spectral_film_y_density_gain">イエロー濃度</string>
     <string name="settings_raw_auto_exposure">自動露出</string>
     <string name="settings_raw_auto_exposure_description">現像時にRAWリニアデータを自動測光し、露出補正を適用</string>
     <string name="settings_raw_min_shutter_speed">低速限界</string>

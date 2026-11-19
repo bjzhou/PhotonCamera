@@ -24,9 +24,9 @@
       "viewingIlluminant": "D50",
       "model": {
         "path": "model/fujifilm_c200.spkm",
-        "sha256": "d4e7ef7d0af7754ee77221e3a6eff674e9823bb05e0c2080c667204583846c77",
-        "bytes": 13702,
-        "uncompressedBytes": 16556
+        "sha256": "f495e79f1c0451174de728980ccdf3f7ed023bfd23008b196799e75e057b9b6f",
+        "bytes": 30478,
+        "uncompressedBytes": 35020
       }
     },
     "fujifilm_pro_400h": {
@@ -35,9 +35,9 @@
       "viewingIlluminant": "D50",
       "model": {
         "path": "model/fujifilm_pro_400h.spkm",
-        "sha256": "4834bdf00008e584f3a2e267a3dc40a731f5daf39afecab91b37d21679c9f7db",
-        "bytes": 13664,
-        "uncompressedBytes": 16556
+        "sha256": "2926e8309a347936905ad7f27122658e88cf4dfba092400b301e66fc5d0ef5d8",
+        "bytes": 29595,
+        "uncompressedBytes": 35020
       }
     },
     "fujifilm_provia_100f": {
@@ -46,9 +46,9 @@
       "viewingIlluminant": "D50",
       "model": {
         "path": "model/fujifilm_provia_100f.spkm",
-        "sha256": "38d4058e4eed31d03ab72df3e8b2412b936b7db4b182454a810d0a19aba47fd8",
-        "bytes": 13092,
-        "uncompressedBytes": 16010
+        "sha256": "b83efc6ad79a28db3e0f0279aa6583e288cdfc8abb99eb6042cc57791ad27195",
+        "bytes": 30382,
+        "uncompressedBytes": 34474
       }
     },
     "fujifilm_velvia_100": {
@@ -57,9 +57,9 @@
       "viewingIlluminant": "D50",
       "model": {
         "path": "model/fujifilm_velvia_100.spkm",
-        "sha256": "b8e5060532944c377cd638fdf2ca9dbb03119cdd2410a78621d0719f15dd8047",
-        "bytes": 12973,
-        "uncompressedBytes": 16010
+        "sha256": "c586cdf53accefae52c78f778b6ff0e6b6b79af0b6942236a751f67fa8bfe78f",
+        "bytes": 29984,
+        "uncompressedBytes": 34474
       }
     },
     "fujifilm_xtra_400": {
@@ -68,9 +68,9 @@
       "viewingIlluminant": "D50",
       "model": {
         "path": "model/fujifilm_xtra_400.spkm",
-        "sha256": "341d8e6d76a33f2a26b43771f4080320f3c739e86da3328c3ada56dc9024cfad",
-        "bytes": 13741,
-        "uncompressedBytes": 16556
+        "sha256": "b141ef97ca5861fd2d0601be6e3c246db21a28806f47294939b464aeebaa63aa",
+        "bytes": 30737,
+        "uncompressedBytes": 35020
       }
     },
     "kodak_ektachrome_100": {
@@ -79,9 +79,9 @@
       "viewingIlluminant": "D50",
       "model": {
         "path": "model/kodak_ektachrome_100.spkm",
-        "sha256": "00adceae8a1b205f134e13d358fe1ad28349bcaa7fb6e36b6c4c06899083fb6d",
-        "bytes": 13015,
-        "uncompressedBytes": 16010
+        "sha256": "4f493856ddf167c8158801810cdde888795adff6a3d63a51625172fd0263734d",
+        "bytes": 30245,
+        "uncompressedBytes": 34474
       }
     },
     "kodak_ektar_100": {
@@ -90,9 +90,9 @@
       "viewingIlluminant": "D50",
       "model": {
         "path": "model/kodak_ektar_100.spkm",
-        "sha256": "245946ae79ffab00ed60edf5cbd466c765050fcffb3f7838f0c1f5770b48ca9f",
-        "bytes": 13638,
-        "uncompressedBytes": 16556
+        "sha256": "d334498b689ded30f67dd89f3f6efbb7c779aa3faab8fb2beb8ddf485d7e53fb",
+        "bytes": 29482,
+        "uncompressedBytes": 35020
       }
     },
     "kodak_gold_200": {
@@ -101,9 +101,9 @@
       "viewingIlluminant": "D50",
       "model": {
         "path": "model/kodak_gold_200.spkm",
-        "sha256": "3c546d8dfd05a94b0799b8f98d30a744d4fb2279b595ed3695248942a15a4492",
-        "bytes": 13620,
-        "uncompressedBytes": 16556
+        "sha256": "472cf6a621b7a666b90310ccbaca804b3dba6568a3396133731a7c44a93987c2",
+        "bytes": 29512,
+        "uncompressedBytes": 35020
       }
     },
     "kodak_kodachrome_64": {
@@ -112,9 +112,9 @@
       "viewingIlluminant": "D50",
       "model": {
         "path": "model/kodak_kodachrome_64.spkm",
-        "sha256": "44df3fa97480e9a9cb07b03b8001eb56720a1c516f034a11b15aeebb7d359a99",
-        "bytes": 12818,
-        "uncompressedBytes": 16010
+        "sha256": "ff0ca03cd90000f39ce9060ded04bfc45d83c736a5bacc24c84f95d79a9a6813",
+        "bytes": 30281,
+        "uncompressedBytes": 34474
       }
     },
     "kodak_portra_160": {
@@ -123,9 +123,9 @@
       "viewingIlluminant": "D50",
       "model": {
         "path": "model/kodak_portra_160.spkm",
-        "sha256": "9d7669fd3991d6afc4142ea450ccff6b3a8234a3829451a7f897ffa03bd0bf2e",
-        "bytes": 13611,
-        "uncompressedBytes": 16556
+        "sha256": "fdc3d01fe0a15e7460d8676d15595788836c3de40494651245e54d4f5c91e422",
+        "bytes": 29033,
+        "uncompressedBytes": 35020
       }
     },
     "kodak_portra_400": {
@@ -134,9 +134,9 @@
       "viewingIlluminant": "D50",
       "model": {
         "path": "model/kodak_portra_400.spkm",
-        "sha256": "0e647e105a7c81e05dfe558e2892b9c76d8dce5621cb4c898c44ddab7559e601",
-        "bytes": 13655,
-        "uncompressedBytes": 16556
+        "sha256": "72657bbde5f21b3820de9bd3b7e8f6010bc6ffad9d64c53deca6ba58edcc6505",
+        "bytes": 29409,
+        "uncompressedBytes": 35020
       }
     },
     "kodak_portra_800": {
@@ -145,9 +145,9 @@
       "viewingIlluminant": "D50",
       "model": {
         "path": "model/kodak_portra_800.spkm",
-        "sha256": "f3542ea69dc4a61618aa20276c67093e38794b2a2f1222b82a10a0c9382fe2c4",
-        "bytes": 13655,
-        "uncompressedBytes": 16556
+        "sha256": "e81edaf1b753c24b781f0422bb0a672ce9e7d1d7eed8bccc965c6fafd5dfa7c6",
+        "bytes": 29742,
+        "uncompressedBytes": 35020
       }
     },
     "kodak_portra_800_push1": {
@@ -156,9 +156,9 @@
       "viewingIlluminant": "D50",
       "model": {
         "path": "model/kodak_portra_800_push1.spkm",
-        "sha256": "661a278825375a93b6194bf81484b7e675c57f834274eb098fc6cd582f9321d2",
-        "bytes": 13684,
-        "uncompressedBytes": 16556
+        "sha256": "ae1e8904a7901a52007499eb6c51fbe81c0b79f4dd702a1b208e87d19b7ddfb4",
+        "bytes": 30017,
+        "uncompressedBytes": 35020
       }
     },
     "kodak_portra_800_push2": {
@@ -167,9 +167,9 @@
       "viewingIlluminant": "D50",
       "model": {
         "path": "model/kodak_portra_800_push2.spkm",
-        "sha256": "0c3ab6f729bc2f6697902e10f7ad14c97a225d3c01c421debf938239d81d8354",
-        "bytes": 13694,
-        "uncompressedBytes": 16556
+        "sha256": "d6021fb19b45b8c165a7f0365c16495bb89d5058a0978f769c27ca79bc0b4929",
+        "bytes": 30372,
+        "uncompressedBytes": 35020
       }
     },
     "kodak_ultramax_400": {
@@ -178,9 +178,9 @@
       "viewingIlluminant": "D50",
       "model": {
         "path": "model/kodak_ultramax_400.spkm",
-        "sha256": "eeb9651c1e87bb93b9d3cfbc7f3cbb78cba2c110787f69727d51712bc6b1a74a",
-        "bytes": 13648,
-        "uncompressedBytes": 16556
+        "sha256": "5f00047bfd7cdf3227bb0a193001903a1c57fbc8eb7180d56c20f7687ef793e6",
+        "bytes": 29645,
+        "uncompressedBytes": 35020
       }
     },
     "kodak_verita_200d": {
@@ -189,9 +189,9 @@
       "viewingIlluminant": "D50",
       "model": {
         "path": "model/kodak_verita_200d.spkm",
-        "sha256": "e9e5af0b493452895913ef894b355ffc85f52016b431924175c9fa7dbd61789a",
-        "bytes": 13651,
-        "uncompressedBytes": 16556
+        "sha256": "5adc339869058b5828d1b36ef0ce4f7414d4aae9fdfa08256dfee816c9bd8c8a",
+        "bytes": 29560,
+        "uncompressedBytes": 35020
       }
     },
     "kodak_vision3_200t": {
@@ -200,9 +200,9 @@
       "viewingIlluminant": "D50",
       "model": {
         "path": "model/kodak_vision3_200t.spkm",
-        "sha256": "04c0920e64577173d07f19ddcd654803bbacd886718ddae5b43c8f71aa56295a",
-        "bytes": 13782,
-        "uncompressedBytes": 16556
+        "sha256": "a59caa68219007df034daefd9c3e559dd5e357966c07831e4af94a84f8fda4e6",
+        "bytes": 29957,
+        "uncompressedBytes": 35020
       }
     },
     "kodak_vision3_250d": {
@@ -211,9 +211,9 @@
       "viewingIlluminant": "D50",
       "model": {
         "path": "model/kodak_vision3_250d.spkm",
-        "sha256": "32b7abf94b009c6a5b23b5c3e3f8ec8ad877683c4fdba845e8e7b117a9624d5a",
-        "bytes": 13829,
-        "uncompressedBytes": 16556
+        "sha256": "f0924ad3c5776839cba64923e020939cb991f9561fc8ef4c11ceebcad13ebd4e",
+        "bytes": 30629,
+        "uncompressedBytes": 35020
       }
     },
     "kodak_vision3_500t": {
@@ -222,9 +222,9 @@
       "viewingIlluminant": "D50",
       "model": {
         "path": "model/kodak_vision3_500t.spkm",
-        "sha256": "0cec945418953e9e312a613c6f55a6cf8bdba0f756b5b418ab893dc5bc400e22",
-        "bytes": 13802,
-        "uncompressedBytes": 16556
+        "sha256": "aaf8bfe0b33b5799e478260454dd103fa79f4649ba3403acbd5b299452f71174",
+        "bytes": 30596,
+        "uncompressedBytes": 35020
       }
     },
     "kodak_vision3_50d": {
@@ -233,9 +233,9 @@
       "viewingIlluminant": "D50",
       "model": {
         "path": "model/kodak_vision3_50d.spkm",
-        "sha256": "a0273756d668a64481fd20fb40e616a3b3044ed78e3b3d17012c5bc92def8f71",
-        "bytes": 13723,
-        "uncompressedBytes": 16556
+        "sha256": "09c7bd2440d842682592d2a1ba90e433cea6b1a66bd1594dca69f97e8fb28d34",
+        "bytes": 29485,
+        "uncompressedBytes": 35020
       }
     }
   },
@@ -244,72 +244,72 @@
       "viewingIlluminant": "D50",
       "model": {
         "path": "model/fujifilm_crystal_archive_typeii.spkm",
-        "sha256": "372b253d1f6e7109808da0bdae920a2462dd0ca5e34a644f2d82661b24a3f9c9",
-        "bytes": 6188,
-        "uncompressedBytes": 8542
+        "sha256": "eed5034f33cfc331f8061056f0833a37fc6ac5e59fd95d647151a1663cc99ebc",
+        "bytes": 11900,
+        "uncompressedBytes": 14715
       }
     },
     "kodak_2383": {
       "viewingIlluminant": "K75P",
       "model": {
         "path": "model/kodak_2383.spkm",
-        "sha256": "c8c39fcba1e592b11b240e94e145067a801c0a38dbc798c91d92253b354b9407",
-        "bytes": 6426,
-        "uncompressedBytes": 8542
+        "sha256": "0ac269230956ee9334ef91fc136e45d069c9d2d30a6a5b32ede43860bfabdee3",
+        "bytes": 12205,
+        "uncompressedBytes": 14715
       }
     },
     "kodak_2393": {
       "viewingIlluminant": "K75P",
       "model": {
         "path": "model/kodak_2393.spkm",
-        "sha256": "332d778373f08d4a11e43e7a89be77542e93c25fe4c6f6ded09fc482eecace07",
-        "bytes": 6271,
-        "uncompressedBytes": 8542
+        "sha256": "d24a59a403fe6e266a01961a0aaa8e1595d4f222b2b807a80471e8d6a8a7b650",
+        "bytes": 12014,
+        "uncompressedBytes": 14715
       }
     },
     "kodak_ektacolor_edge": {
       "viewingIlluminant": "D50",
       "model": {
         "path": "model/kodak_ektacolor_edge.spkm",
-        "sha256": "f33d568b6e9cac7c8c7ca0e69187b61c882448f6af0fdb71d486805039ab4858",
-        "bytes": 6044,
-        "uncompressedBytes": 8542
+        "sha256": "b7fe77e50748502a02fc74fce68945dc57a3a8081f437a3c6b7d4791dd486466",
+        "bytes": 11776,
+        "uncompressedBytes": 14715
       }
     },
     "kodak_endura_premier": {
       "viewingIlluminant": "D50",
       "model": {
         "path": "model/kodak_endura_premier.spkm",
-        "sha256": "aec10298877b80248e1e1686398c06963bcc63518603a17b3107fd1e5ab51506",
-        "bytes": 5989,
-        "uncompressedBytes": 8542
+        "sha256": "3cd476766480dd827001a5f464de75c3b7ec3001424d2c504af5d0aa5329edd4",
+        "bytes": 11703,
+        "uncompressedBytes": 14715
       }
     },
     "kodak_portra_endura": {
       "viewingIlluminant": "D50",
       "model": {
         "path": "model/kodak_portra_endura.spkm",
-        "sha256": "019c38eaa13b37f351923b802be5fc8ea9ca392eeea3a0440cbffe70f12306c8",
-        "bytes": 6085,
-        "uncompressedBytes": 8542
+        "sha256": "59f31c757a1334c271fc7fd4ecfa9e5d53f0a4536922573fc48b797b2de74aa5",
+        "bytes": 11831,
+        "uncompressedBytes": 14715
       }
     },
     "kodak_supra_endura": {
       "viewingIlluminant": "D50",
       "model": {
         "path": "model/kodak_supra_endura.spkm",
-        "sha256": "e894d2ddc1cf37e33090eb08446e935f469bc50b3ad91d1d1cfac7e5901c5d39",
-        "bytes": 6080,
-        "uncompressedBytes": 8542
+        "sha256": "8d278445277ccb208f93f0ea0479599b26872a3458d98e17bfe460891427e184",
+        "bytes": 11792,
+        "uncompressedBytes": 14715
       }
     },
     "kodak_ultra_endura": {
       "viewingIlluminant": "D50",
       "model": {
         "path": "model/kodak_ultra_endura.spkm",
-        "sha256": "fb0cb92259aae2552fc1a1f570a9d555ce8afe1601877fc5b163b8da4df7342b",
-        "bytes": 6050,
-        "uncompressedBytes": 8542
+        "sha256": "33a2b7eaf5d4186168e85914e99c2cbd6fe9b7dfc13723efdb2adb1f2242ec0f",
+        "bytes": 11761,
+        "uncompressedBytes": 14715
       }
     }
   }

@@ -166,8 +166,10 @@ data class GalleryMediaEntity(
     val spectralFilmEnabled: Boolean,
     val spectralFilmStock: String?,
     val spectralFilmPrint: String?,
-    val spectralFilmCDensityGain: Float,
-    val spectralFilmMDensityGain: Float,
-    val spectralFilmYDensityGain: Float,
+    // Retained for compatibility with the existing Gallery Room schema.
+    val spectralFilmCDensityGain: Float = 1f,
+    val spectralFilmMDensityGain: Float = 1f,
+    val spectralFilmYDensityGain: Float = 1f,
+    val spectralFilmParameters: String?,
     val fotufilmDocument: String?
 )

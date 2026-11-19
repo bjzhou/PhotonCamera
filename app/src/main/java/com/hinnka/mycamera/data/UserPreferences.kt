@@ -612,7 +612,7 @@ class UserPreferences internal constructor(
     }) { p, v -> p[K.HIDDEN_FOCAL_LENGTHS] = v.joinToString(",") }
     var rawSpectralFilmTuningsByStock: Map<String, SpectralFilmTuning> by stored({ p ->
         parseSpectralFilmTunings(p[K.RAW_SPECTRAL_FILM_TUNINGS_BY_STOCK_KEY])
-    }) { p, v -> p[K.RAW_SPECTRAL_FILM_TUNINGS_BY_STOCK_KEY] = serializeSpectralFilmTunings(v.mapValues { it.value.normalized() }) }
+    }) { p, v -> p[K.RAW_SPECTRAL_FILM_TUNINGS_BY_STOCK_KEY] = serializeSpectralFilmTunings(v) }
 
     var customCaptureSettings by json(
         "custom_capture_settings_v1",

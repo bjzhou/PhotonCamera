@@ -118,31 +118,22 @@ internal fun serializeMapFloat(map: Map<String, Float>): String {
 
 internal fun parseSpectralFilmTunings(value: String?): Map<String, SpectralFilmTuning> {
     if (value.isNullOrEmpty()) return emptyMap()
-    return value.split(",")
-        .mapNotNull { entry ->
-            val parts = entry.split(":")
-            if (parts.size == 4) {
-                val c = parts[1].toFloatOrNull()
-                val m = parts[2].toFloatOrNull()
-                val y = parts[3].toFloatOrNull()
-                if (c != null && m != null && y != null) {
-                    parts[0] to SpectralFilmTuning(c, m, y).normalized()
-                } else {
-                    null
-                }
-            } else {
-                null
-            }
+    val stocks = runCatching { JSONObject(value) }.getOrNull() ?: return emptyMap()
+    return buildMap {
+        for (stock in stocks.keys()) {
+            val parameters = stocks.optJSONObject(stock)?.optString("parameters")?.takeIf { it.isNotEmpty() }
+            val tuning = SpectralFilmTuning.decodeParameters(parameters)
+            if (tuning != SpectralFilmTuning.DEFAULT) put(stock, tuning)
         }
-        .toMap()
-}
-
-internal fun serializeSpectralFilmTunings(map: Map<String, SpectralFilmTuning>): String {
-    return map.entries.joinToString(",") { (stock, tuning) ->
-        val t = tuning.normalized()
-        "$stock:${t.cDensityGain}:${t.mDensityGain}:${t.yDensityGain}"
     }
 }
+
+internal fun serializeSpectralFilmTunings(map: Map<String, SpectralFilmTuning>): String = JSONObject().apply {
+    map.forEach { (stock, tuning) ->
+        val parameters = tuning.encodeParameters() ?: return@forEach
+        put(stock, JSONObject().put("parameters", parameters))
+    }
+}.toString()
 
 internal fun parseLensIds(value: String?): List<String> {
     if (value.isNullOrBlank()) return emptyList()

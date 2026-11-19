@@ -18,7 +18,6 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
@@ -51,7 +50,6 @@ import com.hinnka.mycamera.raw.RawWhiteLevelCorrection
 import com.hinnka.mycamera.raw.RawNoiseProfileInfo
 import com.hinnka.mycamera.raw.SpectralFilmSelection
 import com.hinnka.mycamera.raw.SpectralFilmUiInfo
-import com.hinnka.mycamera.raw.SpectralFilmTuning
 import com.hinnka.mycamera.raw.fotufilm.FotufilmDocument
 import kotlin.math.roundToInt
 import com.hinnka.mycamera.ui.settings.DropdownSettingItem
@@ -481,10 +479,29 @@ fun RawRenderingEngineSettingsPanel(
                 },
             )
             Spacer(modifier = Modifier.height(16.dp))
-            if (!isPositiveFilm) {
+            if (!isPositiveFilm && spectralFilmSelection != null) {
+                SwitchSettingItem(
+                    title = stringResource(R.string.spektrafilm_scan_film),
+                    description = stringResource(R.string.spektrafilm_scan_film_description),
+                    checked = spectralFilmSelection.tuning.scanFilm,
+                    onCheckedChange = { scanFilm ->
+                        onSpectralFilmSelectionChange(
+                            spectralFilmSelection.copy(tuning = spectralFilmSelection.tuning.copy(scanFilm = scanFilm))
+                        )
+                    },
+                )
+            }
+            if (!isPositiveFilm && spectralFilmSelection?.tuning?.scanFilm != true) {
                 RawSpectralPrintSelector(
                     selectedPrint = spectralFilmPrint,
                     onSelectPrint = onSpectralFilmPrintChange,
+                )
+                Spacer(modifier = Modifier.height(16.dp))
+            }
+            if (showToneMappingControls && spectralFilmSelection != null) {
+                SpektrafilmControls(
+                    selection = spectralFilmSelection,
+                    onSelectionChange = onSpectralFilmSelectionChange,
                 )
                 Spacer(modifier = Modifier.height(16.dp))
             }
@@ -504,9 +521,7 @@ fun RawRenderingEngineSettingsPanel(
             RawToneMappingControls(
                 rawRenderingEngine = rawRenderingEngine,
                 params = rawToneMappingParameters.normalized(),
-                spectralFilmSelection = spectralFilmSelection,
                 onParamsChange = onRawToneMappingParametersChange,
-                onSpectralFilmSelectionChange = onSpectralFilmSelectionChange,
                 onAdjustmentStart = onAdjustmentStart,
                 onAdjustmentEnd = onAdjustmentEnd,
             )
@@ -1073,39 +1088,11 @@ fun RawEngineToneCurveControls(
 private fun RawToneMappingControls(
     rawRenderingEngine: RawRenderingEngine,
     params: RawToneMappingParameters,
-    spectralFilmSelection: SpectralFilmSelection?,
     onParamsChange: (RawToneMappingParameters) -> Unit,
-    onSpectralFilmSelectionChange: (SpectralFilmSelection?) -> Unit,
     onAdjustmentStart: () -> Unit,
     onAdjustmentEnd: () -> Unit
 ) {
-    var localSpectralFilmTuning by remember(spectralFilmSelection?.id) {
-        mutableStateOf(spectralFilmSelection?.tuning ?: SpectralFilmTuning.DEFAULT)
-    }
-    var spectralFilmTuningExpanded by remember(spectralFilmSelection?.id) { mutableStateOf(false) }
-
-    LaunchedEffect(spectralFilmSelection) {
-        localSpectralFilmTuning = spectralFilmSelection?.tuning ?: SpectralFilmTuning.DEFAULT
-    }
-
-    fun updateSpectralFilmTuning(value: SpectralFilmTuning) {
-        onAdjustmentStart()
-        localSpectralFilmTuning = value
-    }
-
-    fun commitSpectralFilmDensityGains() {
-        val selection = spectralFilmSelection ?: return
-        onSpectralFilmSelectionChange(selection.copy(tuning = localSpectralFilmTuning.normalized()))
-        onAdjustmentEnd()
-    }
-
     when (rawRenderingEngine) {
-        RawRenderingEngine.AdobeCurve,
-        RawRenderingEngine.Hncs,
-        RawRenderingEngine.Lumix,
-        RawRenderingEngine.Canon,
-        RawRenderingEngine.Leica -> Unit
-
         RawRenderingEngine.AgX,
         RawRenderingEngine.DarktableFilmic -> {
             RawEngineToneCurveControls(
@@ -1117,91 +1104,7 @@ private fun RawToneMappingControls(
             )
         }
 
-        RawRenderingEngine.Spektrafilm -> {
-            if (!SpectralFilmUiInfo.isPositiveFilm(spectralFilmSelection?.id)) {
-                RawSpectralFilmTuningHeader(
-                    expanded = spectralFilmTuningExpanded,
-                    onClick = { spectralFilmTuningExpanded = !spectralFilmTuningExpanded }
-                )
-                if (spectralFilmTuningExpanded) {
-                    SliderSettingItem(
-                        title = stringResource(R.string.settings_spectral_film_c_density_gain),
-                        value = localSpectralFilmTuning.cDensityGain,
-                        valueRange = SpectralFilmTuning.MIN_DENSITY_GAIN..SpectralFilmTuning.MAX_DENSITY_GAIN,
-                        resetValue = 1f,
-                        valueTextFormatter = { "${(it * 100f).roundToInt()}%" },
-                        onValueChange = {
-                            updateSpectralFilmTuning(localSpectralFilmTuning.copy(cDensityGain = it))
-                        },
-                        onValueChangeFinished = ::commitSpectralFilmDensityGains
-                    )
-                    SliderSettingItem(
-                        title = stringResource(R.string.settings_spectral_film_m_density_gain),
-                        value = localSpectralFilmTuning.mDensityGain,
-                        valueRange = SpectralFilmTuning.MIN_DENSITY_GAIN..SpectralFilmTuning.MAX_DENSITY_GAIN,
-                        resetValue = 1f,
-                        valueTextFormatter = { "${(it * 100f).roundToInt()}%" },
-                        onValueChange = {
-                            updateSpectralFilmTuning(localSpectralFilmTuning.copy(mDensityGain = it))
-                        },
-                        onValueChangeFinished = ::commitSpectralFilmDensityGains
-                    )
-                    SliderSettingItem(
-                        title = stringResource(R.string.settings_spectral_film_y_density_gain),
-                        value = localSpectralFilmTuning.yDensityGain,
-                        valueRange = SpectralFilmTuning.MIN_DENSITY_GAIN..SpectralFilmTuning.MAX_DENSITY_GAIN,
-                        resetValue = 1f,
-                        valueTextFormatter = { "${(it * 100f).roundToInt()}%" },
-                        onValueChange = {
-                            updateSpectralFilmTuning(localSpectralFilmTuning.copy(yDensityGain = it))
-                        },
-                        onValueChangeFinished = ::commitSpectralFilmDensityGains
-                    )
-                }
-                Spacer(modifier = Modifier.height(8.dp))
-            }
-        }
-
         else -> Unit
-    }
-}
-
-@Composable
-private fun RawSpectralFilmTuningHeader(
-    expanded: Boolean,
-    onClick: () -> Unit
-) {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clip(RoundedCornerShape(8.dp))
-            .clickable(onClick = onClick)
-            .padding(vertical = 10.dp),
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        Column(modifier = Modifier.weight(1f)) {
-            Text(
-                text = stringResource(R.string.settings_spectral_film_tuning),
-                color = Color.White,
-                fontSize = 16.sp,
-                fontWeight = FontWeight.Normal
-            )
-            Spacer(modifier = Modifier.height(4.dp))
-            Text(
-                text = stringResource(R.string.settings_spectral_film_tuning_description),
-                color = Color.White.copy(alpha = 0.55f),
-                fontSize = 13.sp,
-                lineHeight = 18.sp
-            )
-        }
-        Icon(
-            imageVector = AppIcons.ChevronRight,
-            contentDescription = null,
-            tint = Color.White.copy(alpha = 0.75f),
-            modifier = Modifier
-                .size(22.dp)
-                .rotate(if (expanded) 90f else 0f)
-        )
     }
 }
 
@@ -2366,8 +2269,8 @@ fun RawSpectralFilmSelector(
                                 .clip(RoundedCornerShape(12.dp))
                                 .background(if (isSelected) AccentColor.copy(alpha = 0.15f) else Color.Transparent)
                                 .clickable {
-                                    onSelectFilm(film)
                                     showSheet = false
+                                    if (!isSelected) onSelectFilm(film)
                                 }
                                 .padding(16.dp),
                             verticalAlignment = Alignment.CenterVertically,
@@ -2475,8 +2378,8 @@ fun RawSpectralPrintSelector(
                                 .clip(RoundedCornerShape(12.dp))
                                 .background(if (isSelected) AccentColor.copy(alpha = 0.15f) else Color.Transparent)
                                 .clickable {
-                                    onSelectPrint(print)
                                     showSheet = false
+                                    if (!isSelected) onSelectPrint(print)
                                 }
                                 .padding(16.dp),
                             verticalAlignment = Alignment.CenterVertically,

@@ -55,10 +55,13 @@ DensityWire measureDensityWire(const Filming& film) {
 }
 
 std::vector<float> generateFilmLut(const Filming& film, const DensityWire& wire,
-                                  const Scanner* positiveScanner, int size) {
+                                  const Scanner* scanner, int size, double exposureEv) {
+    const double exposure = std::exp2(exposureEv);
     return generate(size, [&](int r, int g, int b) {
-        Vec3 value = film.develop(linearInput(r, g, b, size));
-        if (positiveScanner) return positiveScanner->scan(value);
+        Vec3 input = linearInput(r, g, b, size);
+        for (double& channel : input) channel *= exposure;
+        Vec3 value = film.develop(input);
+        if (scanner) return scanner->scan(value);
         for (int c = 0; c < 3; ++c)
             value[c] = (value[c] - wire.minimum[c]) / (wire.maximum[c] - wire.minimum[c]);
         return value;

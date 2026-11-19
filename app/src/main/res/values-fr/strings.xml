@@ -1127,9 +1127,6 @@
     <string name="settings_print_paper">Support d\'impression</string>
     <string name="settings_spectral_film_tuning">Réglage de la pellicule</string>
     <string name="settings_spectral_film_tuning_description">Affine la réponse colorimétrique de la pellicule sélectionnée.</string>
-    <string name="settings_spectral_film_c_density_gain">Densité cyan</string>
-    <string name="settings_spectral_film_m_density_gain">Densité magenta</string>
-    <string name="settings_spectral_film_y_density_gain">Densité jaune</string>
     <string name="settings_raw_auto_exposure">Exposition automatique</string>
     <string name="settings_raw_auto_exposure_description">Mesure automatiquement les données RAW linéaires pendant le développement et applique une correction d\'exposition.</string>
     <string name="settings_raw_min_shutter_speed">Vitesse d\'obturation minimale</string>

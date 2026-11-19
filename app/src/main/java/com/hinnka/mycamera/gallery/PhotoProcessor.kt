@@ -33,7 +33,6 @@ import com.hinnka.mycamera.raw.RawMetadata
 import com.hinnka.mycamera.raw.RawPhotonHdrMetadata
 import com.hinnka.mycamera.raw.RawMgcTuningSnr
 import com.hinnka.mycamera.raw.RawNoiseProfileManager
-import com.hinnka.mycamera.raw.SpectralFilmTuning
 import com.hinnka.mycamera.utils.BitmapUtils
 import com.hinnka.mycamera.raw.fotufilm.FotufilmDocumentStorage
 import com.hinnka.mycamera.utils.PLog
@@ -761,11 +760,7 @@ class PhotoProcessor(
             rawPhysicalOutputSize = RawDigitalZoomResampling.readPhysicalSize(metadata.customProperties),
             spectralFilmStock = metadata.spectralFilmStock,
             spectralFilmPrint = metadata.spectralFilmPrint,
-            spectralFilmTuning = SpectralFilmTuning(
-                cDensityGain = metadata.spectralFilmCDensityGain,
-                mDensityGain = metadata.spectralFilmMDensityGain,
-                yDensityGain = metadata.spectralFilmYDensityGain
-            ),
+            spectralFilmTuning = metadata.decodeSpectralFilmTuning(),
             fotufilmDocument = FotufilmDocumentStorage.decode(metadata.fotufilmDocument, "photo metadata")
         ) ?: return@withContext null
         prepareUltraHdrSourceFromRawResult(
@@ -827,11 +822,7 @@ class PhotoProcessor(
             rawPhysicalOutputSize = RawDigitalZoomResampling.readPhysicalSize(metadata.customProperties),
             spectralFilmStock = metadata.spectralFilmStock,
             spectralFilmPrint = metadata.spectralFilmPrint,
-            spectralFilmTuning = SpectralFilmTuning(
-                cDensityGain = metadata.spectralFilmCDensityGain,
-                mDensityGain = metadata.spectralFilmMDensityGain,
-                yDensityGain = metadata.spectralFilmYDensityGain
-            ),
+            spectralFilmTuning = metadata.decodeSpectralFilmTuning(),
             fotufilmDocument = FotufilmDocumentStorage.decode(metadata.fotufilmDocument, "photo metadata"),
             onMetadata = onRawMetadata
         )

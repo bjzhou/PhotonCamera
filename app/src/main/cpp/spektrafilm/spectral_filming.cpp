@@ -1,15 +1,31 @@
 // Port of Spektrafilm 0.3.4 filming, Hanatos adaptation and DIR chemistry.
 // Upstream commit 3bb2c2d2801ff68b92019cf1dbcbb133d60832bc; see LICENSE.spektrafilm.
 #include "spectral_filming.h"
+#include "spectral_gamut.h"
+#include "spectral_mallett_basis.h"
 
 #include <algorithm>
 #include <cmath>
 #include <limits>
+#include <memory>
 #include <stdexcept>
 
 namespace spektrafilm {
 namespace {
 using Vec2 = std::array<double, 2>;
+
+constexpr std::array<double, 9> proPhotoToSrgb{
+    2.036491724209688, -0.7375906525094321, -0.2992598688901142,
+    -0.2257179790832855, 1.2231765312786034, 0.002725224767466494,
+    -0.010545128632237163, -0.1348798497250494, 1.1452101524691205,
+};
+
+Vec3 multiply(const std::array<double, 9>& matrix, const Vec3& rgb) {
+    Vec3 result{};
+    for (int row = 0; row < 3; ++row)
+        for (int c = 0; c < 3; ++c) result[row] += matrix[row * 3 + c] * rgb[c];
+    return result;
+}
 
 const std::vector<double>& data(const DataSet& set, const char* key, size_t size = 0) {
     auto found = set.find(key);
@@ -134,7 +150,7 @@ int reflectSpectral(int index, int size) {
 }
 }  // namespace
 
-Filming::Filming(const DataSet& shared, const DataSet& film) {
+Filming::Filming(const DataSet& shared, const DataSet& film, const SpectralOptics& optics) {
     const auto shape = fixed<3>(shared, "hanatos_shape");
     tcSize_ = int(shape[0]);
     const int wavelengths = int(shape[2]);
@@ -147,86 +163,103 @@ Filming::Filming(const DataSet& shared, const DataSet& film) {
     if (locus.size() < 8 || locus.size()%2) throw std::invalid_argument("Invalid spectral locus");
     const auto& flags = data(film, "filming_flags", 6);
     positive_ = flags[0] != 0;
-    dirActive_ = flags[4] != 0;
+    stockDirActive_ = flags[4] != 0;
+    mallett_ = optics.mallett;
     const auto& sensitivity = data(film, "filming_sensitivity", wavelengths*3);
     const auto& illuminant = data(film, "filming_reference_illuminant", wavelengths);
     const auto reference = fixed<2>(film, "filming_reference_xy");
     const auto center = tri2quad(reference);
     const auto& windowParams = data(film, "filming_window", 4);
     const auto& surfaceParams = data(film, "filming_surface", 45);
-    const auto knee = fixed<3>(film, "filming_knee");
+    const auto knee = optics.gamutKnee;
     if (knee[0] < 0 || knee[0] >= 1 || knee[1] <= knee[0] || knee[2] <= 0)
         throw std::invalid_argument("Invalid input gamut knee");
     proPhotoMatrix_ = fixed<9>(film, "filming_prophoto_to_xyz");
     srgbMatrix_ = fixed<9>(film, "filming_srgb_to_xyz");
-    dirMatrix_ = fixed<9>(film, "filming_dir_matrix");
-    gamma_ = fixed<3>(film, "filming_gamma");
-    for (double g : gamma_) if (g <= 0) throw std::invalid_argument("Invalid film curve gamma");
+    stockDirMatrix_ = fixed<9>(film, "filming_dir_matrix");
+    stockGamma_ = fixed<3>(film, "filming_gamma");
+    for (double g : stockGamma_) if (g <= 0) throw std::invalid_argument("Invalid film curve gamma");
 
-    std::vector<double> response = sensitivity;
-    if (flags[1] != 0) {
-        if (windowParams[1] <= 0 || windowParams[3] <= 0) throw std::invalid_argument("Invalid film window sigma");
-        std::vector<double> window(wavelengths);
-        for (int w=0; w<wavelengths; ++w) {
-            double uv=0.5*(1+std::erf((wl[w]-windowParams[0])/(windowParams[1]*std::sqrt(2.0))));
-            double ir=0.5*(1-std::erf((wl[w]-windowParams[2])/(windowParams[3]*std::sqrt(2.0))));
-            window[w]=uv*ir;
+    if (mallett_) {
+        if (size_t(wavelengths) != kMallettBasis.size()) throw std::invalid_argument("Invalid Mallett spectral grid");
+        double greenMidgray = 0;
+        for (int w = 0; w < wavelengths; ++w) {
+            greenMidgray += illuminant[w] * 0.184 * sensitivity[w * 3 + 1];
+            for (int output = 0; output < 3; ++output)
+                for (int input = 0; input < 3; ++input)
+                    mallettResponse_[output * 3 + input] +=
+                        kMallettBasis[w][input] * illuminant[w] * sensitivity[w * 3 + output];
         }
-        for (int c=0; c<3; ++c) {
-            double numerator=0, denominator=0;
+        if (!(greenMidgray > 0)) throw std::invalid_argument("Invalid Mallett green normalization");
+        for (double& value : mallettResponse_) value /= greenMidgray;
+    } else {
+        std::vector<double> response = sensitivity;
+        if (optics.adaptationWindow) {
+            if (windowParams[1] <= 0 || windowParams[3] <= 0) throw std::invalid_argument("Invalid film window sigma");
+            std::vector<double> window(wavelengths);
             for (int w=0; w<wavelengths; ++w) {
-                numerator += sensitivity[w*3+c]*illuminant[w]*window[w];
-                denominator += sensitivity[w*3+c]*illuminant[w];
+                double uv=0.5*(1+std::erf((wl[w]-windowParams[0])/(windowParams[1]*std::sqrt(2.0))));
+                double ir=0.5*(1-std::erf((wl[w]-windowParams[2])/(windowParams[3]*std::sqrt(2.0))));
+                window[w]=uv*ir;
             }
-            double normalization=numerator/denominator;
-            if (!std::isfinite(normalization) || normalization <= 0) throw std::invalid_argument("Invalid film window normalization");
-            for (int w=0; w<wavelengths; ++w) response[w*3+c] *= window[w]/normalization;
-        }
-    }
-    // scipy.ndimage.gaussian_filter(..., sigma=(0,0,sigma)) uses half-sample
-    // symmetric reflection and a four-sigma kernel on the spectral axis.
-    double sigma=flags[3];
-    if (sigma < 0 || sigma > 100) throw std::invalid_argument("Invalid spectral blur sigma");
-    int radius=int(4*sigma+0.5);
-    std::vector<double> kernel;
-    if (sigma > 0) {
-        kernel.resize(radius*2+1);
-        double sum=0;
-        for (int k=-radius; k<=radius; ++k) { kernel[k+radius]=std::exp(-0.5*k*k/(sigma*sigma)); sum+=kernel[k+radius]; }
-        for (double& v:kernel) v/=sum;
-    }
-    tcLut_.resize(size_t(tcSize_)*tcSize_*3);
-    for (int i=0; i<tcSize_; ++i) for (int j=0; j<tcSize_; ++j) {
-        size_t pixel=size_t(i)*tcSize_+j;
-        Vec3 raw{};
-        for (int w=0; w<wavelengths; ++w) {
-            double spectrum=basis[pixel*wavelengths+w];
-            if (sigma > 0) {
-                spectrum=0;
-                for (int k=-radius; k<=radius; ++k)
-                    spectrum+=kernel[k+radius]*basis[pixel*wavelengths+reflectSpectral(w+k,wavelengths)];
+            for (int c=0; c<3; ++c) {
+                double numerator=0, denominator=0;
+                for (int w=0; w<wavelengths; ++w) {
+                    numerator += sensitivity[w*3+c]*illuminant[w]*window[w];
+                    denominator += sensitivity[w*3+c]*illuminant[w];
+                }
+                double normalization=numerator/denominator;
+                if (!std::isfinite(normalization) || normalization <= 0) throw std::invalid_argument("Invalid film window normalization");
+                for (int w=0; w<wavelengths; ++w) response[w*3+c] *= window[w]/normalization;
             }
-            for (int c=0; c<3; ++c) raw[c]+=spectrum*response[w*3+c];
         }
-        Vec2 tc{double(i)/(tcSize_-1), double(j)/(tcSize_-1)};
-        for (int c=0; c<3; ++c) {
-            if (flags[2] != 0) {
-                double surface=poly4(tc,center,surfaceParams.data()+c*15);
-                surface/=std::sqrt(1+(surface/2)*(surface/2));
-                raw[c]*=std::exp2(surface);
-            }
-            tcLut_[pixel*3+c]=raw[c];
+        // scipy.ndimage.gaussian_filter(..., sigma=(0,0,sigma)) uses half-sample
+        // symmetric reflection and a four-sigma kernel on the spectral axis.
+        double sigma=optics.blur;
+        if (sigma < 0 || sigma > 100) throw std::invalid_argument("Invalid spectral blur sigma");
+        int radius=int(4*sigma+0.5);
+        std::vector<double> kernel;
+        if (sigma > 0) {
+            kernel.resize(radius*2+1);
+            double sum=0;
+            for (int k=-radius; k<=radius; ++k) { kernel[k+radius]=std::exp(-0.5*k*k/(sigma*sigma)); sum+=kernel[k+radius]; }
+            for (double& v:kernel) v/=sum;
         }
-    }
-    if (flags[5] != 0) {
-        std::vector<double> remapped(tcLut_.size());
+        tcLut_.resize(size_t(tcSize_)*tcSize_*3);
         for (int i=0; i<tcSize_; ++i) for (int j=0; j<tcSize_; ++j) {
-            Vec2 tc{double(i)/(tcSize_-1),double(j)/(tcSize_-1)};
-            Vec2 compressed=compressXy(quad2tri(tc),reference,knee,locus);
-            Vec3 value=bilinear(tcLut_,tcSize_,tri2quad(compressed));
-            for (int c=0; c<3; ++c) remapped[(size_t(i)*tcSize_+j)*3+c]=value[c];
+            size_t pixel=size_t(i)*tcSize_+j;
+            Vec3 raw{};
+            for (int w=0; w<wavelengths; ++w) {
+                double spectrum=basis[pixel*wavelengths+w];
+                if (sigma > 0) {
+                    spectrum=0;
+                    for (int k=-radius; k<=radius; ++k)
+                        spectrum+=kernel[k+radius]*basis[pixel*wavelengths+reflectSpectral(w+k,wavelengths)];
+                }
+                for (int c=0; c<3; ++c) raw[c]+=spectrum*response[w*3+c];
+            }
+            Vec2 tc{double(i)/(tcSize_-1), double(j)/(tcSize_-1)};
+            for (int c=0; c<3; ++c) {
+                if (optics.adaptationSurface) {
+                    double surface=poly4(tc,center,surfaceParams.data()+c*15);
+                    surface/=std::sqrt(1+(surface/2)*(surface/2));
+                    raw[c]*=std::exp2(surface);
+                }
+                tcLut_[pixel*3+c]=raw[c];
+            }
         }
-        tcLut_=std::move(remapped);
+        if (optics.gamutCompression) {
+            const auto oklch = optics.oklchGamut ? std::make_unique<InputOklchGamut>(locus) : nullptr;
+            std::vector<double> remapped(tcLut_.size());
+            for (int i=0; i<tcSize_; ++i) for (int j=0; j<tcSize_; ++j) {
+                Vec2 tc{double(i)/(tcSize_-1),double(j)/(tcSize_-1)};
+                const Vec2 xy = quad2tri(tc);
+                Vec2 compressed = oklch ? oklch->compress(xy, knee) : compressXy(xy, reference, knee, locus);
+                Vec3 value=bilinear(tcLut_,tcSize_,tri2quad(compressed));
+                for (int c=0; c<3; ++c) remapped[(size_t(i)*tcSize_+j)*3+c]=value[c];
+            }
+            tcLut_=std::move(remapped);
+        }
     }
 
     logExposure_=data(film,"filming_log_exposure");
@@ -244,6 +277,20 @@ Filming::Filming(const DataSet& shared, const DataSet& film) {
         densityMax_[c]=curveMax_[c]-curveMin_[c];
         for (size_t k=0; k<logExposure_.size(); ++k) normalizedCurves_[k*3+c]-=curveMin_[c];
     }
+    configureDevelopment({});
+}
+
+void Filming::configureDevelopment(const FilmDevelopment& development) {
+    dirActive_ = stockDirActive_ && development.dirEnabled;
+    for (int c = 0; c < 3; ++c) gamma_[c] = stockGamma_[c] * development.gamma;
+    for (int donor = 0; donor < 3; ++donor) {
+        for (int receiver = 0; receiver < 3; ++receiver) {
+            const double layer = donor == receiver ? development.dirSameLayer : development.dirInterLayer;
+            const int i = donor * 3 + receiver;
+            const double coefficient = development.customDirMatrix ? development.dirCoefficients[i] : stockDirMatrix_[i];
+            dirMatrix_[i] = dirActive_ ? coefficient * development.dirAmount * layer : 0;
+        }
+    }
     if (dirActive_) {
         beforeDirCurves_.resize(normalizedCurves_.size());
         for (int receiver=0; receiver<3; ++receiver) {
@@ -257,6 +304,8 @@ Filming::Filming(const DataSet& shared, const DataSet& film) {
                 }
                 axis[k]=logExposure_[k]-correction;
             }
+            if (!std::is_sorted(axis.begin(), axis.end()))
+                throw std::invalid_argument("Nonmonotonic Spektrafilm DIR exposure axis");
             for (size_t k=0; k<axis.size(); ++k)
                 beforeDirCurves_[k*3+receiver]=interp(logExposure_[k],axis,normalizedCurves_,receiver);
         }
@@ -264,13 +313,20 @@ Filming::Filming(const DataSet& shared, const DataSet& film) {
 }
 
 Vec3 Filming::expose(const Vec3& rgb, const std::array<double,9>& matrix) const {
-    Vec3 xyz{};
-    for (int row=0; row<3; ++row) for (int c=0; c<3; ++c) xyz[row]+=matrix[row*3+c]*rgb[c];
+    Vec3 xyz = multiply(matrix, rgb);
     double brightness=xyz[0]+xyz[1]+xyz[2];
     Vec2 xy{xyz[0]/std::fmax(brightness,1e-10), xyz[1]/std::fmax(brightness,1e-10)};
     Vec3 raw=cubic(tcLut_,tcSize_,tri2quad(xy));
     for (double& value:raw) value*=brightness;
     return raw;
+}
+
+Vec3 Filming::exposeMallett(const Vec3& srgb) const {
+    return multiply(mallettResponse_, srgb);
+}
+
+Vec3 Filming::exposeProPhoto(const Vec3& linearProPhoto) const {
+    return mallett_ ? exposeMallett(multiply(proPhotoToSrgb, linearProPhoto)) : expose(linearProPhoto, proPhotoMatrix_);
 }
 
 Vec3 Filming::interpolate(const Vec3& logRaw,const std::vector<double>& curves) const {
@@ -280,9 +336,9 @@ Vec3 Filming::interpolate(const Vec3& logRaw,const std::vector<double>& curves) 
 }
 
 Vec3 Filming::develop(const Vec3& linearProPhoto) const {
-    Vec3 raw=expose(linearProPhoto,proPhotoMatrix_);
+    Vec3 raw=exposeProPhoto(linearProPhoto);
     Vec3 logRaw{};
-    for (int c=0; c<3; ++c) logRaw[c]=std::log10(std::fmax(raw[c],0.0)+1e-10);
+    for (int c=0; c<3; ++c) logRaw[c]=std::log10(std::fmax(raw[c] * scanExposureMultiplier_,0.0)+1e-10);
     Vec3 density=interpolate(logRaw,normalizedCurves_);
     if (!dirActive_) return density;
     Vec3 silver=density;
@@ -292,8 +348,10 @@ Vec3 Filming::develop(const Vec3& linearProPhoto) const {
     return interpolate(logRaw,beforeDirCurves_);
 }
 
-Vec3 Filming::midgrayDensity() const {
-    Vec3 raw=expose({0.184,0.184,0.184},srgbMatrix_);
+Vec3 Filming::midgrayDensity(double exposureEv) const {
+    const double middleGray = 0.184 * std::exp2(exposureEv);
+    const Vec3 srgb{middleGray, middleGray, middleGray};
+    Vec3 raw = mallett_ ? exposeMallett(srgb) : expose(srgb, srgbMatrix_);
     Vec3 logRaw{};
     for (int c=0; c<3; ++c) logRaw[c]=std::log10(raw[c]+1e-10);
     return interpolate(logRaw,originalCurves_);

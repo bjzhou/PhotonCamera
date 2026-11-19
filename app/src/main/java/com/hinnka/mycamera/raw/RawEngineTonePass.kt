@@ -62,6 +62,8 @@ internal class RawEngineTonePass(
     private val adobeCurveAlgorithm = AdobeCurveToneAlgorithm(quad, dcpTextures, curveTextures)
     private val agxAlgorithm = AgXToneAlgorithm(quad)
     private val spektrafilmAlgorithm = SpektrafilmToneAlgorithm(quad)
+    private val spektrafilmScannerPass = SpektrafilmScannerPass(quad)
+    private val spektrafilmGraph = SpektrafilmGraphToneStage(quad)
     private val darktableSigmoidAlgorithm = DarktableSigmoidToneAlgorithm(quad)
     private val darktableFilmicAlgorithm = DarktableFilmicToneAlgorithm(quad)
     private val hncsAlgorithm = HncsToneAlgorithm(quad)
@@ -70,11 +72,21 @@ internal class RawEngineTonePass(
     private val leicaAlgorithm = LeicaToneAlgorithm(quad)
     private val fotufilmStage = FotufilmToneStage(quad)
 
-    fun render(input: Input): Output? = if (input.colorEngine.isFotufilm) {
-        fotufilmStage.render(input)
-    } else {
-        algorithmFor(input.colorEngine).render(input)
+    fun render(input: Input): Output? {
+        if (input.colorEngine == RawRenderingEngine.Spektrafilm && input.spectralFilmLut?.graph != null) {
+            return spektrafilmGraph.render(input)
+        }
+        spektrafilmGraph.discardInactiveGraph()
+        return when {
+            input.colorEngine.isFotufilm -> fotufilmStage.render(input)
+            input.colorEngine == RawRenderingEngine.Spektrafilm && input.spectralFilmLut != null ->
+                spektrafilmScannerPass.render(input, spektrafilmAlgorithm)
+            else -> algorithmFor(input.colorEngine).render(input)
+        }
     }
+
+    internal fun measureSpectralMaximum(input: Input, left: Int, top: Int, width: Int, height: Int): Float =
+        spektrafilmGraph.measureMaximum(input, left, top, width, height)
 
     /** Whole-frame metering contribution of one full-resolution tile; see [FotufilmToneStage.meterTile]. */
     internal fun meterFotufilmTile(
@@ -112,6 +124,8 @@ internal class RawEngineTonePass(
         adobeCurveAlgorithm.release()
         agxAlgorithm.release()
         spektrafilmAlgorithm.release()
+        spektrafilmScannerPass.release()
+        spektrafilmGraph.release()
         darktableSigmoidAlgorithm.release()
         darktableFilmicAlgorithm.release()
         hncsAlgorithm.release()

@@ -22,7 +22,9 @@ data class SpectralFilmLut(
     val printTable: SpectralLutTable?,
     val inputScale: Float,
     val printInputScale: Float,
-    val negativeDensityGains: FloatArray,
+    val tuning: SpectralFilmTuning,
+    val graph: SpectralFilmGraph? = null,
+    val frameMaximum: Float? = null,
 ) {
     val size: Int get() = filmTable.size
     val values: FloatArray get() = filmTable.values
@@ -33,41 +35,6 @@ data class FilmStockInfo(
     val referenceIlluminant: String,
     val viewingIlluminant: String,
 )
-
-data class SpectralFilmTuning(
-    val cDensityGain: Float = 1f,
-    val mDensityGain: Float = 1f,
-    val yDensityGain: Float = 1f
-) {
-    fun normalized(): SpectralFilmTuning {
-        return SpectralFilmTuning(
-            cDensityGain = cDensityGain.coerceIn(MIN_DENSITY_GAIN, MAX_DENSITY_GAIN),
-            mDensityGain = mDensityGain.coerceIn(MIN_DENSITY_GAIN, MAX_DENSITY_GAIN),
-            yDensityGain = yDensityGain.coerceIn(MIN_DENSITY_GAIN, MAX_DENSITY_GAIN)
-        )
-    }
-
-    fun cacheKey(): String {
-        val t = normalized()
-        return "${t.cDensityGain}:${t.mDensityGain}:${t.yDensityGain}"
-    }
-
-    fun negativeFilmDensityGainC(): Float = userFacingDensityToNegativeFilmGain(normalized().cDensityGain)
-
-    fun negativeFilmDensityGainM(): Float = userFacingDensityToNegativeFilmGain(normalized().mDensityGain)
-
-    fun negativeFilmDensityGainY(): Float = userFacingDensityToNegativeFilmGain(normalized().yDensityGain)
-
-    companion object {
-        const val MIN_DENSITY_GAIN = 0.5f
-        const val MAX_DENSITY_GAIN = 1.5f
-        val DEFAULT = SpectralFilmTuning()
-
-        private fun userFacingDensityToNegativeFilmGain(gain: Float): Float {
-            return 2f - gain
-        }
-    }
-}
 
 data class SpectralFilmSelection(
     val id: String,
@@ -159,7 +126,7 @@ object SpectralFilmProfile {
     )
 
     // All access is serialized, including native model lifetime and disk eviction.
-    // Tuning changes reuse these exact arrays and only update shader uniforms.
+    // Reuse each stage by its optical/development settings, independently of scanner blur.
     private var cachedManifest: Manifest? = null
     private var cachedFilm: SpectralLutTable? = null
     private var cachedPrint: SpectralLutTable? = null
@@ -175,19 +142,15 @@ object SpectralFilmProfile {
         filmStock: String,
         printPaper: String,
         tuning: SpectralFilmTuning = SpectralFilmTuning.DEFAULT,
+        buildSpatialGraph: Boolean = false,
     ): SpectralFilmLut? = try {
         val manifest = cachedManifest ?: loadManifest(context).also { cachedManifest = it }
         val film = requireNotNull(manifest.films[filmStock]) { "Unknown Spektrafilm stock: $filmStock" }
-        val print = if (film.type == "negative") {
+        val normalized = tuning.normalized()
+        val positive = film.type == "positive"
+        val print = if (!positive && !normalized.scanFilm) {
             requireNotNull(manifest.prints[printPaper]) { "Unknown Spektrafilm print: $printPaper" }
         } else null
-        val normalized = tuning.normalized()
-        val gains = if (print != null) floatArrayOf(
-            normalized.negativeFilmDensityGainC(),
-            normalized.negativeFilmDensityGainM(),
-            normalized.negativeFilmDensityGainY(),
-        ) else floatArrayOf(1f, 1f, 1f)
-        require(gains.all { it.isFinite() && it in 0.5f..1.5f }) { "Invalid Spektrafilm density gains" }
         val request = SpectralRuntimeRequest(
             algorithm = manifest.algorithm,
             upstreamCommit = manifest.upstreamCommit,
@@ -198,10 +161,15 @@ object SpectralFilmProfile {
             film = film.model,
             paperName = if (print != null) printPaper else "",
             paper = print?.model,
-            positive = print == null,
+            positive = positive,
+            stock = filmStock,
+            tuning = normalized,
+            buildSpatialGraph = buildSpatialGraph,
         )
-        val selectionKey = "${request.filmKey}:${request.printKey}:${gains.joinToString()}"
-        cachedSelection?.takeIf { it.sourceKey == selectionKey } ?: run {
+        val selectionKey = "${request.filmKey}:${request.printKey}"
+        cachedSelection?.takeIf {
+            it.sourceKey == selectionKey && it.tuning == normalized && it.graph?.sourceKey == request.graphKey
+        } ?: run {
             // Release the old selection before loading another pair; otherwise its
             // references would keep obsolete LUT arrays alive during generation.
             cachedSelection = null
@@ -221,12 +189,13 @@ object SpectralFilmProfile {
                 printTable = stages.second,
                 inputScale = manifest.inputScale,
                 printInputScale = manifest.printInputScale,
-                negativeDensityGains = gains,
+                tuning = normalized,
+                graph = stages.third,
             ).also {
                 cachedSelection = it
-                PLog.d(TAG, "Selected Spektrafilm ${it.name}, pipeline=native-spectral-two-stage, " +
+                PLog.d(TAG, "Selected Spektrafilm ${it.name}, spatial=${it.graph != null}, " +
                     "filmSize=${it.size}, printSize=${it.printTable?.size ?: 0}, " +
-                    "densityGains=${gains.joinToString()}, upstream=${manifest.upstreamCommit}")
+                    "upstream=${manifest.upstreamCommit}")
             }
         }
     } catch (e: Exception) {

@@ -946,9 +946,6 @@
     <string name="settings_print_paper">Print Medium</string>
     <string name="settings_spectral_film_tuning">Film Tuning</string>
     <string name="settings_spectral_film_tuning_description">Fine-tune the selected film stock color response.</string>
-    <string name="settings_spectral_film_c_density_gain">Cyan Density</string>
-    <string name="settings_spectral_film_m_density_gain">Magenta Density</string>
-    <string name="settings_spectral_film_y_density_gain">Yellow Density</string>
     <string name="settings_raw_auto_exposure">Auto Exposure</string>
     <string name="settings_raw_auto_exposure_description">Automatically meters RAW linear data during development and applies exposure compensation.</string>
     <string name="settings_raw_min_shutter_speed">Minimum Shutter Speed</string>

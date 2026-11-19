@@ -946,9 +946,6 @@
     <string name="settings_print_paper">印相介质</string>
     <string name="settings_spectral_film_tuning">胶卷微调</string>
     <string name="settings_spectral_film_tuning_description">微调当前胶卷的色彩响应。</string>
-    <string name="settings_spectral_film_c_density_gain">青色密度</string>
-    <string name="settings_spectral_film_m_density_gain">品红密度</string>
-    <string name="settings_spectral_film_y_density_gain">黄色密度</string>
     <string name="settings_raw_auto_exposure">自动曝光</string>
     <string name="settings_raw_auto_exposure_description">显影时对 RAW 线性数据自动测光并应用曝光补偿。</string>
     <string name="settings_raw_min_shutter_speed">最低快门速度</string>

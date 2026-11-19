@@ -84,7 +84,6 @@ import com.hinnka.mycamera.ml.HfModelSource
 import com.hinnka.mycamera.ml.AiDenoiseModelManager
 import com.hinnka.mycamera.ml.HfModelState
 import com.hinnka.mycamera.raw.SpectralFilmSelection
-import com.hinnka.mycamera.raw.SpectralFilmTuning
 import com.hinnka.mycamera.raw.DngEmbeddedProfile
 import com.hinnka.mycamera.raw.RawAdaptiveExposureMode
 import com.hinnka.mycamera.processor.DenoiseStrength
@@ -316,9 +315,7 @@ fun GalleryEditScreen(
     val editRawSpectralFilmStock by viewModel.editRawSpectralFilmStock.collectAsState()
     val editRawSpectralFilmPrint by viewModel.editRawSpectralFilmPrint.collectAsState()
     val editRawFotufilmDocument by viewModel.editRawFotufilmDocument.collectAsState()
-    val editRawSpectralFilmCDensityGain by viewModel.editRawSpectralFilmCDensityGain.collectAsState()
-    val editRawSpectralFilmMDensityGain by viewModel.editRawSpectralFilmMDensityGain.collectAsState()
-    val editRawSpectralFilmYDensityGain by viewModel.editRawSpectralFilmYDensityGain.collectAsState()
+    val editRawSpectralFilmTuning by viewModel.editRawSpectralFilmTuning.collectAsState()
     val availableDcps = viewModel.availableDcps
     
     val editComputationalAperture by viewModel.editComputationalAperture.collectAsState()
@@ -1950,11 +1947,7 @@ fun GalleryEditScreen(
                                         spectralFilmSelection = editRawSpectralFilmStock?.let { stock ->
                                             SpectralFilmSelection(
                                                 id = stock,
-                                                tuning = SpectralFilmTuning(
-                                                    cDensityGain = editRawSpectralFilmCDensityGain,
-                                                    mDensityGain = editRawSpectralFilmMDensityGain,
-                                                    yDensityGain = editRawSpectralFilmYDensityGain
-                                                )
+                                                tuning = editRawSpectralFilmTuning
                                             )
                                         },
                                         spectralFilmPrint = editRawSpectralFilmPrint,

@@ -556,6 +556,7 @@ private data class CameraFeatureUpdate(
     /** 仅消费 AgX / Filmic 曲线参数。 */
     val rawEngineToneCurve: SettingValue<RawToneMappingParameters>? = null,
     val rawSpectralFilmStock: SettingValue<String?>? = null,
+    val rawSpectralFilmTuning: SpectralFilmSelection? = null,
     val rawSpectralFilmPrint: SettingValue<String?>? = null,
     val rawFotufilmDocument: SettingValue<FotufilmDocument?>? = null,
     val droMode: SettingValue<String>? = null,
@@ -1194,6 +1195,12 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             update.rawShadowsAdjustment?.let { rawShadowsAdjustment = it.value }
             update.rawBlackPointCorrection?.let { rawBlackPointCorrection = it.value }
             update.rawWhitePointCorrection?.let { rawWhitePointCorrection = it.value }
+            update.rawSpectralFilmTuning?.let { selection ->
+                val previousStock = rawSpectralFilmStock ?: "kodak_portra_400"
+                if (selection.id == previousStock || selection.tuning != SpectralFilmTuning.DEFAULT) {
+                    rawSpectralFilmTuningsByStock = rawSpectralFilmTuningsByStock + (selection.id to selection.tuning)
+                }
+            }
             update.rawSpectralFilmStock?.let { rawSpectralFilmStock = it.value }
             update.rawSpectralFilmPrint?.let { rawSpectralFilmPrint = it.value }
             update.rawFotufilmDocument?.let { rawFotufilmDocument = FotufilmDocumentStorage.encode(it.value) }
@@ -2320,16 +2327,12 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     }
     fun setRawSpectralFilmSelection(selection: SpectralFilmSelection?) {
         viewModelScope.launch {
-            val prefs = userPreferencesRepository.userPreferences.first()
-            val previousStock = prefs.rawSpectralFilmStock
             applyCameraFeatureUpdate(
-                CameraFeatureUpdate(rawSpectralFilmStock = SettingValue(selection?.id))
+                CameraFeatureUpdate(
+                    rawSpectralFilmStock = SettingValue(selection?.id),
+                    rawSpectralFilmTuning = selection?.normalized(),
+                )
             )
-            if (selection != null && selection.id == previousStock) {
-                userPreferencesRepository.update {
-                    rawSpectralFilmTuningsByStock = rawSpectralFilmTuningsByStock + (selection.id to selection.tuning)
-                }
-            }
         }
     }
 
@@ -2801,9 +2804,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             rawOutputUpscaleMode = userPrefs?.rawOutputUpscaleMode ?: RawOutputUpscaleMode.DEFAULT,
             spectralFilmStock = spectralFilmSettings.stock,
             spectralFilmPrint = spectralFilmSettings.print,
-            spectralFilmCDensityGain = spectralFilmSettings.tuning.cDensityGain,
-            spectralFilmMDensityGain = spectralFilmSettings.tuning.mDensityGain,
-            spectralFilmYDensityGain = spectralFilmSettings.tuning.yDensityGain,
+            spectralFilmParameters = spectralFilmSettings.tuning.encodeParameters(),
             fotufilmDocument = resolveRawFotufilmDocument(userPrefs)?.toJson(),
             width = width,
             height = height,
@@ -5343,9 +5344,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 rawOutputUpscaleMode = userPrefs?.rawOutputUpscaleMode ?: RawOutputUpscaleMode.DEFAULT,
                 spectralFilmStock = spectralFilmSettings.stock,
                 spectralFilmPrint = spectralFilmSettings.print,
-                spectralFilmCDensityGain = spectralFilmSettings.tuning.cDensityGain,
-                spectralFilmMDensityGain = spectralFilmSettings.tuning.mDensityGain,
-                spectralFilmYDensityGain = spectralFilmSettings.tuning.yDensityGain,
+                spectralFilmParameters = spectralFilmSettings.tuning.encodeParameters(),
                 fotufilmDocument = resolveRawFotufilmDocument(userPrefs)?.toJson(),
                 width = image.width,
                 height = image.height,
@@ -5502,9 +5501,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 rawToneMappingParameters = resolveCaptureRawToneMappingParameters(userPrefs),
                 spectralFilmStock = spectralFilmSettings.stock,
                 spectralFilmPrint = spectralFilmSettings.print,
-                spectralFilmCDensityGain = spectralFilmSettings.tuning.cDensityGain,
-                spectralFilmMDensityGain = spectralFilmSettings.tuning.mDensityGain,
-                spectralFilmYDensityGain = spectralFilmSettings.tuning.yDensityGain,
+                spectralFilmParameters = spectralFilmSettings.tuning.encodeParameters(),
                 fotufilmDocument = resolveRawFotufilmDocument(userPrefs)?.toJson(),
                 width = bitmap.width,
                 height = bitmap.height,
@@ -5775,9 +5772,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 rawOutputUpscaleMode = userPrefs?.rawOutputUpscaleMode ?: RawOutputUpscaleMode.DEFAULT,
                 spectralFilmStock = spectralFilmSettings.stock,
                 spectralFilmPrint = spectralFilmSettings.print,
-                spectralFilmCDensityGain = spectralFilmSettings.tuning.cDensityGain,
-                spectralFilmMDensityGain = spectralFilmSettings.tuning.mDensityGain,
-                spectralFilmYDensityGain = spectralFilmSettings.tuning.yDensityGain,
+                spectralFilmParameters = spectralFilmSettings.tuning.encodeParameters(),
                 fotufilmDocument = resolveRawFotufilmDocument(userPrefs)?.toJson(),
                 width = MultiFrameConfig.scaledRawOutputDimension(images[0].width, superResScale),
                 height = MultiFrameConfig.scaledRawOutputDimension(images[0].height, superResScale),
@@ -6097,9 +6092,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             rawOutputUpscaleMode = userPrefs?.rawOutputUpscaleMode ?: RawOutputUpscaleMode.DEFAULT,
             spectralFilmStock = spectralFilmSettings.stock,
             spectralFilmPrint = spectralFilmSettings.print,
-            spectralFilmCDensityGain = spectralFilmSettings.tuning.cDensityGain,
-            spectralFilmMDensityGain = spectralFilmSettings.tuning.mDensityGain,
-            spectralFilmYDensityGain = spectralFilmSettings.tuning.yDensityGain,
+            spectralFilmParameters = spectralFilmSettings.tuning.encodeParameters(),
             fotufilmDocument = resolveRawFotufilmDocument(userPrefs)?.toJson(),
             width = image.width,
             height = image.height,

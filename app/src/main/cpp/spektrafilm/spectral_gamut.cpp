@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <cmath>
 #include <limits>
+#include <stdexcept>
 #include <vector>
 
 namespace spektrafilm {
@@ -31,6 +32,38 @@ constexpr Matrix kInverseCat16{{
     {1.8620678550872327, -1.0112546305316843, 0.14918677544445175},
     {0.3875265432361372, 0.6214474419314753, -0.00897398516761252},
     {-0.01584149884933386, -0.03412293802851557, 1.0499644368778496}}};
+constexpr Matrix kXyzToOklabLms{{
+    {0.8189330101, 0.3618667424, -0.1288597137},
+    {0.0329845436, 0.9293118715, 0.0361456387},
+    {0.0482003018, 0.2643662691, 0.6338517070}}};
+constexpr Matrix kOklabLmsToXyz{{
+    {1.2270138511035211, -0.5577999806518222, 0.2812561489664678},
+    {-0.0405801784232806, 1.11225686961683, -0.07167667866560119},
+    {-0.0763812845057069, -0.4214819784180127, 1.5861632204407947}}};
+constexpr Matrix kOklabLmsToLab{{
+    {0.2104542553, 0.7936177850, -0.0040720468},
+    {1.9779984951, -2.4285922050, 0.4505937099},
+    {0.0259040371, 0.7827717662, -0.8086757660}}};
+constexpr Matrix kOklabLabToLms{{
+    {0.9999999984505196, 0.3963377921737678, 0.21580375806075877},
+    {1.0000000088817607, -0.10556134232365633, -0.0638541747717059},
+    {1.0000000546724108, -0.08948418209496574, -1.2914855378640917}}};
+constexpr Matrix kXyzToJzLms{{
+    {0.41478972, 0.579999, 0.0146480},
+    {-0.2015100, 1.120649, 0.0531008},
+    {-0.0166008, 0.264800, 0.6684799}}};
+constexpr Matrix kJzLmsToXyz{{
+    {1.9242264357876069, -1.0047923125953657, 0.037651404030617994},
+    {0.35031676209499907, 0.7264811939316552, -0.06538442294808501},
+    {-0.09098281098284752, -0.3127282905230739, 1.5227665613052603}}};
+constexpr Matrix kJzLmsToIab{{
+    {0.5, 0.5, 0.0},
+    {3.524, -4.066708, 0.542708},
+    {0.199076, 1.096799, -1.295875}}};
+constexpr Matrix kJzIabToLms{{
+    {1.0, 0.1386050432715393, 0.05804731615611882},
+    {1.0, -0.13860504327153927, -0.05804731615611891},
+    {1.0, -0.09601924202631895, -0.811891896056039}}};
 
 Vec3 multiply(const Matrix& matrix, const Vec3& value) {
     Vec3 out{};
@@ -54,7 +87,150 @@ double knee(double value, double threshold, double limit, double power) {
     if (value <= threshold) return value;
     const double scale = limit - threshold;
     const double x = (value - threshold) / scale;
-    return threshold + scale * x / std::pow(1.0 + std::pow(x, power), 1.0 / power);
+    const double raised = std::pow(x, power);
+    if (std::isinf(raised)) return limit;
+    return threshold + scale * x / std::pow(1.0 + raised, 1.0 / power);
+}
+
+Vec3 toOklab(const Vec3& xyz) {
+    Vec3 lms = multiply(kXyzToOklabLms, xyz);
+    for (double& value : lms) value = std::cbrt(value);
+    return multiply(kOklabLmsToLab, lms);
+}
+
+Vec3 fromOklab(const Vec3& lab) {
+    Vec3 lms = multiply(kOklabLabToLms, lab);
+    for (double& value : lms) value = value * value * value;
+    return multiply(kOklabLmsToXyz, lms);
+}
+
+constexpr double kLr1 = 0.206, kLr2 = 0.03, kLr3 = (1.0 + kLr1) / (1.0 + kLr2);
+
+double toLr(double l) {
+    const double t = kLr3 * l - kLr1;
+    return (t + std::sqrt(t * t + 4.0 * kLr2 * kLr3 * l)) * 0.5;
+}
+
+Vec3 fromOklrab(Vec3 lab) {
+    lab[0] = (lab[0] * (lab[0] + kLr1)) / (kLr3 * (lab[0] + kLr2));
+    return fromOklab(lab);
+}
+
+constexpr double kPqM1 = 2610.0 / 16384, kPqM2 = 1.7 * 2523.0 / 32;
+constexpr double kPqC1 = 3424.0 / 4096, kPqC2 = 2413.0 / 128, kPqC3 = 2392.0 / 128;
+constexpr double kJzD = -0.56, kJzD0 = 1.6295499532821566e-11;
+
+Vec3 toJzazbz(const Vec3& xyz) {
+    Vec3 lms = multiply(kXyzToJzLms, {
+        100 * (1.15 * xyz[0] - 0.15 * xyz[2]),
+        100 * (0.66 * xyz[1] + 0.34 * xyz[0]),
+        100 * xyz[2],
+    });
+    for (double& value : lms) {
+        const double pq = signedPower(value / 10000, kPqM1);
+        value = signedPower((kPqC1 + kPqC2 * pq) / (1 + kPqC3 * pq), kPqM2);
+    }
+    Vec3 jab = multiply(kJzLmsToIab, lms);
+    jab[0] = (1 + kJzD) * jab[0] / (1 + kJzD * jab[0]) - kJzD0;
+    return jab;
+}
+
+Vec3 fromJzazbz(Vec3 jab) {
+    jab[0] += kJzD0;
+    jab[0] /= 1 + kJzD - kJzD * jab[0];
+    Vec3 lms = multiply(kJzIabToLms, jab);
+    for (double& value : lms) {
+        const double pq = signedPower(value, 1 / kPqM2);
+        value = 100 * signedPower(std::max(0.0, pq - kPqC1) / (kPqC2 - kPqC3 * pq), 1 / kPqM1);
+    }
+    Vec3 xyz = multiply(kJzLmsToXyz, lms);
+    xyz[0] = (xyz[0] + 0.15 * xyz[2]) / 1.15;
+    xyz[1] = (xyz[1] - 0.34 * xyz[0]) / 0.66;
+    return xyz;
+}
+
+Chromaticity xyzToXy(const Vec3& xyz) {
+    const double total = std::max(xyz[0] + xyz[1] + xyz[2], 1e-12);
+    return {xyz[0] / total, xyz[1] / total};
+}
+
+bool inLocus(const Chromaticity& xy, const std::vector<double>& locus) {
+    bool inside = false;
+    for (size_t i = 2; i < locus.size(); i += 2) {
+        const double y0 = locus[i - 1], y1 = locus[i + 1];
+        if ((y0 > xy[1]) == (y1 > xy[1])) continue;
+        const double edgeX = locus[i - 2] + (locus[i] - locus[i - 2]) * (xy[1] - y0) / (y1 - y0);
+        if (xy[0] < edgeX) inside = !inside;
+    }
+    return inside;
+}
+
+template <typename Predicate>
+std::vector<double> makeBoundary(double minimumL, double maximumL, double maximumC, const Predicate& inside) {
+    std::vector<double> cmax(kLightnessCount * kHueCount);
+    for (int l = 0; l < kLightnessCount; ++l) {
+        const double lightness = minimumL + l * ((maximumL - minimumL) / (kLightnessCount - 1));
+        for (int h = 0; h < kHueCount; ++h) {
+            const double hue = -kPi + h * (2.0 * kPi / kHueCount);
+            const double ch = std::cos(hue), sh = std::sin(hue);
+            double lo = 0, hi = maximumC;
+            for (int iteration = 0; iteration < kBisections; ++iteration) {
+                const double mid = (lo + hi) * 0.5;
+                if (inside(Vec3{lightness, mid * ch, mid * sh})) lo = mid;
+                else hi = mid;
+            }
+            cmax[l * kHueCount + h] = lo;
+        }
+    }
+    return cmax;
+}
+
+double boundaryLookup(const std::vector<double>& table, double lightness, double hue, double minimum, double maximum) {
+    const double li = (std::clamp(lightness, minimum, maximum) - minimum) / (maximum - minimum) * (kLightnessCount - 1);
+    const int l0 = std::clamp(static_cast<int>(std::floor(li)), 0, kLightnessCount - 2);
+    const double lf = li - l0;
+    const double hueStep = (-kPi + 2.0 * kPi / kHueCount) - (-kPi);
+    const double hi = (hue + kPi) / hueStep, floorHue = std::floor(hi);
+    const int h0 = (static_cast<int>(floorHue) % kHueCount + kHueCount) % kHueCount;
+    const int h1 = (h0 + 1) % kHueCount;
+    const double hf = hi - floorHue;
+    return table[l0 * kHueCount + h0] * (1.0 - lf) * (1.0 - hf) +
+           table[l0 * kHueCount + h1] * (1.0 - lf) * hf +
+           table[(l0 + 1) * kHueCount + h0] * lf * (1.0 - hf) +
+           table[(l0 + 1) * kHueCount + h1] * lf * hf;
+}
+
+template <typename Conversion>
+std::vector<double> makeOutputBoundary(double minimumL, double maximumL, double maximumC, const Conversion& convert) {
+    return makeBoundary(minimumL, maximumL, maximumC, [&](const Vec3& lab) {
+        const Vec3 rgb = multiply(kXyzToRgb, convert(lab));
+        return std::all_of(rgb.begin(), rgb.end(), [](double value) {
+            return value >= -1e-6 && value <= 1 + 1e-6;
+        });
+    });
+}
+
+const std::vector<double>& outputBoundary(OutputGamutAlgorithm algorithm) {
+    if (algorithm == OutputGamutAlgorithm::Jzazbz) {
+        static const auto table = makeOutputBoundary(0.002, 0.18, 0.3, fromJzazbz);
+        return table;
+    }
+    if (algorithm == OutputGamutAlgorithm::Oklrab) {
+        static const auto table = makeOutputBoundary(0.02, 1, 0.5, fromOklrab);
+        return table;
+    }
+    static const auto table = makeOutputBoundary(0.02, 1, 0.5, fromOklab);
+    return table;
+}
+
+void compressChroma(Vec3& lab, const Vec3& chromaKnee, const std::vector<double>& table,
+                    double lookupLightness, double minimum, double maximum) {
+    const double hue = std::atan2(lab[2], lab[1]);
+    const double maxChroma = std::max(1e-9, boundaryLookup(table, lookupLightness, hue, minimum, maximum));
+    const double chroma = std::hypot(lab[1], lab[2]);
+    const double adjusted = knee(chroma / maxChroma, chromaKnee[0], chromaKnee[1], chromaKnee[2]) * maxChroma;
+    lab[1] = adjusted * std::cos(hue);
+    lab[2] = adjusted * std::sin(hue);
 }
 
 struct Cam16 {
@@ -165,47 +341,10 @@ struct GamutBoundary {
     Cam16 cam;
     std::vector<double> cmax;
     double whiteJp;
-    // Match numpy.linspace's step followed by h_grid[1]-h_grid[0].
-    double hueStep = (-kPi + 2.0 * kPi / kHueCount) - (-kPi);
 
-    GamutBoundary() : cmax(kLightnessCount * kHueCount) {
-        const Vec3 white{0.3457 / 0.3585, 1.0, (1.0 - 0.3457 - 0.3585) / 0.3585};
-        whiteJp = cam.forward(white)[0];
-        for (int l = 0; l < kLightnessCount; ++l) {
-            const double lightness = 1.0 + l * (109.0 / (kLightnessCount - 1));
-            for (int h = 0; h < kHueCount; ++h) {
-                const double hue = -kPi + h * (2.0 * kPi / kHueCount);
-                const double ch = std::cos(hue);
-                const double sh = std::sin(hue);
-                double lo = 0.0;
-                double hi = 150.0;
-                for (int iteration = 0; iteration < kBisections; ++iteration) {
-                    const double mid = (lo + hi) * 0.5;
-                    const Vec3 rgb = multiply(kXyzToRgb, cam.inverse({lightness, mid * ch, mid * sh}));
-                    const bool inside = std::all_of(rgb.begin(), rgb.end(), [](double v) {
-                        return v >= -1e-6 && v <= 1.0 + 1e-6;
-                    });
-                    if (inside) lo = mid; else hi = mid;
-                }
-                cmax[l * kHueCount + h] = lo;
-            }
-        }
-    }
-
-    double lookup(double lightness, double hue) const {
-        const double li = (std::clamp(lightness, 1.0, 110.0) - 1.0) / 109.0 * (kLightnessCount - 1);
-        const int l0 = std::clamp(static_cast<int>(std::floor(li)), 0, kLightnessCount - 2);
-        const double lf = li - l0;
-        const double hi = (hue + kPi) / hueStep;
-        const int floorHue = static_cast<int>(std::floor(hi));
-        const int h0 = (floorHue % kHueCount + kHueCount) % kHueCount;
-        const int h1 = (h0 + 1) % kHueCount;
-        const double hf = hi - std::floor(hi);
-        return cmax[l0 * kHueCount + h0] * (1.0 - lf) * (1.0 - hf) +
-               cmax[l0 * kHueCount + h1] * (1.0 - lf) * hf +
-               cmax[(l0 + 1) * kHueCount + h0] * lf * (1.0 - hf) +
-               cmax[(l0 + 1) * kHueCount + h1] * lf * hf;
-    }
+    GamutBoundary()
+        : cmax(makeOutputBoundary(1, 110, 150, [this](const Vec3& jab) { return cam.inverse(jab); })),
+          whiteJp(cam.forward({0.3457 / 0.3585, 1, (1 - 0.3457 - 0.3585) / 0.3585})[0]) {}
 };
 
 const GamutBoundary& boundary() {
@@ -216,9 +355,56 @@ const GamutBoundary& boundary() {
 
 } // namespace
 
-OutputGamut::OutputGamut() { (void) boundary(); }
+InputOklchGamut::InputOklchGamut(const std::vector<double>& locus)
+    : boundary_(makeBoundary(0.05, 1, 0.5, [&](const Vec3& lab) { return inLocus(xyzToXy(fromOklab(lab)), locus); })) {}
+
+Chromaticity InputOklchGamut::compress(const Chromaticity& xy, const Vec3& chromaKnee) const {
+    const double y = std::max(xy[1], 1e-12);
+    Vec3 lab = toOklab({xy[0] / y, 1, (1 - xy[0] - xy[1]) / y});
+    compressChroma(lab, chromaKnee, boundary_, lab[0], 0.05, 1);
+    return xyzToXy(fromOklab(lab));
+}
+
+OutputGamut::OutputGamut(OutputGamutAlgorithm algorithm, const Vec3& chromaKnee)
+    : algorithm_(algorithm), knee_(chromaKnee) {
+    if (algorithm < OutputGamutAlgorithm::Cam16 || algorithm > OutputGamutAlgorithm::Jzazbz ||
+        knee_[0] < 0 || knee_[0] >= 1 || knee_[1] <= knee_[0] || knee_[2] <= 0)
+        throw std::invalid_argument("Invalid Spektrafilm output gamut parameters");
+    if (algorithm_ == OutputGamutAlgorithm::Cam16) (void) boundary();
+    else if (algorithm_ != OutputGamutAlgorithm::Off && algorithm_ != OutputGamutAlgorithm::AcesRgc)
+        (void) outputBoundary(algorithm_);
+}
 
 Vec3 OutputGamut::compress(const Vec3& linearProPhoto) const {
+    if (algorithm_ == OutputGamutAlgorithm::Off) return linearProPhoto;
+    if (algorithm_ == OutputGamutAlgorithm::AcesRgc) {
+        const double maximum = *std::max_element(linearProPhoto.begin(), linearProPhoto.end());
+        if (maximum <= 1e-12) return linearProPhoto;
+        Vec3 result{};
+        for (int c = 0; c < 3; ++c) {
+            const double distance = (maximum - linearProPhoto[c]) / maximum;
+            result[c] = maximum * (1 - knee(distance, knee_[0], knee_[1], knee_[2]));
+        }
+        return result;
+    }
+    if (algorithm_ != OutputGamutAlgorithm::Cam16) {
+        const Vec3 xyz = multiply(kRgbToXyz, linearProPhoto);
+        const auto& table = outputBoundary(algorithm_);
+        if (algorithm_ == OutputGamutAlgorithm::Jzazbz) {
+            static const double white = toJzazbz({0.3457 / 0.3585, 1, (1 - 0.3457 - 0.3585) / 0.3585})[0];
+            Vec3 lab = toJzazbz(xyz);
+            if (!std::all_of(lab.begin(), lab.end(), [](double value) { return std::isfinite(value); }))
+                throw std::runtime_error("Non-finite JzAzBz color");
+            lab[0] = knee(lab[0] / white, 0.7, 1, 2.2) * white;
+            compressChroma(lab, knee_, table, lab[0], 0.002, 0.18);
+            return multiply(kXyzToRgb, fromJzazbz(lab));
+        }
+        Vec3 lab = toOklab(xyz);
+        lab[0] = knee(lab[0], 0.7, 1, 2.2);
+        const double lightness = algorithm_ == OutputGamutAlgorithm::Oklrab ? toLr(lab[0]) : lab[0];
+        compressChroma(lab, knee_, table, lightness, 0.02, 1);
+        return multiply(kXyzToRgb, fromOklab(lab));
+    }
     const GamutBoundary& state = boundary();
     Vec3 jab = state.cam.forward(multiply(kRgbToXyz, linearProPhoto));
     jab[0] = knee(jab[0] / state.whiteJp, 0.7, 1.0, 2.2) * state.whiteJp;
@@ -232,8 +418,8 @@ Vec3 OutputGamut::compress(const Vec3& linearProPhoto) const {
         const double invalid = std::numeric_limits<double>::quiet_NaN();
         return multiply(kXyzToRgb, state.cam.inverse({jab[0], invalid, invalid}));
     }
-    const double maxChroma = std::fmax(state.lookup(jab[0], hue), 1e-9);
-    const double newChroma = knee(chroma / maxChroma, 0.0, 1.0, 6.0) * maxChroma;
+    const double maxChroma = std::fmax(boundaryLookup(state.cmax, jab[0], hue, 1, 110), 1e-9);
+    const double newChroma = knee(chroma / maxChroma, knee_[0], knee_[1], knee_[2]) * maxChroma;
     jab[1] = newChroma * std::cos(hue);
     jab[2] = newChroma * std::sin(hue);
     return multiply(kXyzToRgb, state.cam.inverse(jab));

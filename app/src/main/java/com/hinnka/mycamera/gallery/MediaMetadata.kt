@@ -23,6 +23,7 @@ import com.hinnka.mycamera.raw.RawRenderingEngine
 import com.hinnka.mycamera.raw.RawToneMappingParameters
 import com.hinnka.mycamera.raw.RawOutputUpscaleMode
 import com.hinnka.mycamera.raw.RawCaptureExposureCompensationMetadata
+import com.hinnka.mycamera.raw.SpectralFilmTuning
 import com.hinnka.mycamera.utils.DeviceUtil
 import org.json.JSONObject
 import java.text.SimpleDateFormat
@@ -154,10 +155,10 @@ data class MediaMetadata(
     val spectralFilmStock: String? = null,
     val spectralFilmPrint: String? = null,
     val fotufilmDocument: String? = null,
-    val spectralFilmCDensityGain: Float = 1f,
-    val spectralFilmMDensityGain: Float = 1f,
-    val spectralFilmYDensityGain: Float = 1f,
+    val spectralFilmParameters: String? = null,
 ) {
+    fun decodeSpectralFilmTuning(): SpectralFilmTuning = SpectralFilmTuning.decodeParameters(spectralFilmParameters)
+
     /**
      * 将元数据转换为 CaptureInfo，用于写入 EXIF
      *
@@ -511,9 +512,7 @@ data class MediaMetadata(
                     spectralFilmStock = if (obj.isNull("spectralFilmStock")) null else obj.optString("spectralFilmStock"),
                     spectralFilmPrint = if (obj.isNull("spectralFilmPrint")) null else obj.optString("spectralFilmPrint"),
                     fotufilmDocument = if (obj.isNull("fotufilmDocument")) null else obj.optString("fotufilmDocument"),
-                    spectralFilmCDensityGain = if (obj.isNull("spectralFilmCDensityGain")) 1f else obj.optDouble("spectralFilmCDensityGain").toFloat(),
-                    spectralFilmMDensityGain = if (obj.isNull("spectralFilmMDensityGain")) 1f else obj.optDouble("spectralFilmMDensityGain").toFloat(),
-                    spectralFilmYDensityGain = if (obj.isNull("spectralFilmYDensityGain")) 1f else obj.optDouble("spectralFilmYDensityGain").toFloat(),
+                    spectralFilmParameters = if (obj.isNull("spectralFilmParameters")) null else obj.optString("spectralFilmParameters"),
                 )
             } catch (e: Exception) {
                 PLog.e(TAG, "Failed to parse JSON", e)

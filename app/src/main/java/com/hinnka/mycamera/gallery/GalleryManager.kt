@@ -334,9 +334,7 @@ object GalleryManager {
                 manualHdrEffectEnabled = preferences?.ultraHdrGainMapEnabled ?: false,
                 spectralFilmStock = spectralFilmStock,
                 spectralFilmPrint = preferences?.rawSpectralFilmPrint ?: "kodak_portra_endura",
-                spectralFilmCDensityGain = spectralFilmTuning.cDensityGain,
-                spectralFilmMDensityGain = spectralFilmTuning.mDensityGain,
-                spectralFilmYDensityGain = spectralFilmTuning.yDensityGain,
+                spectralFilmParameters = spectralFilmTuning.encodeParameters(),
                 fotufilmDocument = FotufilmDocumentStorage.encode(fotufilmDocument),
             )
 
@@ -2479,11 +2477,7 @@ object GalleryManager {
                 rawPhysicalOutputSize = RawDigitalZoomResampling.readPhysicalSize(updatedMetadata.customProperties),
                 spectralFilmStock = updatedMetadata.spectralFilmStock,
                 spectralFilmPrint = updatedMetadata.spectralFilmPrint,
-                spectralFilmTuning = SpectralFilmTuning(
-                    cDensityGain = updatedMetadata.spectralFilmCDensityGain,
-                    mDensityGain = updatedMetadata.spectralFilmMDensityGain,
-                    yDensityGain = updatedMetadata.spectralFilmYDensityGain,
-                ),
+                spectralFilmTuning = updatedMetadata.decodeSpectralFilmTuning(),
                 fotufilmDocument = FotufilmDocumentStorage.decode(updatedMetadata.fotufilmDocument, "photo metadata"),
                 onMetadata = { raw -> updatedMetadata = updatedMetadata.merge(raw) },
             )
@@ -2574,11 +2568,7 @@ object GalleryManager {
                     rawPhysicalOutputSize = RawDigitalZoomResampling.readPhysicalSize(updatedMetadata.customProperties),
                     spectralFilmStock = updatedMetadata.spectralFilmStock,
                     spectralFilmPrint = updatedMetadata.spectralFilmPrint,
-                    spectralFilmTuning = SpectralFilmTuning(
-                        cDensityGain = updatedMetadata.spectralFilmCDensityGain,
-                        mDensityGain = updatedMetadata.spectralFilmMDensityGain,
-                        yDensityGain = updatedMetadata.spectralFilmYDensityGain,
-                    ),
+                    spectralFilmTuning = updatedMetadata.decodeSpectralFilmTuning(),
                     fotufilmDocument = FotufilmDocumentStorage.decode(updatedMetadata.fotufilmDocument, "photo metadata"),
                     onMetadata = { raw -> updatedMetadata = updatedMetadata.merge(raw) },
                 )
@@ -3840,11 +3830,7 @@ object GalleryManager {
                     rawPhysicalOutputSize = RawDigitalZoomResampling.readPhysicalSize(updatedMetadata.customProperties),
                     spectralFilmStock = updatedMetadata.spectralFilmStock,
                     spectralFilmPrint = updatedMetadata.spectralFilmPrint,
-                    spectralFilmTuning = SpectralFilmTuning(
-                        cDensityGain = updatedMetadata.spectralFilmCDensityGain,
-                        mDensityGain = updatedMetadata.spectralFilmMDensityGain,
-                        yDensityGain = updatedMetadata.spectralFilmYDensityGain,
-                    ),
+                    spectralFilmTuning = updatedMetadata.decodeSpectralFilmTuning(),
                     fotufilmDocument = FotufilmDocumentStorage.decode(updatedMetadata.fotufilmDocument, "photo metadata"),
                     onMetadata = { raw -> updatedMetadata = updatedMetadata.merge(raw) },
                 )
@@ -3934,11 +3920,7 @@ object GalleryManager {
                         rawPhysicalOutputSize = RawDigitalZoomResampling.readPhysicalSize(updatedMetadata.customProperties),
                         spectralFilmStock = updatedMetadata.spectralFilmStock,
                         spectralFilmPrint = updatedMetadata.spectralFilmPrint,
-                        spectralFilmTuning = SpectralFilmTuning(
-                            cDensityGain = updatedMetadata.spectralFilmCDensityGain,
-                            mDensityGain = updatedMetadata.spectralFilmMDensityGain,
-                            yDensityGain = updatedMetadata.spectralFilmYDensityGain,
-                        ),
+                        spectralFilmTuning = updatedMetadata.decodeSpectralFilmTuning(),
                         fotufilmDocument = FotufilmDocumentStorage.decode(updatedMetadata.fotufilmDocument, "photo metadata"),
                         onMetadata = { raw -> updatedMetadata = updatedMetadata.merge(raw) },
                     )
@@ -4218,11 +4200,7 @@ object GalleryManager {
             rawPhysicalOutputSize = RawDigitalZoomResampling.readPhysicalSize(updatedMetadata.customProperties),
             spectralFilmStock = updatedMetadata.spectralFilmStock,
             spectralFilmPrint = updatedMetadata.spectralFilmPrint,
-            spectralFilmTuning = SpectralFilmTuning(
-                cDensityGain = updatedMetadata.spectralFilmCDensityGain,
-                mDensityGain = updatedMetadata.spectralFilmMDensityGain,
-                yDensityGain = updatedMetadata.spectralFilmYDensityGain
-            ),
+            spectralFilmTuning = updatedMetadata.decodeSpectralFilmTuning(),
             fotufilmDocument = FotufilmDocumentStorage.decode(updatedMetadata.fotufilmDocument, "photo metadata"),
             onMetadata = { raw ->
                 updatedMetadata = updatedMetadata.merge(raw)
@@ -5678,11 +5656,7 @@ object GalleryManager {
                             rawPhysicalOutputSize = RawDigitalZoomResampling.readPhysicalSize(updatedMetadata.customProperties),
                             spectralFilmStock = updatedMetadata.spectralFilmStock,
                             spectralFilmPrint = updatedMetadata.spectralFilmPrint,
-                            spectralFilmTuning = SpectralFilmTuning(
-                                cDensityGain = updatedMetadata.spectralFilmCDensityGain,
-                                mDensityGain = updatedMetadata.spectralFilmMDensityGain,
-                                yDensityGain = updatedMetadata.spectralFilmYDensityGain
-                            ),
+                            spectralFilmTuning = updatedMetadata.decodeSpectralFilmTuning(),
                             fotufilmDocument = FotufilmDocumentStorage.decode(updatedMetadata.fotufilmDocument, "photo metadata"),
                             onMetadata = { raw ->
                                 updatedMetadata = updatedMetadata.merge(raw)
@@ -5870,11 +5844,7 @@ object GalleryManager {
                     rawPhysicalOutputSize = RawDigitalZoomResampling.readPhysicalSize(rawMetadata.customProperties),
                     spectralFilmStock = updatedMetadata?.spectralFilmStock,
                     spectralFilmPrint = updatedMetadata?.spectralFilmPrint,
-                    spectralFilmTuning = SpectralFilmTuning(
-                        cDensityGain = updatedMetadata?.spectralFilmCDensityGain ?: 1f,
-                        mDensityGain = updatedMetadata?.spectralFilmMDensityGain ?: 1f,
-                        yDensityGain = updatedMetadata?.spectralFilmYDensityGain ?: 1f
-                    ),
+                    spectralFilmTuning = updatedMetadata?.decodeSpectralFilmTuning() ?: SpectralFilmTuning.DEFAULT,
                     fotufilmDocument = FotufilmDocumentStorage.decode(updatedMetadata?.fotufilmDocument, "photo metadata"),
                     onMetadata = { raw ->
                         updatedMetadata = updatedMetadata?.merge(raw) ?: MediaMetadata().merge(raw)

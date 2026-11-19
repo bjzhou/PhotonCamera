@@ -1,0 +1,149 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="spektrafilm_section_film">Film Exposure and Development</string>
+    <string name="spektrafilm_section_couplers">DIR Couplers</string>
+    <string name="spektrafilm_section_enlarger">Enlarger</string>
+    <string name="spektrafilm_section_preflash">Paper Preflash</string>
+    <string name="spektrafilm_section_chemistry">Print Chemistry</string>
+    <string name="spektrafilm_section_scanner">Scanner</string>
+    <string name="spektrafilm_section_spectral">Spectral Reconstruction</string>
+
+    <string name="spektrafilm_camera_exposure">Film Exposure Compensation</string>
+    <string name="spektrafilm_film_gamma">Film Density Curve Gamma</string>
+    <string name="spektrafilm_film_dye_order">Film Dye Channel Order</string>
+    <string name="spektrafilm_dir_enabled">DIR Inhibition</string>
+    <string name="spektrafilm_dir_description">Adjust the development inhibition that affects contrast and colour separation. A value of 1 uses the film stock’s original setting.</string>
+    <string name="spektrafilm_dir_amount">Inhibition Strength</string>
+    <string name="spektrafilm_dir_same_layer">Same-Layer Inhibition</string>
+    <string name="spektrafilm_dir_inter_layer">Interlayer Inhibition</string>
+    <string name="spektrafilm_scan_film">Scan Film Directly</string>
+    <string name="spektrafilm_scan_film_description">Scan the developed negative without printing it on paper.</string>
+
+    <string name="spektrafilm_print_exposure_compensation">Automatic Print Compensation</string>
+    <string name="spektrafilm_print_exposure_compensation_description">Adjust the enlarger exposure to compensate for the film exposure setting.</string>
+    <string name="spektrafilm_print_normalize_exposure">Normalize Print Exposure</string>
+    <string name="spektrafilm_print_normalize_exposure_description">Normalize the enlarger exposure against the film stock’s reference mid-gray.</string>
+    <string name="spektrafilm_print_exposure">Print Exposure</string>
+    <string name="spektrafilm_print_dye_order">Print Dye Channel Order</string>
+    <string name="spektrafilm_yellow_filter">Yellow Filter Shift</string>
+    <string name="spektrafilm_magenta_filter">Magenta Filter Shift</string>
+    <string name="spektrafilm_preflash_exposure">Preflash Exposure</string>
+    <string name="spektrafilm_value_preflash_exposure">%1$.6f</string>
+    <string name="spektrafilm_preflash_high_value">Preflash exposure %1$.6f (above slider range)</string>
+    <string name="spektrafilm_preflash_enter_value">Enter exact value</string>
+    <string name="spektrafilm_preflash_input_range">Enter a value from 0 to 1.</string>
+    <string name="spektrafilm_preflash_reset">Reset to zero</string>
+    <string name="spektrafilm_print_chemistry_enabled">Adjust Print Density Curves</string>
+    <string name="spektrafilm_print_chemistry_description">Adjust the contrast of the print emulsion layers and simulate developer exhaustion.</string>
+    <string name="spektrafilm_print_gamma">Overall Gamma</string>
+    <string name="spektrafilm_print_gamma_fast">Fast Sublayer Gamma</string>
+    <string name="spektrafilm_print_gamma_slow">Mid and Slow Sublayer Gamma</string>
+    <string name="spektrafilm_print_gamma_red">Red Gamma</string>
+    <string name="spektrafilm_print_gamma_green">Green Gamma</string>
+    <string name="spektrafilm_print_gamma_blue">Blue Gamma</string>
+    <string name="spektrafilm_print_developer_exhaustion">Developer Exhaustion</string>
+
+    <string name="spektrafilm_scanner_lens_blur">Scanner Lens Blur</string>
+    <string name="spektrafilm_scanner_unsharp_amount">Unsharp Mask Amount</string>
+    <string name="spektrafilm_scanner_unsharp_sigma">Unsharp Mask Sigma</string>
+    <string name="spektrafilm_input_gamut_compression">Input Gamut Compression</string>
+    <string name="spektrafilm_input_gamut_compression_description">Bring input colours toward the visible spectral locus before reconstructing spectra.</string>
+    <string name="spektrafilm_spectral_adaptation_window">Hanatos2025 Adaptation Window</string>
+    <string name="spektrafilm_spectral_adaptation_surface">Hanatos2025 Adaptation Surface</string>
+    <string name="spektrafilm_spectral_blur">Spectral Gaussian Blur</string>
+
+    <string name="spektrafilm_value_decimal" translatable="false">%1$.2f</string>
+    <string name="spektrafilm_value_precise" translatable="false">%1$.3f</string>
+    <string name="spektrafilm_value_ev" translatable="false">%1$+.2f EV</string>
+    <string name="spektrafilm_value_cc" translatable="false">%1$+.0f CC</string>
+    <string name="spektrafilm_value_px" translatable="false">%1$.2f px</string>
+    <string name="spektrafilm_value_nm" translatable="false">%1$.1f nm</string>
+    <string name="spektrafilm_value_percent" translatable="false">%1$.0f%%</string>
+
+    <string name="spektrafilm_section_camera_diffusion">Camera Diffusion</string>
+    <string name="spektrafilm_section_enlarger_diffusion">Enlarger Diffusion</string>
+    <string name="spektrafilm_section_glare">Print Glare</string>
+    <string name="spektrafilm_gamut_enabled">Enable Compression</string>
+    <string name="spektrafilm_section_output_gamut">Output Gamut Compression</string>
+    <string name="spektrafilm_camera_lens_blur">Camera Lens Blur</string>
+    <string name="spektrafilm_film_format">Film Long Edge</string>
+    <string name="spektrafilm_diffusion_enabled">Enable Diffusion Filter</string>
+    <string name="spektrafilm_diffusion_family">Filter Family</string>
+    <string name="spektrafilm_diffusion_strength">Filter Strength</string>
+    <string name="spektrafilm_diffusion_spatial_scale">Diffusion Scale</string>
+    <string name="spektrafilm_diffusion_halo_warmth">Halo Warmth</string>
+    <string name="spektrafilm_diffusion_core_intensity">Core Weight</string>
+    <string name="spektrafilm_diffusion_core_size">Core Size</string>
+    <string name="spektrafilm_diffusion_halo_intensity">Halo Weight</string>
+    <string name="spektrafilm_diffusion_halo_size">Halo Size</string>
+    <string name="spektrafilm_diffusion_bloom_intensity">Bloom Weight</string>
+    <string name="spektrafilm_diffusion_bloom_size">Bloom Size</string>
+    <string name="spektrafilm_halation_enabled">Enable Halation and Scatter</string>
+    <string name="spektrafilm_scatter_amount">Emulsion Scatter</string>
+    <string name="spektrafilm_scatter_spatial_scale">Scatter Scale</string>
+    <string name="spektrafilm_halation_amount">Halation Strength</string>
+    <string name="spektrafilm_halation_spatial_scale">Halation Scale</string>
+    <string name="spektrafilm_halation_boost_ev">Highlight Boost</string>
+    <string name="spektrafilm_halation_protect_ev">Highlight Protection</string>
+    <string name="spektrafilm_halation_boost_range">Highlight Boost Ramp</string>
+    <string name="spektrafilm_scatter_core">Scatter Core Sigma</string>
+    <string name="spektrafilm_scatter_tail">Scatter Tail Decay Length</string>
+    <string name="spektrafilm_scatter_tail_weight">Scatter Tail Weight</string>
+    <string name="spektrafilm_halation_channel_strength">Halation Strength by Channel</string>
+    <string name="spektrafilm_halation_first_sigma">First-Bounce Sigma by Channel</string>
+    <string name="spektrafilm_halation_bounces">Reflection Count</string>
+    <string name="spektrafilm_halation_bounce_decay">Reflection Decay</string>
+    <string name="spektrafilm_halation_renormalize">Preserve Midtones</string>
+    <string name="spektrafilm_grain_enabled">Enable Film Grain</string>
+    <string name="spektrafilm_grain_sublayers">Model Emulsion Sublayers</string>
+    <string name="spektrafilm_grain_particle_area">Grain Particle Area</string>
+    <string name="spektrafilm_grain_particle_scale">Particle Area Scale by Channel</string>
+    <string name="spektrafilm_grain_sublayer_scale">Particle Area Scale by Sublayer</string>
+    <string name="spektrafilm_grain_density_min">Minimum Grain Density by Channel</string>
+    <string name="spektrafilm_grain_uniformity">Grain Uniformity by Channel</string>
+    <string name="spektrafilm_grain_blur">Grain Blur</string>
+    <string name="spektrafilm_grain_dye_blur">Dye Cloud Blur</string>
+    <string name="spektrafilm_grain_micro_blur">Microstructure Blur</string>
+    <string name="spektrafilm_grain_clump">Molecular Clump Size</string>
+    <string name="spektrafilm_grain_layer_count">Grain Sublayer Count</string>
+    <string name="spektrafilm_layer_fast">Fast Sublayer</string>
+    <string name="spektrafilm_layer_mid">Mid Sublayer</string>
+    <string name="spektrafilm_layer_slow">Slow Sublayer</string>
+    <string name="spektrafilm_dir_diffusion">DIR Diffusion Sigma</string>
+    <string name="spektrafilm_dir_tail">DIR Tail Decay Length</string>
+    <string name="spektrafilm_dir_tail_weight">DIR Tail Weight</string>
+    <string name="spektrafilm_dir_from_red">Inhibition from the Red Layer</string>
+    <string name="spektrafilm_dir_from_green">Inhibition from the Green Layer</string>
+    <string name="spektrafilm_dir_from_blue">Inhibition from the Blue Layer</string>
+    <string name="spektrafilm_glare_enabled">Enable Print Glare</string>
+    <string name="spektrafilm_glare_percent">Glare Amount</string>
+    <string name="spektrafilm_glare_roughness">Glare Roughness</string>
+    <string name="spektrafilm_glare_blur">Glare Blur</string>
+    <string name="spektrafilm_scanner_white_correction">Correct Scanner White Point</string>
+    <string name="spektrafilm_scanner_white_level">Target White Level</string>
+    <string name="spektrafilm_scanner_black_correction">Correct Scanner Black Point</string>
+    <string name="spektrafilm_scanner_black_level">Target Black Level</string>
+    <string name="spektrafilm_spectral_method">Spectral Upsampling Method</string>
+    <string name="spektrafilm_gamut_algorithm">Compression Algorithm</string>
+    <string name="spektrafilm_gamut_threshold">Knee Threshold</string>
+    <string name="spektrafilm_gamut_limit">Knee Limit</string>
+    <string name="spektrafilm_gamut_power">Knee Power</string>
+    <string name="spektrafilm_gamut_off">Off</string>
+
+    <string name="spektrafilm_value_integer" translatable="false">%1$.0f</string>
+    <string name="spektrafilm_value_mm" translatable="false">%1$.0f mm</string>
+    <string name="spektrafilm_value_um" translatable="false">%1$.2f µm</string>
+    <string name="spektrafilm_value_um2" translatable="false">%1$.2f µm²</string>
+    <string name="spektrafilm_diffusion_black_pro_mist" translatable="false">Black Pro-Mist</string>
+    <string name="spektrafilm_diffusion_pro_mist" translatable="false">Pro-Mist</string>
+    <string name="spektrafilm_diffusion_glimmerglass" translatable="false">Glimmerglass</string>
+    <string name="spektrafilm_diffusion_cinebloom" translatable="false">CineBloom</string>
+    <string name="spektrafilm_spectral_hanatos" translatable="false">Hanatos 2025</string>
+    <string name="spektrafilm_spectral_mallett" translatable="false">Mallett 2019</string>
+    <string name="spektrafilm_gamut_xy" translatable="false">CIE xy</string>
+    <string name="spektrafilm_gamut_oklch" translatable="false">OKLCh</string>
+    <string name="spektrafilm_gamut_cam16ucs" translatable="false">CAM16-UCS</string>
+    <string name="spektrafilm_gamut_acesrgc" translatable="false">ACES RGC</string>
+    <string name="spektrafilm_gamut_oklrab" translatable="false">Oklrab</string>
+    <string name="spektrafilm_gamut_jzazbz" translatable="false">JzAzBz</string>
+</resources>

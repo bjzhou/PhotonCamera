@@ -338,6 +338,7 @@ add_library(my-native-lib SHARED
     spektrafilm/spectral_gamut.cpp
     spektrafilm/spectral_printing.cpp
     spektrafilm/spectral_generator.cpp
+    spektrafilm/spectral_graph.cpp
     spektrafilm/spectral_jni.cpp
     gles_gpu_timer_query_jni.cpp
     gles_hardware_buffer_jni.cpp
@@ -390,6 +391,7 @@ set_source_files_properties(
     spektrafilm/spectral_gamut.cpp
     spektrafilm/spectral_printing.cpp
     spektrafilm/spectral_generator.cpp
+    spektrafilm/spectral_graph.cpp
     spektrafilm/spectral_jni.cpp
     PROPERTIES COMPILE_OPTIONS "-fno-fast-math;-ffp-contract=off"
 )

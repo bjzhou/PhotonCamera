@@ -657,9 +657,6 @@
     <string name="settings_print_paper">สื่อสิ่งพิมพ์</string>
     <string name="settings_spectral_film_tuning">การปรับแต่งฟิล์มอย่างละเอียด</string>
     <string name="settings_spectral_film_tuning_description">ปรับการตอบสนองสีของม้วนฟิล์มปัจจุบันอย่างละเอียด</string>
-    <string name="settings_spectral_film_c_density_gain">ความหนาแน่นของสีฟ้า</string>
-    <string name="settings_spectral_film_m_density_gain">ความหนาแน่นของสีม่วงแดง</string>
-    <string name="settings_spectral_film_y_density_gain">ความหนาแน่นสีเหลือง</string>
     <string name="settings_raw_auto_exposure">การเปิดรับแสงอัตโนมัติ</string>
     <string name="settings_raw_auto_exposure_description">การวัดแสงอัตโนมัติและการประยุกต์ใช้การชดเชยแสงกับข้อมูลเชิงเส้น RAW ขณะกำลังพัฒนา</string>
     <string name="settings_raw_min_shutter_speed">ความเร็วชัตเตอร์ขั้นต่ำ</string>
