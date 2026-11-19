@@ -69,14 +69,12 @@ internal object GlesYuvSabreShaders {
     """.trimIndent()
 
     /**
-     * Local robust high-frequency noise estimate, independently for native and guide samples.
-     * Each group sorts 128 stratified checkerboard samples from a 32x32 guide cell. The separable second
-     * difference [-.5,1,-.5] rejects affine ramps; its white-noise standard deviation is 1.5.
-     * After the known guide [1,2,1]/4 filter, the residual/guide sigma ratio is 1/4. These are
-     * effective local estimates: unknown ISP denoising correlations are not a RAW shot/read model.
-     * Store standard deviations multiplied by 256, not variances: even the P010 guide quantization
-     * floor then stays in the normal FP16 range. Consumers undo this encoding before arithmetic.
-     * The two output images are ceil(guideSize/NOISE_TILE_SIZE), immutable RGBA16F, write-only.
+     * Local MAD of mixed second differences. The close stencil measures native and guide detail.
+     * For frame rejection, wider guide stencils sample beyond the guide filter's correlation range
+     * and capture noise that survived ISP smoothing. Taking the smallest directional MAD limits
+     * contamination by oriented scene structure. Guide RGB stores the rejection sigma and alpha
+     * stores the close luma sigma used by the structure and motion tests. Both images store sigma
+     * times 256 to keep the P010 quantization floor in the normal FP16 range.
      */
     val noiseEstimate = """
         #version 310 es
@@ -92,17 +90,41 @@ internal object GlesYuvSabreShaders {
         uniform ivec2 uInputSize;
         uniform ivec2 uGuideSize;
         uniform float uCodeStep;
+        const int wideSampleCount = ${GlesComputeWorkGroup.LINEAR_SIZE} / 2;
+        // The widest tap is six guide pixels away. Leave one more for the guide filter.
+        const int wideMargin = 7;
         shared vec3 sNative[${GlesComputeWorkGroup.LINEAR_SIZE}];
-        shared vec3 sGuide[${GlesComputeWorkGroup.LINEAR_SIZE}];
+        shared vec3 sGuideClose[${GlesComputeWorkGroup.LINEAR_SIZE}];
+        shared vec3 sGuideWideA[${GlesComputeWorkGroup.LINEAR_SIZE}];
+        shared vec3 sGuideWideB[${GlesComputeWorkGroup.LINEAR_SIZE}];
+
+        ivec2 samplePosition(int sampleIndex, ivec2 begin, ivec2 extent) {
+            // Spread the sample lattice over the actual tail cell instead of duplicating its edge.
+            ivec2 lattice = ivec2(sampleIndex % 16, 2 * (sampleIndex / 16) + (sampleIndex % 2));
+            return begin + min(lattice * extent / 16, extent - 1);
+        }
+
+        vec3 guideAt(ivec2 p) {
+            return texelFetch(uGuide, p, 0).rgb;
+        }
+
+        vec3 wideResidual(ivec2 p, vec3 center, ivec2 axis) {
+            ivec2 perpendicular = ivec2(-axis.y, axis.x);
+            ivec2 diagonalA = axis + perpendicular;
+            ivec2 diagonalB = axis - perpendicular;
+            vec3 adjacent = guideAt(p + axis) + guideAt(p - axis) +
+                            guideAt(p + perpendicular) + guideAt(p - perpendicular);
+            vec3 diagonal = guideAt(p + diagonalA) + guideAt(p - diagonalA) +
+                            guideAt(p + diagonalB) + guideAt(p - diagonalB);
+            return center - 0.5 * adjacent + 0.25 * diagonal;
+        }
 
         void main() {
             int lane = int(gl_LocalInvocationIndex);
             ivec2 cell = ivec2(gl_WorkGroupID.xy);
             ivec2 begin = cell * $NOISE_TILE_SIZE;
             ivec2 extent = min(ivec2($NOISE_TILE_SIZE), uGuideSize - begin);
-            // Spread the sample lattice over the actual tail cell instead of duplicating its edge.
-            ivec2 lattice = ivec2(lane % 16, 2 * (lane / 16) + (lane % 2));
-            ivec2 q = begin + min(lattice * extent / 16, extent - 1);
+            ivec2 q = samplePosition(lane, begin, extent);
             // Guide residuals need its filter radius plus the residual radius. Avoid the
             // artificially quieter CLAMP_TO_EDGE border whenever the input has full support.
             ivec2 margin = min(ivec2(2), (uGuideSize - 1) / 2);
@@ -117,11 +139,24 @@ internal object GlesYuvSabreShaders {
                     nativeResidual += weight * vec3(
                         texelFetch(uLuma, p + offset, 0).r,
                         texelFetch(uChroma, q + offset, 0).rg);
-                    guideResidual += weight * texelFetch(uGuide, q + offset, 0).rgb;
+                    guideResidual += weight * guideAt(q + offset);
                 }
             }
             sNative[lane] = abs(nativeResidual);
-            sGuide[lane] = abs(guideResidual);
+            sGuideClose[lane] = abs(guideResidual);
+            bool hasWideSupport = all(greaterThan(uGuideSize, ivec2(2 * wideMargin)));
+            if (hasWideSupport) {
+                // Each half of the workgroup samples two orientations on a complementary lattice.
+                int group = lane / wideSampleCount;
+                int sampleIndex = 2 * (lane % wideSampleCount) + (group + lane / 8) % 2;
+                ivec2 wideP = clamp(samplePosition(sampleIndex, begin, extent),
+                                    ivec2(wideMargin), uGuideSize - 1 - wideMargin);
+                vec3 center = guideAt(wideP);
+                ivec2 axisA = group == 0 ? ivec2(4, 0) : ivec2(4, 2);
+                ivec2 axisB = group == 0 ? ivec2(3, 3) : ivec2(2, 4);
+                sGuideWideA[lane] = abs(wideResidual(wideP, center, axisA));
+                sGuideWideB[lane] = abs(wideResidual(wideP, center, axisB));
+            }
             memoryBarrierShared();
             barrier();
             // Each comparator has one writer. Every lane participates in every barrier.
@@ -131,13 +166,24 @@ internal object GlesYuvSabreShaders {
                     if (partner > lane) {
                         vec3 a = sNative[lane];
                         vec3 b = sNative[partner];
-                        vec3 c = sGuide[lane];
-                        vec3 d = sGuide[partner];
+                        vec3 c = sGuideClose[lane];
+                        vec3 d = sGuideClose[partner];
                         bool ascending = (lane & size) == 0;
                         sNative[lane] = ascending ? min(a, b) : max(a, b);
                         sNative[partner] = ascending ? max(a, b) : min(a, b);
-                        sGuide[lane] = ascending ? min(c, d) : max(c, d);
-                        sGuide[partner] = ascending ? max(c, d) : min(c, d);
+                        sGuideClose[lane] = ascending ? min(c, d) : max(c, d);
+                        sGuideClose[partner] = ascending ? max(c, d) : min(c, d);
+                        // Keep the two orientations in each shared array in separate halves.
+                        if (hasWideSupport && size <= wideSampleCount) {
+                            vec3 wideA = sGuideWideA[lane];
+                            vec3 otherWideA = sGuideWideA[partner];
+                            vec3 wideB = sGuideWideB[lane];
+                            vec3 otherWideB = sGuideWideB[partner];
+                            sGuideWideA[lane] = ascending ? min(wideA, otherWideA) : max(wideA, otherWideA);
+                            sGuideWideA[partner] = ascending ? max(wideA, otherWideA) : min(wideA, otherWideA);
+                            sGuideWideB[lane] = ascending ? min(wideB, otherWideB) : max(wideB, otherWideB);
+                            sGuideWideB[partner] = ascending ? max(wideB, otherWideB) : min(wideB, otherWideB);
+                        }
                     }
                     memoryBarrierShared();
                     barrier();
@@ -146,13 +192,25 @@ internal object GlesYuvSabreShaders {
             if (lane == 0) {
                 const float inverseGaussianMad = 1.4826022185;
                 vec3 nativeSigma = 0.5 * (sNative[63] + sNative[64]) * (inverseGaussianMad / 1.5);
-                vec3 guideSigma = 0.5 * (sGuide[63] + sGuide[64]) * (inverseGaussianMad * 4.0);
+                vec3 closeSigma = 0.5 * (sGuideClose[63] + sGuideClose[64]) * (inverseGaussianMad * 4.0);
                 float quantizationSigma = uCodeStep * 0.2886751346;
                 nativeSigma = max(nativeSigma, vec3(quantizationSigma));
                 // 2x2 luma averaging halves sigma; the separable guide filter multiplies it by 3/8.
-                guideSigma = max(guideSigma, quantizationSigma * vec3(0.1875, 0.375, 0.375));
+                closeSigma = max(closeSigma, quantizationSigma * vec3(0.1875, 0.375, 0.375));
+                vec3 rejectionSigma = closeSigma;
+                if (hasWideSupport) {
+                    int lower = wideSampleCount / 2 - 1;
+                    int upper = lower + 1;
+                    vec3 first = min(sGuideWideA[lower] + sGuideWideA[upper],
+                                     sGuideWideB[lower] + sGuideWideB[upper]);
+                    vec3 second = min(sGuideWideA[lower + wideSampleCount] + sGuideWideA[upper + wideSampleCount],
+                                      sGuideWideB[lower + wideSampleCount] + sGuideWideB[upper + wideSampleCount]);
+                    // Wide taps have disjoint guide-filter support. The mixed stencil has gain 1.5.
+                    vec3 wideSigma = min(first, second) * (0.5 * inverseGaussianMad / 1.5);
+                    rejectionSigma = max(closeSigma, wideSigma);
+                }
                 imageStore(uNativeNoiseOutput, cell, vec4(nativeSigma * float($NOISE_SIGMA_STORAGE_SCALE), 1.0));
-                imageStore(uGuideNoiseOutput, cell, vec4(guideSigma * float($NOISE_SIGMA_STORAGE_SCALE), 1.0));
+                imageStore(uGuideNoiseOutput, cell, vec4(rejectionSigma, closeSigma.r) * float($NOISE_SIGMA_STORAGE_SCALE));
             }
         }
     """.trimIndent()
@@ -171,8 +229,8 @@ internal object GlesYuvSabreShaders {
         float yAt(ivec2 p) {
             return texelFetch(uGuide, clamp(p, ivec2(0), uGuideSize - 1), 0).r;
         }
-        vec3 noiseAt(sampler2D noise, vec2 p) {
-            return texture(noise, (p + 0.5) / (float($NOISE_TILE_SIZE) * vec2(textureSize(noise, 0)))).rgb / float($NOISE_SIGMA_STORAGE_SCALE);
+        vec4 noiseAt(sampler2D noise, vec2 p) {
+            return texture(noise, (p + 0.5) / (float($NOISE_TILE_SIZE) * vec2(textureSize(noise, 0)))) / float($NOISE_SIGMA_STORAGE_SCALE);
         }
         void main() {
             ivec2 p = ivec2(gl_FragCoord.xy);
@@ -187,8 +245,8 @@ internal object GlesYuvSabreShaders {
                 }
             }
             tensor /= 9.0;
-            vec3 nativeSigma = noiseAt(uNativeNoise, vec2(p));
-            float guideSigma = noiseAt(uGuideNoise, vec2(p)).r;
+            vec3 nativeSigma = noiseAt(uNativeNoise, vec2(p)).rgb;
+            float guideSigma = noiseAt(uGuideNoise, vec2(p)).a;
             float noiseGradient = guideSigma * guideSigma * 0.125;
             float trace = tensor.x + tensor.y;
             float separation = length(vec2(tensor.x - tensor.y, 2.0 * tensor.z));
@@ -235,8 +293,8 @@ internal object GlesYuvSabreShaders {
         vec2 flowAt(ivec2 tile) {
             return texelFetch(uAlignment, clamp(tile, ivec2(0), uAlignmentGridSize - 1), 0).xy;
         }
-        vec3 noiseAt(sampler2D noise, vec2 p) {
-            return texture(noise, (p + 0.5) / (float($NOISE_TILE_SIZE) * vec2(textureSize(noise, 0)))).rgb / float($NOISE_SIGMA_STORAGE_SCALE);
+        vec4 noiseAt(sampler2D noise, vec2 p) {
+            return texture(noise, (p + 0.5) / (float($NOISE_TILE_SIZE) * vec2(textureSize(noise, 0)))) / float($NOISE_SIGMA_STORAGE_SCALE);
         }
         void main() {
             ivec2 p = ivec2(gl_FragCoord.xy);
@@ -260,9 +318,9 @@ internal object GlesYuvSabreShaders {
             vec4 current = texture(uCurrentGuide, (currentP + 0.5) / vec2(uGuideSize));
             base.a /= 1024.0;
             current.a /= 1024.0;
-            vec3 baseSigma = noiseAt(uReferenceNoise, vec2(p));
-            vec3 currentSigma = noiseAt(uCurrentNoise, currentP);
-            vec3 noiseVariance = baseSigma * baseSigma + currentSigma * currentSigma;
+            vec4 baseNoise = noiseAt(uReferenceNoise, vec2(p));
+            vec3 currentSigma = noiseAt(uCurrentNoise, currentP).rgb;
+            vec3 noiseVariance = baseNoise.rgb * baseNoise.rgb + currentSigma * currentSigma;
             vec3 difference = current.rgb - base.rgb;
             vec3 signalDifference = max(difference * difference - noiseVariance, vec3(0.0));
             float localVariance = 2.0 * min(base.a, current.a);
@@ -275,7 +333,7 @@ internal object GlesYuvSabreShaders {
                 dot(signalDifference / tolerance, vec3(0.5, 0.25, 0.25));
             // Quarter-guide-pixel flow discontinuities are half a native luma pixel.
             bool motion = length(maximumFlow - minimumFlow) > 0.25;
-            bool textured = base.a > 25.0 * baseSigma.r * baseSigma.r;
+            bool textured = base.a > 25.0 * baseNoise.a * baseNoise.a;
             float robustness = motion && textured ? 6.0 : 1.0;
             oReverseWeight = 1.0 - exp2(-distance * robustness);
         }
