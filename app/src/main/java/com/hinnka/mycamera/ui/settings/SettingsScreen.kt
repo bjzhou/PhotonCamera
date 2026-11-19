@@ -164,6 +164,7 @@ import com.hinnka.mycamera.stabilization.normalizeStabilizationStrength
 import com.hinnka.mycamera.ui.camera.LutEditBottomSheet
 import com.hinnka.mycamera.ui.camera.LutEditorTarget
 import com.hinnka.mycamera.ui.camera.autoRotate
+import com.hinnka.mycamera.ui.camera.labelRes
 import com.hinnka.mycamera.ui.components.LogViewerDialog
 import com.hinnka.mycamera.ui.components.PaymentDialog
 import com.hinnka.mycamera.ui.components.DepthModelDownloadDialog
@@ -1104,15 +1105,7 @@ fun SettingsScreen(
                         )
 
                         val gridStyleLabels = GridStyle.entries.associateWith { style ->
-                            stringResource(
-                                when (style) {
-                                    GridStyle.THIRDS -> R.string.grid_style_thirds
-                                    GridStyle.DIAGONALS -> R.string.grid_style_diagonals
-                                    GridStyle.GOLDEN_RATIO -> R.string.grid_style_golden_ratio
-                                    GridStyle.GOLDEN_TRIANGLE -> R.string.grid_style_golden_triangle
-                                    GridStyle.GOLDEN_SPIRAL -> R.string.grid_style_golden_spiral
-                                }
-                            )
+                            stringResource(style.labelRes)
                         }
                         DropdownSettingItem(
                             title = stringResource(R.string.settings_grid_style),

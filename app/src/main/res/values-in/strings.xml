@@ -89,6 +89,7 @@
     <string name="settings_grid_lines">Garis Kisi</string>
     <string name="settings_grid_description">Tampilkan garis kisi untuk komposisi</string>
     <string name="settings_grid_style">Gaya Kisi</string>
+    <string name="grid_style_off">Nonaktif</string>
     <string name="grid_style_thirds">Aturan Sepertiga</string>
     <string name="grid_style_diagonals">Diagonal</string>
     <string name="grid_style_golden_ratio">Rasio Emas</string>

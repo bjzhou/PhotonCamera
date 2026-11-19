@@ -8,7 +8,6 @@ import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.*
-import androidx.compose.material.icons.Icons
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -36,6 +35,7 @@ import com.hinnka.mycamera.ui.theme.AccentColor
 import com.hinnka.mycamera.R
 import com.hinnka.mycamera.camera.CameraInfo
 import com.hinnka.mycamera.camera.LensType
+import com.hinnka.mycamera.camera.MeteringMode
 import com.hinnka.mycamera.viewmodel.CameraViewModel
 import kotlinx.coroutines.delay
 import kotlin.math.abs
@@ -71,7 +71,7 @@ fun ZoomControlBar(
     onZoomChange: (Float) -> Unit,
     onZoomStopClick: (Float) -> Unit,
     onLensSwitch: (String) -> Unit,
-    onSwitchCameraClick: () -> Unit,
+    onMeteringModeChange: (MeteringMode) -> Unit,
     modifier: Modifier = Modifier
 ) {
     val displayMode by viewModel.zoomDisplayMode.collectAsState()
@@ -251,26 +251,12 @@ fun ZoomControlBar(
             exit = fadeOut() + shrinkHorizontally(),
             modifier = Modifier.align(Alignment.CenterEnd)
         ) {
-            // 右侧前后摄像头切换按钮
-            IconButton(
-                onClick = onSwitchCameraClick,
+            MeteringModeButton(
+                mode = cameraState.meteringMode,
+                onModeChange = onMeteringModeChange,
                 enabled = !cameraState.videoRecordingState.isRecording &&
-                    !cameraState.videoRecordingState.isProcessing,
-                modifier = Modifier.size(32.dp)
-            ) {
-                Icon(
-                    imageVector = AppIcons.Cameraswitch,
-                    contentDescription = stringResource(R.string.switch_camera),
-                    modifier = Modifier
-                        .size(32.dp)
-                        .padding(8.dp)
-                        .autoRotate(),
-                    tint = Color.White.copy(
-                        alpha = if (cameraState.videoRecordingState.isRecording ||
-                            cameraState.videoRecordingState.isProcessing) 0.35f else 1f
-                    )
-                )
-            }
+                    !cameraState.videoRecordingState.isProcessing
+            )
         }
 
         // Zoom Ruler (Center)

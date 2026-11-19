@@ -37,7 +37,7 @@ internal class RawEnginePreviewGl {
     fun prepare(plan: RawEnginePreviewPlan): Boolean {
         preparationCount++
         if (texture != 0 && lastPlan === plan) {
-            logWork(plan)
+//            logWork(plan)
             return true
         }
         val startNs = SystemClock.elapsedRealtimeNanos()
@@ -89,7 +89,7 @@ internal class RawEnginePreviewGl {
         lastPlan = plan
         bakeCount++
         bakeSubmitNs += SystemClock.elapsedRealtimeNanos() - startNs
-        logWork(plan)
+//        logWork(plan)
         return true
     }
 

@@ -1,5 +1,6 @@
 package com.hinnka.mycamera.ui.camera
 
+import androidx.annotation.StringRes
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.Composable
@@ -12,9 +13,20 @@ import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.clipRect
 import androidx.compose.ui.graphics.drawscope.withTransform
+import com.hinnka.mycamera.R
 import com.hinnka.mycamera.camera.GridStyle
 
 private const val GOLDEN_SECTION = 0.61803398875f
+
+@get:StringRes
+internal val GridStyle.labelRes: Int
+    get() = when (this) {
+        GridStyle.THIRDS -> R.string.grid_style_thirds
+        GridStyle.DIAGONALS -> R.string.grid_style_diagonals
+        GridStyle.GOLDEN_RATIO -> R.string.grid_style_golden_ratio
+        GridStyle.GOLDEN_TRIANGLE -> R.string.grid_style_golden_triangle
+        GridStyle.GOLDEN_SPIRAL -> R.string.grid_style_golden_spiral
+    }
 
 /** Composition guides fitted to the actual preview bounds, including non-3:4 viewfinders. */
 @Composable

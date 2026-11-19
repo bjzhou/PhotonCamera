@@ -89,6 +89,7 @@
     <string name="settings_grid_lines">Grille de composition</string>
     <string name="settings_grid_description">Afficher la grille pour la composition</string>
     <string name="settings_grid_style">Style de grille</string>
+    <string name="grid_style_off">Désactivée</string>
     <string name="grid_style_thirds">Règle des tiers</string>
     <string name="grid_style_diagonals">Diagonales</string>
     <string name="grid_style_golden_ratio">Nombre d’or</string>
@@ -538,6 +539,7 @@
     <string name="video_microphone_line_in">Entrée ligne</string>
     <string name="video_microphone_external">Externe</string>
     <string name="video_bitrate_chip">Débit</string>
+    <string name="video_bitrate_value">%1$d Mbit/s</string>
     <string name="gallery_photon">Photon</string>
     <string name="gallery_system">Système</string>
     <string name="gallery_prepare_edit_failed">Impossible de préparer cette photo pour la retouche</string>

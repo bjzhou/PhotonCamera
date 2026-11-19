@@ -71,6 +71,7 @@
     <string name="video_microphone_line_in">Line In</string>
     <string name="video_microphone_external">External</string>
     <string name="video_bitrate_chip">Bitrate</string>
+    <string name="video_bitrate_value">%1$d Mbps</string>
 
     <!-- Permissions -->
     <string name="camera_permission_required">Camera and Microphone permissions are required</string>
@@ -257,6 +258,7 @@
     <string name="settings_grid_lines">Grid Lines</string>
     <string name="settings_grid_description">Show grid lines for composition</string>
     <string name="settings_grid_style">Grid Style</string>
+    <string name="grid_style_off">Off</string>
     <string name="grid_style_thirds">Rule of Thirds</string>
     <string name="grid_style_diagonals">Diagonals</string>
     <string name="grid_style_golden_ratio">Golden Ratio</string>

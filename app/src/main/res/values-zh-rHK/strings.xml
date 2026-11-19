@@ -246,6 +246,7 @@
     <string name="settings_grid_lines">網格線顯示</string>
     <string name="settings_grid_description">在拍攝時顯示網格線，輔助構圖</string>
     <string name="settings_grid_style">網格線樣式</string>
+    <string name="grid_style_off">關閉</string>
     <string name="grid_style_thirds">三分</string>
     <string name="grid_style_diagonals">對角線</string>
     <string name="grid_style_golden_ratio">黃金分割</string>

@@ -1831,7 +1831,9 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         }
         // 设置项 -> 相机控制器
         syncPreference({ it.mirrorFrontCamera }, cameraController::setMirrorFrontCameraEnabled)
-        syncPreference({ it.showGrid }, cameraController::setShowGrid)
+        syncPreference({ it.showGrid to it.gridStyle }) { (visible, style) ->
+            cameraController.setGridOverlay(visible, style)
+        }
         syncPreference({ it.nrLevel }) { level ->
             if (cameraController.state.value.nrLevel != level) cameraController.setNRLevel(level)
         }
@@ -2154,10 +2156,6 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 if (prefs.frameId != null) {
                     currentFrameId = prefs.frameId
                 }
-
-                // 应用保存的网格线设置
-                cameraController.setShowGrid(userPreferencesRepository.latest().showGrid)
-                cameraController.setGridStyle(prefs.gridStyle)
 
                 cameraController.setUseMultipleExposure(prefs.useMultipleExposure)
                 cameraController.setRawCfaCorrectionModes(prefs.rawCfaCorrectionModes)
@@ -4622,10 +4620,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     fun setGridStyle(style: GridStyle) {
-        cameraController.setGridStyle(style)
-        viewModelScope.launch {
-            userPreferencesRepository.update { gridStyle = style }
-        }
+        userPreferencesRepository.updateAsync { gridStyle = style }
     }
 
     /**

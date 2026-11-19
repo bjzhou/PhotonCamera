@@ -1,6 +1,6 @@
 package com.hinnka.mycamera.camera
 
-/** Persisted independently from visibility so the quick toggle retains the selected guide. */
+/** Persisted independently from visibility so hiding the grid preserves the selected style. */
 enum class GridStyle {
     THIRDS,
     DIAGONALS,

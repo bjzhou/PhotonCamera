@@ -3,12 +3,21 @@ package com.hinnka.mycamera.ui.camera
 import com.hinnka.mycamera.raw.fotufilm.FotufilmDocument
 import android.media.AudioDeviceInfo
 import android.os.Build
+import androidx.activity.compose.BackHandler
 import androidx.compose.animation.*
 import androidx.compose.animation.core.MutableTransitionState
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.relocation.BringIntoViewRequester
+import androidx.compose.foundation.relocation.bringIntoViewRequester
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.selection.selectable
+import androidx.compose.foundation.selection.selectableGroup
+import androidx.compose.foundation.selection.toggleable
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicText
 import androidx.compose.foundation.text.TextAutoSize
@@ -21,20 +30,30 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
+import androidx.compose.ui.input.nestedscroll.NestedScrollSource
+import androidx.compose.ui.input.nestedscroll.nestedScroll
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.TextUnit
+import androidx.compose.ui.unit.Velocity
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.em
 import androidx.compose.ui.unit.sp
 import com.hinnka.mycamera.ui.theme.AccentColor
-import com.hinnka.mycamera.ui.theme.OnAccentColor
+import com.hinnka.mycamera.ui.theme.DarkSurface
+import com.hinnka.mycamera.ui.theme.TextSecondary
 import com.hinnka.mycamera.R
 import com.hinnka.mycamera.camera.AspectRatio
-import com.hinnka.mycamera.camera.MeteringMode
+import com.hinnka.mycamera.camera.GridStyle
 import com.hinnka.mycamera.raw.DcpInfo
 import com.hinnka.mycamera.raw.HncsFilmCurveMode
 import com.hinnka.mycamera.raw.RawRenderingEngine
@@ -47,8 +66,9 @@ import com.hinnka.mycamera.video.*
 import com.hinnka.mycamera.video.VideoCodec
 import com.hinnka.mycamera.ui.icons.AppIcons
 
-private enum class VideoSettingPanel {
+private enum class QuickSettingMenuId {
     ASPECT_RATIO,
+    GRID_STYLE,
     LOG_PROFILE,
     BITRATE,
     CODEC,
@@ -56,6 +76,17 @@ private enum class VideoSettingPanel {
 }
 
 private val CameraTopSheetContentTopPadding = 32.dp
+private val QuickSettingDropdownTriggerHeight = 54.dp
+private val QuickSettingDropdownGap = 6.dp
+
+private object QuickSettingDropdownScrollConnection : NestedScrollConnection {
+    // Consume motion left over at either end of the list before it reaches the sheet.
+    override fun onPostScroll(consumed: Offset, available: Offset, source: NestedScrollSource): Offset =
+        Offset(0f, available.y)
+
+    override suspend fun onPostFling(consumed: Velocity, available: Velocity): Velocity =
+        Velocity(0f, available.y)
+}
 
 @OptIn(ExperimentalLayoutApi::class, ExperimentalMaterial3Api::class)
 @Composable
@@ -104,12 +135,17 @@ fun CameraTopSheet(
     onRawSpectralFilmSelectionChange: (SpectralFilmSelection?) -> Unit,
     onRawSpectralFilmPrintChange: (String?) -> Unit,
     onRawFotufilmDocumentChange: (FotufilmDocument) -> Unit,
-    meteringMode: MeteringMode,
-    onMeteringModeChange: (MeteringMode) -> Unit,
     onFilterManageClick: () -> Unit,
     onFrameManageClick: () -> Unit,
     onPresetManageClick: () -> Unit,
     onToolboxClick: () -> Unit,
+    showHistogram: Boolean,
+    onHistogramChange: (Boolean) -> Unit,
+    showGrid: Boolean,
+    gridStyle: GridStyle,
+    onGridStyleChange: (GridStyle?) -> Unit,
+    showLevelIndicator: Boolean,
+    onLevelIndicatorChange: (Boolean) -> Unit,
     onMoreSettingsClick: () -> Unit,
     useJpgMax: Boolean,
     onJpgMaxToggle: (Boolean) -> Unit,
@@ -121,7 +157,7 @@ fun CameraTopSheet(
 ) {
     val panelVisibility = visibilityState ?: remember { MutableTransitionState(visible) }
     panelVisibility.targetState = visible
-    var expandedVideoPanel by rememberSaveable { mutableStateOf<VideoSettingPanel?>(null) }
+    var expandedMenu by remember(captureMode) { mutableStateOf<QuickSettingMenuId?>(null) }
     var showRenderingEngineSheet by rememberSaveable { mutableStateOf(false) }
     var showContentManagementOptions by rememberSaveable { mutableStateOf(false) }
     fun handleContentManagementAction(action: () -> Unit) {
@@ -131,7 +167,10 @@ fun CameraTopSheet(
 
     LaunchedEffect(visible, captureMode) {
         showContentManagementOptions = false
+        if (!visible) expandedMenu = null
     }
+
+    BackHandler(enabled = visible && expandedMenu != null) { expandedMenu = null }
 
     LaunchedEffect(useRaw) {
         if (!useRaw) {
@@ -145,64 +184,92 @@ fun CameraTopSheet(
         exit = slideOutVertically(targetOffsetY = { -it }) + fadeOut(),
         modifier = modifier
     ) {
+        val panelScrollState = rememberScrollState()
+        val dropdownMaxHeight = with(LocalDensity.current) {
+            (panelScrollState.viewportSize.toDp() - QuickSettingDropdownTriggerHeight - QuickSettingDropdownGap)
+                .coerceIn(0.dp, 220.dp)
+        }
         Column(
             modifier = Modifier
                 .fillMaxWidth()
                 .aspectRatio(1f)
                 .clip(RoundedCornerShape(bottomStart = 24.dp, bottomEnd = 24.dp))
-                .background(Color.Black.copy(alpha = 0.8f))
+                .background(Color.Black.copy(alpha = 0.88f))
                 // Keep the screen's top inset fixed, but measure content and side padding
                 // in the rotated viewport so landscape controls stay inside the sheet.
                 .padding(top = contentTopPadding)
                 .autoRotate(matchParentSize = true)
-                .padding(horizontal = 24.dp)
+                .padding(horizontal = 20.dp)
         ) {
             Column(
                 modifier = Modifier
                     .weight(1f)
-                    .verticalScroll(rememberScrollState())
+                    .verticalScroll(panelScrollState)
             ) {
-                if (captureMode == CaptureMode.PHOTO) {
-                    val isProfessionalMode = useRaw && isRawSupported
-                    SectionLabel(title = stringResource(R.string.aspect_ratio))
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        AspectRatio.sanitizeTopSheetRatios(topSheetAspectRatios).forEach { ratio ->
-                            val isSelected = aspectRatio == ratio
-                            Box(
-                                modifier = Modifier
-                                    .weight(1f)
-                                    .heightIn(min = 40.dp)
-                                    .clip(RoundedCornerShape(8.dp))
-                                    .background(
-                                        if (isSelected) AccentColor else Color.White.copy(
-                                            alpha = 0.12f
-                                        )
-                                    )
-                                    .clickable { onAspectRatioChange(ratio) }
-                                    .padding(vertical = 8.dp),
-                                contentAlignment = Alignment.Center
-                            ) {
-                                Text(
-                                    text = ratio.getDisplayName(),
-                                    color = if (isSelected) OnAccentColor else Color.White,
-                                    fontSize = 11.sp,
-                                    fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium
-                                )
-                            }
-                        }
+                val isPhoto = captureMode == CaptureMode.PHOTO
+                val aspectRatioMenu = if (isPhoto) {
+                    quickSettingMenu(
+                        id = QuickSettingMenuId.ASPECT_RATIO,
+                        title = stringResource(R.string.aspect_ratio),
+                        value = aspectRatio,
+                        options = AspectRatio.sanitizeTopSheetRatios(topSheetAspectRatios),
+                        onValueChange = onAspectRatioChange,
+                        label = { it.getDisplayName() }
+                    )
+                } else {
+                    quickSettingMenu(
+                        id = QuickSettingMenuId.ASPECT_RATIO,
+                        title = stringResource(R.string.video_aspect_chip),
+                        value = videoAspectRatio,
+                        options = VideoAspectRatio.entries,
+                        onValueChange = onVideoAspectRatioChange,
+                        label = { videoAspectRatioLabel(it) }
+                    )
+                }
+                val gridMenu = quickSettingMenu(
+                    id = QuickSettingMenuId.GRID_STYLE,
+                    title = stringResource(R.string.settings_grid_lines),
+                    value = gridStyle.takeIf { showGrid },
+                    options = listOf<GridStyle?>(null) + GridStyle.entries,
+                    onValueChange = onGridStyleChange,
+                    label = { style -> stringResource(style?.labelRes ?: R.string.grid_style_off) }
+                )
+                QuickSettingDropdownRow(
+                    first = aspectRatioMenu,
+                    second = gridMenu,
+                    expanded = expandedMenu,
+                    dropdownMaxHeight = dropdownMaxHeight,
+                    onExpandedChange = { expandedMenu = it }
+                )
+
+                if (isPhoto) {
+                    Spacer(Modifier.height(12.dp))
+                    QuickSettingGrid(columns = 2) { itemModifier ->
+                        QuickSettingToggle(
+                            title = stringResource(R.string.histogram),
+                            checked = showHistogram,
+                            onCheckedChange = onHistogramChange,
+                            modifier = itemModifier
+                        )
+                        QuickSettingToggle(
+                            title = stringResource(R.string.settings_level_indicator),
+                            checked = showLevelIndicator,
+                            onCheckedChange = onLevelIndicatorChange,
+                            modifier = itemModifier
+                        )
                     }
 
-                    Spacer(modifier = Modifier.height(16.dp))
+                    Spacer(Modifier.height(8.dp))
 
                     QuickSettingGrid { itemModifier ->
-                        if (isProfessionalMode) {
-                            QuickSettingButton2(
+                        if (useRaw && isRawSupported) {
+                            QuickSettingButton(
                                 title = stringResource(R.string.settings_raw_color_engine),
-                                checked = true,
-                                onClick = { showRenderingEngineSheet = true },
+                                icon = AppIcons.ChevronRight,
+                                onClick = {
+                                    expandedMenu = null
+                                    showRenderingEngineSheet = true
+                                },
                                 modifier = itemModifier
                             )
                         } else {
@@ -232,262 +299,119 @@ fun CameraTopSheet(
                             enabled = photoPreviewStabilizationAvailable,
                             modifier = itemModifier
                         )
-                        MeteringModeQuickSetting(
-                            meteringMode = meteringMode,
-                            onMeteringModeChange = onMeteringModeChange,
-                            modifier = itemModifier
-                        )
-
                         ToolboxQuickSetting(
                             onToolboxClick = onToolboxClick,
                             modifier = itemModifier
                         )
-
                         ContentManagementQuickSetting(
                             onClick = { showContentManagementOptions = !showContentManagementOptions },
                             modifier = itemModifier
                         )
-
                     }
-
-                    ContentManagementOptionsPanel(
-                        visible = showContentManagementOptions,
-                        onFilterManageClick = {
-                            handleContentManagementAction(onFilterManageClick)
-                        },
-                        onFrameManageClick = {
-                            handleContentManagementAction(onFrameManageClick)
-                        },
-                        onPresetManageClick = {
-                            handleContentManagementAction(onPresetManageClick)
-                        }
-                    )
                 } else {
-                    SectionLabel(title = stringResource(R.string.video_aspect_chip))
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(10.dp)
-                    ) {
-                        VideoAspectRatio.entries.forEach { ratio ->
-                            val isSelected = videoAspectRatio == ratio
-                            Box(
-                                modifier = Modifier
-                                    .weight(1f)
-                                    .heightIn(min = 40.dp)
-                                    .clip(RoundedCornerShape(8.dp))
-                                    .background(
-                                        if (isSelected) AccentColor else Color.White.copy(
-                                            alpha = 0.12f
-                                        )
-                                    )
-                                    .clickable { onVideoAspectRatioChange(ratio) }
-                                    .padding(vertical = 8.dp),
-                                contentAlignment = Alignment.Center
-                            ) {
-                                Text(
-                                    text = videoAspectRatioLabel(ratio),
-                                    color = if (isSelected) OnAccentColor else Color.White,
-                                    fontSize = 13.sp,
-                                    fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium
-                                )
-                            }
-                        }
-                    }
-
-                    Spacer(modifier = Modifier.height(16.dp))
-
-                    QuickSettingGrid(columns = 2, itemHeight = 40.dp) { itemModifier ->
-                        VideoSettingTile(
+                    Spacer(Modifier.height(8.dp))
+                    QuickSettingDropdownRow(
+                        first = quickSettingMenu(
+                            id = QuickSettingMenuId.LOG_PROFILE,
                             title = stringResource(R.string.video_log_chip),
-                            summary = videoLogProfileLabel(videoLogProfile),
-                            expanded = expandedVideoPanel == VideoSettingPanel.LOG_PROFILE,
-                            onClick = {
-                                expandedVideoPanel = if (expandedVideoPanel == VideoSettingPanel.LOG_PROFILE) null else VideoSettingPanel.LOG_PROFILE
-                            },
-                            modifier = itemModifier
-                        )
-                        VideoSettingTile(
+                            value = videoLogProfile,
+                            options = availableVideoLogProfiles,
+                            onValueChange = onVideoLogProfileChange,
+                            label = { videoLogProfileLabel(it) }
+                        ),
+                        second = quickSettingMenu(
+                            id = QuickSettingMenuId.BITRATE,
                             title = stringResource(R.string.video_bitrate_chip),
-                            summary = "${videoBitrate.bitrateMbps}M",
-                            expanded = expandedVideoPanel == VideoSettingPanel.BITRATE,
-                            onClick = {
-                                expandedVideoPanel = if (expandedVideoPanel == VideoSettingPanel.BITRATE) null else VideoSettingPanel.BITRATE
-                            },
-                            modifier = itemModifier
-                        )
-                        VideoSettingTile(
+                            value = videoBitrate,
+                            options = VideoBitratePreset.entries,
+                            onValueChange = onVideoBitrateChange,
+                            label = { stringResource(R.string.video_bitrate_value, it.bitrateMbps) }
+                        ),
+                        expanded = expandedMenu,
+                        dropdownMaxHeight = dropdownMaxHeight,
+                        onExpandedChange = { expandedMenu = it }
+                    )
+                    Spacer(Modifier.height(8.dp))
+                    QuickSettingDropdownRow(
+                        first = quickSettingMenu(
+                            id = QuickSettingMenuId.CODEC,
                             title = stringResource(R.string.video_codec_chip),
-                            summary = videoCodec.displayName,
-                            expanded = expandedVideoPanel == VideoSettingPanel.CODEC,
-                            onClick = {
-                                expandedVideoPanel = if (expandedVideoPanel == VideoSettingPanel.CODEC) null else VideoSettingPanel.CODEC
-                            },
-                            modifier = itemModifier
-                        )
-                        VideoSettingTile(
+                            value = videoCodec,
+                            options = VideoCodec.entries,
+                            onValueChange = onVideoCodecChange,
+                            label = { it.displayName }
+                        ),
+                        second = quickSettingMenu(
+                            id = QuickSettingMenuId.MICROPHONE,
                             title = stringResource(R.string.video_microphone_title),
-                            summary = selectedVideoAudioInputLabel(
-                                selectedAudioInputId = videoAudioInputId,
-                                options = videoAudioInputOptions
-                            ),
-                            expanded = expandedVideoPanel == VideoSettingPanel.MICROPHONE,
-                            onClick = {
-                                expandedVideoPanel = if (expandedVideoPanel == VideoSettingPanel.MICROPHONE) null else VideoSettingPanel.MICROPHONE
-                            },
+                            value = videoAudioInputId,
+                            options = listOf(VIDEO_AUDIO_INPUT_AUTO) + videoAudioInputOptions.map { it.id },
+                            onValueChange = onVideoAudioInputChange,
+                            label = { selectedVideoAudioInputLabel(it, videoAudioInputOptions) }
+                        ),
+                        expanded = expandedMenu,
+                        dropdownMaxHeight = dropdownMaxHeight,
+                        onExpandedChange = { expandedMenu = it }
+                    )
+
+                    Spacer(Modifier.height(12.dp))
+                    QuickSettingGrid(columns = 2) { itemModifier ->
+                        QuickSettingToggle(
+                            title = stringResource(R.string.settings_level_indicator),
+                            checked = showLevelIndicator,
+                            onCheckedChange = onLevelIndicatorChange,
+                            modifier = itemModifier
+                        )
+                        ContentManagementQuickSetting(
+                            onClick = { showContentManagementOptions = !showContentManagementOptions },
                             modifier = itemModifier
                         )
                     }
+                }
 
-                    AnimatedVisibility(
-                        visible = expandedVideoPanel != null,
-                        enter = expandVertically() + fadeIn(),
-                        exit = shrinkVertically() + fadeOut()
-                    ) {
-                        Column {
-                            Spacer(modifier = Modifier.height(12.dp))
-                            VideoSettingExpandedPanel {
-                                when (expandedVideoPanel) {
-                                    VideoSettingPanel.LOG_PROFILE -> {
-                                        FlowRow(
-                                            modifier = Modifier.fillMaxWidth(),
-                                            verticalArrangement = Arrangement.spacedBy(8.dp),
-                                            horizontalArrangement = Arrangement.spacedBy(8.dp)
-                                        ) {
-                                            availableVideoLogProfiles.forEach { profile ->
-                                                val isSelected = videoLogProfile == profile
-                                                VideoOptionChip(
-                                                    title = videoLogProfileLabel(profile),
-                                                    selected = isSelected,
-                                                    onClick = { onVideoLogProfileChange(profile) }
-                                                )
-                                            }
-                                        }
-                                    }
-
-                                    VideoSettingPanel.BITRATE -> {
-                                        FlowRow(
-                                            modifier = Modifier.fillMaxWidth(),
-                                            verticalArrangement = Arrangement.spacedBy(8.dp),
-                                            horizontalArrangement = Arrangement.spacedBy(8.dp)
-                                        ) {
-                                            VideoBitratePreset.entries.forEach { bitrate ->
-                                                VideoOptionChip(
-                                                    title = "${bitrate.bitrateMbps}M",
-                                                    selected = videoBitrate == bitrate,
-                                                    onClick = { onVideoBitrateChange(bitrate) }
-                                                )
-                                            }
-                                        }
-                                    }
-
-                                    VideoSettingPanel.CODEC -> {
-                                        FlowRow(
-                                            modifier = Modifier.fillMaxWidth(),
-                                            verticalArrangement = Arrangement.spacedBy(8.dp),
-                                            horizontalArrangement = Arrangement.spacedBy(8.dp)
-                                        ) {
-                                            VideoCodec.entries.forEach { codec ->
-                                                VideoOptionChip(
-                                                    title = codec.displayName,
-                                                    selected = videoCodec == codec,
-                                                    onClick = { onVideoCodecChange(codec) }
-                                                )
-                                            }
-                                        }
-                                    }
-
-                                    VideoSettingPanel.MICROPHONE -> {
-                                        FlowRow(
-                                            modifier = Modifier.fillMaxWidth(),
-                                            verticalArrangement = Arrangement.spacedBy(8.dp),
-                                            horizontalArrangement = Arrangement.spacedBy(8.dp)
-                                        ) {
-                                            VideoOptionChip(
-                                                title = stringResource(R.string.video_microphone_auto),
-                                                selected = videoAudioInputId == VIDEO_AUDIO_INPUT_AUTO,
-                                                onClick = { onVideoAudioInputChange(VIDEO_AUDIO_INPUT_AUTO) }
-                                            )
-                                            videoAudioInputOptions.forEach { option ->
-                                                VideoOptionChip(
-                                                    title = videoAudioInputLabel(option),
-                                                    selected = videoAudioInputId == option.id,
-                                                    onClick = { onVideoAudioInputChange(option.id) }
-                                                )
-                                            }
-                                        }
-                                    }
-
-                                    else -> Unit
-                                }
-                            }
-                        }
+                ContentManagementOptionsPanel(
+                    visible = showContentManagementOptions,
+                    onFilterManageClick = {
+                        handleContentManagementAction(onFilterManageClick)
+                    },
+                    onFrameManageClick = {
+                        handleContentManagementAction(onFrameManageClick)
+                    },
+                    onPresetManageClick = {
+                        handleContentManagementAction(onPresetManageClick)
                     }
-                }
+                )
 
-                if (captureMode == CaptureMode.VIDEO) {
-                    Spacer(modifier = Modifier.height(16.dp))
-
-                    ContentManagementQuickSetting(
-                        onClick = { showContentManagementOptions = !showContentManagementOptions },
-                        modifier = Modifier.fillMaxWidth().height(40.dp)
-                    )
-
-                    ContentManagementOptionsPanel(
-                        visible = showContentManagementOptions,
-                        onFilterManageClick = {
-                            handleContentManagementAction(onFilterManageClick)
-                        },
-                        onFrameManageClick = {
-                            handleContentManagementAction(onFrameManageClick)
-                        },
-                        onPresetManageClick = {
-                            handleContentManagementAction(onPresetManageClick)
-                        }
-                    )
-                }
-
-                // More Settings Button
-                Box(
-                    modifier = Modifier.fillMaxWidth().padding(vertical = 16.dp),
-                    contentAlignment = Alignment.Center
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(vertical = 12.dp)
+                        .height(48.dp)
+                        .quickSettingSurface()
+                        .clickable(role = Role.Button, onClick = onMoreSettingsClick)
+                        .padding(horizontal = 12.dp),
+                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                    verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Row(
-                        modifier = Modifier
-                            .clickable(onClick = onMoreSettingsClick)
-                            .clip(RoundedCornerShape(8.dp))
-                            .background(color = Color.White.copy(alpha = 0.15f))
-                            .padding(16.dp, 8.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Box(
-                            modifier = Modifier
-                                .size(32.dp)
-                                .clip(RoundedCornerShape(8.dp))
-                                .background(Color.White.copy(alpha = 0.1f)),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            Icon(
-                                imageVector = Icons.Default.Settings,
-                                contentDescription = null,
-                                tint = Color.White,
-                                modifier = Modifier.size(18.dp)
-                            )
-                        }
-                        Spacer(modifier = Modifier.width(12.dp))
-                        Text(
-                            text = stringResource(R.string.settings_title),
-                            color = Color.White,
-                            fontSize = 15.sp,
-                            fontWeight = FontWeight.Medium,
-                            modifier = Modifier.weight(1f)
-                        )
-                        Icon(
-                            imageVector = AppIcons.ChevronRight,
-                            contentDescription = null,
-                            tint = Color.White.copy(alpha = 0.3f),
-                            modifier = Modifier.size(20.dp)
-                        )
-                    }
+                    Icon(
+                        imageVector = Icons.Default.Settings,
+                        contentDescription = null,
+                        tint = Color.White,
+                        modifier = Modifier.size(18.dp)
+                    )
+                    QuickSettingLabel(
+                        text = stringResource(R.string.settings_title),
+                        color = Color.White,
+                        fontWeight = FontWeight.Medium,
+                        maxFontSize = 13.sp,
+                        modifier = Modifier.weight(1f)
+                    )
+                    Icon(
+                        imageVector = AppIcons.ChevronRight,
+                        contentDescription = null,
+                        tint = TextSecondary,
+                        modifier = Modifier.size(18.dp)
+                    )
                 }
             }
         }
@@ -543,91 +467,197 @@ fun CameraTopSheet(
     }
 }
 
+private data class QuickSettingMenu(
+    val id: QuickSettingMenuId,
+    val title: String,
+    val summary: String,
+    val choices: List<QuickSettingChoice>
+)
+
+private data class QuickSettingChoice(
+    val label: String,
+    val selected: Boolean,
+    val onSelect: () -> Unit
+)
+
 @Composable
-private fun VideoSettingTile(
+private fun <T> quickSettingMenu(
+    id: QuickSettingMenuId,
     title: String,
-    summary: String,
-    expanded: Boolean,
-    onClick: () -> Unit,
-    modifier: Modifier = Modifier,
-) {
-    Column(
-        modifier = modifier
-            .height(40.dp)
-            .clip(RoundedCornerShape(8.dp))
-            .background(
-                if (expanded) AccentColor else Color.White.copy(alpha = 0.14f)
-            )
-            .clickable(onClick = onClick)
-            .padding(horizontal = 8.dp, vertical = 4.dp),
-        verticalArrangement = Arrangement.spacedBy(2.dp, Alignment.CenterVertically)
-    ) {
-        Text(
-            text = title,
-            color = if (expanded) OnAccentColor.copy(alpha = 0.75f) else Color.White.copy(alpha = 0.72f),
-            fontSize = 9.sp,
-            lineHeight = 12.sp,
-            fontWeight = FontWeight.Medium,
-            maxLines = 1
+    value: T,
+    options: List<T>,
+    onValueChange: (T) -> Unit,
+    label: @Composable (T) -> String
+): QuickSettingMenu {
+    val summary = label(value)
+    val choices = options.map { option ->
+        val selected = option == value
+        QuickSettingChoice(
+            label = if (selected) summary else label(option),
+            selected = selected,
+            onSelect = { onValueChange(option) }
         )
-        Row(
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            QuickSettingLabel(
-                text = summary,
-                color = if (expanded) OnAccentColor else Color.White,
-                maxFontSize = 12.sp,
-                fontWeight = FontWeight.Bold,
+    }
+    return QuickSettingMenu(id, title, summary, choices)
+}
+
+@Composable
+private fun QuickSettingDropdownRow(
+    first: QuickSettingMenu,
+    second: QuickSettingMenu,
+    expanded: QuickSettingMenuId?,
+    dropdownMaxHeight: Dp,
+    onExpandedChange: (QuickSettingMenuId?) -> Unit
+) {
+    val openMenu = when (expanded) {
+        first.id -> first
+        second.id -> second
+        else -> null
+    }
+    val rowRequester = remember { BringIntoViewRequester() }
+    LaunchedEffect(openMenu?.id, dropdownMaxHeight) {
+        if (openMenu != null) {
+            withFrameNanos { }
+            rowRequester.bringIntoView()
+        }
+    }
+
+    // Keep the dropdown in the rotated sheet so it follows both the trigger and device orientation.
+    Column(Modifier.fillMaxWidth().bringIntoViewRequester(rowRequester)) {
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            QuickSettingDropdownTrigger(
+                menu = first,
+                expanded = expanded == first.id,
+                onClick = { onExpandedChange(first.id.takeUnless { it == expanded }) },
                 modifier = Modifier.weight(1f)
             )
-            Icon(
-                imageVector = if (expanded) AppIcons.ExpandLess else AppIcons.OpenInFull,
-                contentDescription = null,
-                tint = if (expanded) OnAccentColor else Color.White.copy(alpha = 0.8f),
-                modifier = Modifier.size(12.dp)
+            QuickSettingDropdownTrigger(
+                menu = second,
+                expanded = expanded == second.id,
+                onClick = { onExpandedChange(second.id.takeUnless { it == expanded }) },
+                modifier = Modifier.weight(1f)
             )
+        }
+        if (openMenu != null) {
+            Spacer(Modifier.height(QuickSettingDropdownGap))
+            key(openMenu.id) {
+                QuickSettingDropdownOptions(
+                    choices = openMenu.choices,
+                    maxHeight = dropdownMaxHeight,
+                    onSelect = { choice ->
+                        onExpandedChange(null)
+                        if (!choice.selected) choice.onSelect()
+                    }
+                )
+            }
         }
     }
 }
 
 @Composable
-private fun VideoSettingExpandedPanel(
-    content: @Composable ColumnScope.() -> Unit
+private fun QuickSettingDropdownTrigger(
+    menu: QuickSettingMenu,
+    expanded: Boolean,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier
 ) {
-    Column(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clip(RoundedCornerShape(14.dp))
-            .background(Color.White.copy(alpha = 0.08f))
-            .padding(14.dp),
-        content = content
-    )
+    val enabled = menu.choices.isNotEmpty()
+    val accentForeground = quickSettingAccentForeground(AccentColor)
+    Row(
+        modifier = modifier
+            .height(QuickSettingDropdownTriggerHeight)
+            .quickSettingSurface(active = expanded)
+            .clickable(enabled = enabled, role = Role.Button, onClick = onClick)
+            .padding(horizontal = 11.dp, vertical = 6.dp),
+        horizontalArrangement = Arrangement.spacedBy(7.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Column(
+            modifier = Modifier.weight(1f),
+            verticalArrangement = Arrangement.spacedBy(2.dp, Alignment.CenterVertically)
+        ) {
+            Text(
+                text = menu.title,
+                color = TextSecondary,
+                fontSize = 10.sp,
+                lineHeight = 12.sp,
+                fontWeight = FontWeight.Medium,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+            QuickSettingLabel(
+                text = menu.summary,
+                color = if (enabled) accentForeground else Color.White.copy(alpha = 0.38f),
+                maxFontSize = 14.sp,
+                fontWeight = FontWeight.SemiBold
+            )
+        }
+        Icon(
+            imageVector = if (expanded) AppIcons.ExpandLess else AppIcons.ExpandMore,
+            contentDescription = null,
+            tint = when {
+                expanded -> accentForeground
+                enabled -> TextSecondary
+                else -> Color.White.copy(alpha = 0.38f)
+            },
+            modifier = Modifier.size(18.dp)
+        )
+    }
 }
 
 @Composable
-private fun VideoOptionChip(
-    title: String,
-    selected: Boolean,
-    onClick: () -> Unit
+private fun QuickSettingDropdownOptions(
+    choices: List<QuickSettingChoice>,
+    maxHeight: Dp,
+    onSelect: (QuickSettingChoice) -> Unit
 ) {
-    Box(
-        modifier = Modifier
-            .heightIn(min = 36.dp)
-            .clip(RoundedCornerShape(8.dp))
-            .background(
-                if (selected) AccentColor else Color.White.copy(alpha = 0.12f)
-            )
-            .clickable(onClick = onClick)
-            .padding(horizontal = 12.dp, vertical = 8.dp),
-        contentAlignment = Alignment.Center
+    val accent = AccentColor
+    val accentForeground = quickSettingAccentForeground(accent)
+    val selectedFill = accent.copy(alpha = 0.12f)
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        shape = QuickSettingShape,
+        color = DarkSurface,
+        border = BorderStroke(1.dp, Color.White.copy(alpha = 0.14f))
     ) {
-        Text(
-            text = title,
-            color = if (selected) OnAccentColor else Color.White,
-            fontSize = 12.sp,
-            fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium
-        )
+        Column(
+            modifier = Modifier
+                .heightIn(max = maxHeight)
+                .nestedScroll(QuickSettingDropdownScrollConnection)
+                .verticalScroll(rememberScrollState())
+                .selectableGroup()
+                .padding(5.dp)
+        ) {
+            choices.forEach { choice ->
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(min = 40.dp)
+                        .clip(RoundedCornerShape(8.dp))
+                        .background(if (choice.selected) selectedFill else Color.Transparent)
+                        .selectable(selected = choice.selected, role = Role.RadioButton) { onSelect(choice) }
+                        .padding(horizontal = 10.dp, vertical = 6.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = choice.label,
+                        color = if (choice.selected) accentForeground else Color.White.copy(alpha = 0.90f),
+                        fontSize = 13.sp,
+                        fontWeight = if (choice.selected) FontWeight.SemiBold else FontWeight.Normal,
+                        modifier = Modifier.weight(1f)
+                    )
+                    if (choice.selected) {
+                        Icon(
+                            imageVector = Icons.Default.Check,
+                            contentDescription = null,
+                            tint = accentForeground,
+                            modifier = Modifier.size(16.dp)
+                        )
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -687,47 +717,6 @@ private fun videoLogProfileLabel(profile: VideoLogProfile): String {
 }
 
 @Composable
-private fun SectionLabel(title: String) {
-    Text(
-        text = title,
-        color = Color.White.copy(alpha = 0.6f),
-        fontSize = 12.sp,
-        fontWeight = FontWeight.Medium,
-        modifier = Modifier.padding(bottom = 12.dp)
-    )
-}
-
-@Composable
-private fun MeteringModeQuickSetting(
-    meteringMode: MeteringMode,
-    onMeteringModeChange: (MeteringMode) -> Unit,
-    modifier: Modifier = Modifier
-) {
-    val meteringLabel = when (meteringMode) {
-        MeteringMode.SPOT -> stringResource(R.string.metering_spot)
-        MeteringMode.CENTER_WEIGHTED -> stringResource(R.string.metering_center_weighted)
-        MeteringMode.SYSTEM_DEFAULT -> stringResource(R.string.metering_system_default)
-        MeteringMode.AVERAGE -> stringResource(R.string.metering_average)
-        MeteringMode.HIGHLIGHT_PRIORITY -> stringResource(R.string.metering_highlight_priority)
-    }
-    QuickSettingValue(
-        title = stringResource(R.string.metering_mode),
-        value = meteringLabel,
-        onClick = {
-            val next = when (meteringMode) {
-                MeteringMode.SPOT -> MeteringMode.SYSTEM_DEFAULT
-                MeteringMode.SYSTEM_DEFAULT -> MeteringMode.CENTER_WEIGHTED
-                MeteringMode.CENTER_WEIGHTED -> MeteringMode.AVERAGE
-                MeteringMode.AVERAGE -> MeteringMode.HIGHLIGHT_PRIORITY
-                MeteringMode.HIGHLIGHT_PRIORITY -> MeteringMode.SPOT
-            }
-            onMeteringModeChange(next)
-        },
-        modifier = modifier
-    )
-}
-
-@Composable
 private fun ToolboxQuickSetting(
     onToolboxClick: () -> Unit,
     modifier: Modifier = Modifier
@@ -757,17 +746,16 @@ private fun ContentManagementQuickSetting(
 @Composable
 private fun QuickSettingGrid(
     columns: Int = 3,
-    itemHeight: Dp = 48.dp,
     content: @Composable (Modifier) -> Unit
 ) {
     // Keep a consistent column count as the available photo controls change.
     FlowRow(
         modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.spacedBy(10.dp),
-        verticalArrangement = Arrangement.spacedBy(10.dp),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
         maxItemsInEachRow = columns
     ) {
-        content(Modifier.weight(1f).height(itemHeight))
+        content(Modifier.weight(1f).height(48.dp))
     }
 }
 
@@ -831,42 +819,27 @@ private fun ContentManagementOptionsPanel(
     }
 }
 
+private val QuickSettingShape = RoundedCornerShape(12.dp)
+
+private fun quickSettingAccentForeground(accent: Color): Color =
+    if (accent.luminance() >= 0.38f) accent else Color.White
+
 @Composable
-fun QuickSettingValue(
-    title: String,
-    value: String,
-    onClick: () -> Unit,
-    modifier: Modifier = Modifier
-) {
-    Box(
-        modifier = modifier
-            .height(48.dp)
-            .clip(RoundedCornerShape(8.dp))
-            .background(Color.White.copy(alpha = 0.15f))
-            .clickable { onClick() }
-            .padding(horizontal = 8.dp, vertical = 6.dp),
-        contentAlignment = Alignment.CenterStart
-    ) {
-        Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
-            Text(
-                text = title,
-                color = Color.White.copy(alpha = 0.6f),
-                fontSize = 8.sp,
-                lineHeight = 10.sp,
-                fontWeight = FontWeight.Normal,
-                maxLines = 1,
-            )
-            QuickSettingLabel(
-                text = value,
-                color = Color.White,
-                fontWeight = FontWeight.Medium
-            )
-        }
+private fun Modifier.quickSettingSurface(active: Boolean = false): Modifier {
+    val accent = AccentColor
+    val background = if (active) accent.copy(alpha = 0.12f) else Color.White.copy(alpha = 0.08f)
+    val outline = if (active) {
+        quickSettingAccentForeground(accent).copy(alpha = 0.65f)
+    } else {
+        Color.White.copy(alpha = 0.12f)
     }
+    return clip(QuickSettingShape)
+        .background(background)
+        .border(1.dp, outline, QuickSettingShape)
 }
 
 @Composable
-fun QuickSettingButton(
+private fun QuickSettingButton(
     title: String,
     icon: ImageVector,
     onClick: () -> Unit,
@@ -875,9 +848,8 @@ fun QuickSettingButton(
     Box(
         modifier = modifier
             .height(48.dp)
-            .clip(RoundedCornerShape(8.dp))
-            .background(Color.White.copy(alpha = 0.15f))
-            .clickable { onClick() }
+            .quickSettingSurface()
+            .clickable(role = Role.Button, onClick = onClick)
             .padding(horizontal = 8.dp, vertical = 6.dp),
         contentAlignment = Alignment.CenterStart
     ) {
@@ -895,7 +867,7 @@ fun QuickSettingButton(
             Icon(
                 imageVector = icon,
                 contentDescription = null,
-                tint = Color.White.copy(alpha = 0.6f),
+                tint = TextSecondary,
                 modifier = Modifier.size(14.dp)
             )
         }
@@ -905,48 +877,7 @@ fun QuickSettingButton(
 
 
 @Composable
-fun QuickSettingButton2(
-    title: String,
-    checked: Boolean,
-    onClick: () -> Unit,
-    modifier: Modifier = Modifier
-) {
-    Box(
-        modifier = modifier
-            .height(48.dp)
-            .clip(RoundedCornerShape(8.dp))
-            .background(
-                if (checked) AccentColor else Color.White.copy(
-                    alpha = 0.15f
-                )
-            )
-            .clickable { onClick() }
-            .padding(horizontal = 8.dp, vertical = 6.dp),
-        contentAlignment = Alignment.CenterStart
-    ) {
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(4.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            QuickSettingLabel(
-                text = title,
-                color = if (checked) OnAccentColor else Color.White.copy(alpha = 0.9f),
-                fontWeight = if (checked) FontWeight.Bold else FontWeight.Normal,
-                modifier = Modifier.weight(1f)
-            )
-            Icon(
-                imageVector = AppIcons.ChevronRight,
-                contentDescription = null,
-                tint = if (checked) OnAccentColor else Color.White.copy(alpha = 0.9f),
-                modifier = Modifier.size(14.dp)
-            )
-        }
-    }
-}
-
-@Composable
-fun QuickSettingToggle(
+private fun QuickSettingToggle(
     title: String,
     checked: Boolean,
     onCheckedChange: (Boolean) -> Unit,
@@ -954,16 +885,13 @@ fun QuickSettingToggle(
     modifier: Modifier = Modifier
 ) {
     val contentAlpha = if (enabled) 1f else 0.38f
+    val accentForeground = quickSettingAccentForeground(AccentColor)
+    val active = checked && enabled
     Box(
         modifier = modifier
             .height(48.dp)
-            .clip(RoundedCornerShape(8.dp))
-            .background(
-                if (checked) AccentColor.copy(alpha = contentAlpha) else Color.White.copy(
-                    alpha = 0.15f
-                )
-            )
-            .clickable(enabled = enabled) { onCheckedChange(!checked) }
+            .quickSettingSurface(active = active)
+            .toggleable(value = checked, enabled = enabled, role = Role.Switch, onValueChange = onCheckedChange)
             .padding(horizontal = 8.dp, vertical = 6.dp),
         contentAlignment = Alignment.CenterStart
     ) {
@@ -974,27 +902,18 @@ fun QuickSettingToggle(
         ) {
             QuickSettingLabel(
                 text = title,
-                color = if (checked) {
-                    OnAccentColor.copy(alpha = contentAlpha)
-                } else {
-                    Color.White.copy(alpha = 0.9f * contentAlpha)
-                },
-                fontWeight = if (checked) FontWeight.Bold else FontWeight.Normal,
+                color = if (active) accentForeground else Color.White.copy(alpha = 0.9f * contentAlpha),
+                fontWeight = if (checked) FontWeight.SemiBold else FontWeight.Normal,
                 modifier = Modifier.weight(1f)
             )
 
             // Simple indicator
             Box(
-                modifier = Modifier
-                    .size(8.dp)
-                    .clip(androidx.compose.foundation.shape.CircleShape)
-                    .background(
-                        if (checked) {
-                            OnAccentColor.copy(alpha = contentAlpha)
-                        } else {
-                            Color.White.copy(alpha = 0.2f * contentAlpha)
-                        }
-                    )
+                modifier = Modifier.size(7.dp).background(
+                    color = if (checked) accentForeground.copy(alpha = contentAlpha)
+                    else Color.White.copy(alpha = 0.24f * contentAlpha),
+                    shape = CircleShape
+                )
             )
         }
     }

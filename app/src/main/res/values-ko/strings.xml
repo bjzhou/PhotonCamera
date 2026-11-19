@@ -90,6 +90,7 @@
     <string name="settings_grid_lines">격자선</string>
     <string name="settings_grid_description">구도를 위한 격자선 표시</string>
     <string name="settings_grid_style">격자 스타일</string>
+    <string name="grid_style_off">꺼짐</string>
     <string name="grid_style_thirds">삼분할</string>
     <string name="grid_style_diagonals">대각선</string>
     <string name="grid_style_golden_ratio">황금비</string>

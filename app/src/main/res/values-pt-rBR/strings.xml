@@ -90,6 +90,7 @@
     <string name="settings_grid_lines">Linhas de Grade</string>
     <string name="settings_grid_description">Mostrar linhas de grade para composição</string>
     <string name="settings_grid_style">Estilo de Grade</string>
+    <string name="grid_style_off">Desativadas</string>
     <string name="grid_style_thirds">Regra dos Terços</string>
     <string name="grid_style_diagonals">Diagonais</string>
     <string name="grid_style_golden_ratio">Proporção Áurea</string>

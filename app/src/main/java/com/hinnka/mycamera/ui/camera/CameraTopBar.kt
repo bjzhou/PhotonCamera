@@ -44,8 +44,8 @@ fun CameraTopBar(
     onFlashToggle: () -> Unit,
     timerSeconds: Int,
     onTimerToggle: () -> Unit,
-    showHistogram: Boolean,
-    onHistogramToggle: () -> Unit,
+    cameraSwitchEnabled: Boolean,
+    onSwitchCameraClick: () -> Unit,
     useLivePhoto: Boolean,
     onLivePhotoToggle: () -> Unit,
     videoConfig: VideoConfig,
@@ -63,6 +63,8 @@ fun CameraTopBar(
             recordingElapsedMs = recordingElapsedMs,
             videoConfig = videoConfig,
             videoCapabilities = videoCapabilities,
+            cameraSwitchEnabled = cameraSwitchEnabled,
+            onSwitchCameraClick = onSwitchCameraClick,
             onVideoTorchToggle = onVideoTorchToggle,
             onVideoStabilizationModeChange = onVideoStabilizationModeChange,
             onVideoResolutionClick = onVideoResolutionClick,
@@ -133,13 +135,14 @@ fun CameraTopBar(
 
         PhysicalButton(
             modifier = Modifier.size(36.dp),
-            onClick = onHistogramToggle
+            onClick = onSwitchCameraClick,
+            enabled = cameraSwitchEnabled
         ) {
             Icon(
-                imageVector = AppIcons.BarChart,
-                contentDescription = stringResource(R.string.histogram),
+                imageVector = AppIcons.Cameraswitch,
+                contentDescription = stringResource(R.string.switch_camera),
                 modifier = Modifier.size(20.dp).autoRotate(),
-                tint = if (showHistogram) AccentColor else Color.White
+                tint = Color.White.copy(alpha = if (cameraSwitchEnabled) 1f else 0.3f)
             )
         }
 
@@ -163,6 +166,8 @@ private fun VideoTopBar(
     recordingElapsedMs: Long,
     videoConfig: VideoConfig,
     videoCapabilities: VideoCapabilities,
+    cameraSwitchEnabled: Boolean,
+    onSwitchCameraClick: () -> Unit,
     onVideoTorchToggle: () -> Unit,
     onVideoStabilizationModeChange: (VideoStabilizationMode) -> Unit,
     onVideoResolutionClick: () -> Unit,
@@ -193,13 +198,14 @@ private fun VideoTopBar(
                 VideoParameterCluster(
                     videoConfig = videoConfig,
                     onResolutionClick = onVideoResolutionClick,
-                    onFpsClick = onVideoFpsClick
+                    onFpsClick = onVideoFpsClick,
+                    modifier = Modifier.weight(1f, fill = false)
                 )
 
                 // Quick Action Toggles (Right)
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(4.dp)
+                    horizontalArrangement = Arrangement.spacedBy(2.dp)
                 ) {
                     VideoActionIcon(
                         icon = if (videoConfig.torchEnabled) AppIcons.FlashlightOn else AppIcons.FlashlightOff,
@@ -254,14 +260,20 @@ private fun VideoTopBar(
                         }
                     }
 
-                    IconButton(onClick = onSettingsClick) {
-                        Icon(
-                            imageVector = Icons.Default.Settings,
-                            contentDescription = stringResource(R.string.settings),
-                            modifier = Modifier.size(20.dp).autoRotate(),
-                            tint = Color.White
-                        )
-                    }
+                    VideoActionIcon(
+                        icon = AppIcons.Cameraswitch,
+                        active = false,
+                        enabled = cameraSwitchEnabled,
+                        onClick = onSwitchCameraClick,
+                        contentDescription = stringResource(R.string.switch_camera)
+                    )
+                    VideoActionIcon(
+                        icon = Icons.Default.Settings,
+                        active = false,
+                        enabled = true,
+                        onClick = onSettingsClick,
+                        contentDescription = stringResource(R.string.settings)
+                    )
                 }
             }
         }
@@ -272,9 +284,11 @@ private fun VideoTopBar(
 private fun VideoParameterCluster(
     videoConfig: VideoConfig,
     onResolutionClick: () -> Unit,
-    onFpsClick: () -> Unit
+    onFpsClick: () -> Unit,
+    modifier: Modifier = Modifier
 ) {
     Surface(
+        modifier = modifier,
         color = Color.Black.copy(alpha = 0.35f),
         shape = RoundedCornerShape(12.dp),
         border = BorderStroke(1.dp, Color.White.copy(alpha = 0.1f))
@@ -340,7 +354,8 @@ private fun VideoActionIcon(
 ) {
     IconButton(
         onClick = onClick,
-        enabled = enabled
+        enabled = enabled,
+        modifier = Modifier.size(36.dp)
     ) {
         Icon(
             imageVector = icon,

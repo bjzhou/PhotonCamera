@@ -89,6 +89,7 @@
     <string name="settings_grid_lines">Gitternetzlinien</string>
     <string name="settings_grid_description">Gitternetzlinien für die Bildkomposition anzeigen</string>
     <string name="settings_grid_style">Gitterstil</string>
+    <string name="grid_style_off">Aus</string>
     <string name="grid_style_thirds">Drittelregel</string>
     <string name="grid_style_diagonals">Diagonalen</string>
     <string name="grid_style_golden_ratio">Goldener Schnitt</string>

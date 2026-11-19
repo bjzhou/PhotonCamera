@@ -7527,15 +7527,8 @@ class Camera2Controller(private val context: Context) {
         _state.value = _state.value.copy(countdownValue = value)
     }
 
-    /**
-     * 设置是否显示网格线
-     */
-    fun setShowGrid(show: Boolean) {
-        _state.value = _state.value.copy(showGrid = show)
-    }
-
-    fun setGridStyle(style: GridStyle) {
-        _state.value = _state.value.copy(gridStyle = style)
+    fun setGridOverlay(visible: Boolean, style: GridStyle) {
+        _state.update { it.copy(showGrid = visible, gridStyle = style) }
     }
 
     fun setRawCfaCorrectionModes(modes: Map<String, String>) {

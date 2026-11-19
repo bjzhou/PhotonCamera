@@ -104,6 +104,7 @@
     <string name="settings_grid_description">構図用のグリッド線を表示します</string>
     <string name="settings_hdr_plus_bracket_exposure_sabre_disabled">Sabreはブラケット露出に対応していません。Spatialを選択してください。</string>
     <string name="settings_grid_style">グリッドの種類</string>
+    <string name="grid_style_off">オフ</string>
     <string name="grid_style_thirds">三分割</string>
     <string name="grid_style_diagonals">対角線</string>
     <string name="grid_style_golden_ratio">黄金分割</string>

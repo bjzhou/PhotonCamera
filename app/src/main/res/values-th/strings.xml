@@ -187,6 +187,7 @@
     <string name="settings_grid_lines">เส้นตาราง</string>
     <string name="settings_grid_description">แสดงเส้นตารางสำหรับการจัดองค์ประกอบ</string>
     <string name="settings_grid_style">รูปแบบเส้นตาราง</string>
+    <string name="grid_style_off">ปิด</string>
     <string name="grid_style_thirds">กฎสามส่วน</string>
     <string name="grid_style_diagonals">เส้นทแยงมุม</string>
     <string name="grid_style_golden_ratio">สัดส่วนทองคำ</string>

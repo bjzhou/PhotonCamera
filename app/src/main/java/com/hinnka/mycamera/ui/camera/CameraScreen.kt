@@ -74,6 +74,8 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.selected
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.unit.Constraints
@@ -92,6 +94,8 @@ import com.hinnka.mycamera.R
 import com.hinnka.mycamera.camera.AspectRatio
 import com.hinnka.mycamera.camera.CameraState
 import com.hinnka.mycamera.camera.FocusPointSource
+import com.hinnka.mycamera.camera.LensType
+import com.hinnka.mycamera.camera.MeteringMode
 import com.hinnka.mycamera.camera.PhotoCaptureProgress
 import com.hinnka.mycamera.data.CaptureButtonStyle
 import com.hinnka.mycamera.data.DevelopAnimationStyle
@@ -254,7 +258,7 @@ fun CameraScreen(
     val state by viewModel.state.collectAsState()
     val isCameraInitialized by viewModel.isInitialized.collectAsState()
     val latestPhoto by galleryViewModel.latestPhoto.collectAsState()
-    val showLevelIndicator by preferenceValue { it.showLevelIndicator }
+    var showLevelIndicator by rememberPreference(UserPreferences::showLevelIndicator)
     val focusPeakingEnabled by preferenceValue { it.focusPeakingEnabled }
     val eyeFocusEnabled by preferenceValue { it.eyeFocusEnabled }
     val keepScreenOn by preferenceValue { it.keepScreenOn }
@@ -367,6 +371,11 @@ fun CameraScreen(
     val showNormalControls = activePanel == ActivePanel.NONE &&
         !filterPanelTransition.currentState && !filterPanelTransition.targetState && !filterPanelTransition.isRunning &&
         settingsPanelVisibility.isIdle && !settingsPanelVisibility.currentState && !settingsPanelVisibility.targetState
+    val meteringModeFeedback = rememberMeteringModeFeedbackState()
+    fun updateMeteringMode(mode: MeteringMode) {
+        viewModel.setMeteringMode(mode)
+        meteringModeFeedback.show(mode)
+    }
     var filtersExpanded by remember { mutableStateOf(false) }
     fun collapseFilters() {
         filtersExpanded = false
@@ -374,8 +383,8 @@ fun CameraScreen(
             viewModel.setLutSelectorMode(LutSelectorMode.Style)
         }
     }
-    BackHandler(enabled = activePanel == ActivePanel.FILTERS) {
-        if (filtersExpanded) collapseFilters()
+    BackHandler(enabled = activePanel == ActivePanel.FILTERS || activePanel == ActivePanel.SETTINGS) {
+        if (activePanel == ActivePanel.FILTERS && filtersExpanded) collapseFilters()
         else activePanel = ActivePanel.NONE
     }
     var selectedParameter by remember { mutableStateOf(CameraParameter.EXPOSURE_COMPENSATION) }
@@ -962,6 +971,7 @@ fun CameraScreen(
         val viewfinderTopOverlayPadding = (topBarBottom - viewfinderTop).coerceAtLeast(0.dp)
 
         val topBar = @Composable {
+            val targetLensType = if (state.currentLensType == LensType.FRONT) LensType.BACK_MAIN else LensType.FRONT
             CameraTopBar(
                 captureMode = state.captureMode,
                 isRecording = state.videoRecordingState.isRecording,
@@ -972,8 +982,11 @@ fun CameraScreen(
                 },
                 timerSeconds = state.timerSeconds,
                 onTimerToggle = { viewModel.toggleTimer() },
-                showHistogram = showHistogram,
-                onHistogramToggle = { showHistogram = !showHistogram },
+                cameraSwitchEnabled = !state.videoRecordingState.isRecording &&
+                    !state.videoRecordingState.isProcessing &&
+                    !previewTransitionActive && !lensSwitchTransition.isActive &&
+                    state.availableCameras.any { it.lensType == targetLensType },
+                onSwitchCameraClick = ::switchCameraWithPreviewTransition,
                 useLivePhoto = useLivePhoto,
                 onLivePhotoToggle = { viewModel.setUseLivePhoto(!state.useLivePhoto) },
                 videoConfig = state.videoConfig,
@@ -1012,7 +1025,7 @@ fun CameraScreen(
                     onZoomChange = { setZoomWithPreviewTransition(it) },
                     onZoomStopClick = { animateZoomStopWithPreviewTransition(it) },
                     onLensSwitch = { lensId -> switchToLensWithPreviewTransition(lensId) },
-                    onSwitchCameraClick = ::switchCameraWithPreviewTransition,
+                    onMeteringModeChange = ::updateMeteringMode,
                     modifier = Modifier
                         .fillMaxWidth()
                         .onGloballyPositioned { coordinates ->
@@ -1597,7 +1610,7 @@ fun CameraScreen(
                             onZoomChange = { setZoomWithPreviewTransition(it) },
                             onZoomStopClick = { animateZoomStopWithPreviewTransition(it) },
                             onLensSwitch = { lensId -> switchToLensWithPreviewTransition(lensId) },
-                            onSwitchCameraClick = ::switchCameraWithPreviewTransition,
+                            onMeteringModeChange = ::updateMeteringMode,
                         )
                     }
                     Box(
@@ -1752,7 +1765,7 @@ fun CameraScreen(
                     onGalleryClick()
                 },
                 sideControlInset = if (isXpan) {
-                    (xpanSideWidth - CameraControlsLayoutDefaults.SideButtonSize) / 2
+                    ((xpanSideWidth - CameraControlsLayoutDefaults.SideButtonSize) / 2).coerceAtLeast(0.dp)
                 } else {
                     null
                 },
@@ -1780,6 +1793,15 @@ fun CameraScreen(
                 contentAlignment = Alignment.Center
             ) {
                 viewfinder()
+                MeteringModeFeedback(
+                    state = meteringModeFeedback,
+                    modifier = if (isXpan) {
+                        Modifier.align(Alignment.Center)
+                    } else {
+                        Modifier.align(Alignment.TopCenter)
+                            .padding(top = viewfinderTopOverlayPadding + 52.dp)
+                    }
+                )
             }
 
             // Keep dismissal behind the controls, including the inline look browser.
@@ -1916,8 +1938,6 @@ fun CameraScreen(
             onRawSpectralFilmPrintChange = { viewModel.setRawSpectralFilmPrint(it) },
             rawFotufilmDocument = rawFotufilmDocument,
             onRawFotufilmDocumentChange = { viewModel.setRawFotufilmDocument(it) },
-            meteringMode = state.meteringMode,
-            onMeteringModeChange = { viewModel.setMeteringMode(it) },
             onFilterManageClick = {
                 activePanel = ActivePanel.NONE
                 onFilterManagementClick(null)
@@ -1934,6 +1954,18 @@ fun CameraScreen(
                 activePanel = ActivePanel.NONE
                 onToolboxClick()
             },
+            showHistogram = showHistogram,
+            onHistogramChange = { showHistogram = it },
+            showGrid = state.showGrid,
+            gridStyle = state.gridStyle,
+            onGridStyleChange = { style ->
+                preferencesRepository.updateAsync {
+                    if (style != null) gridStyle = style
+                    showGrid = style != null
+                }
+            },
+            showLevelIndicator = showLevelIndicator,
+            onLevelIndicatorChange = { showLevelIndicator = it },
             onMoreSettingsClick = {
                 activePanel = ActivePanel.NONE
                 onSettingsClick()
@@ -2103,10 +2135,21 @@ private fun Controls(
                 .padding(bottom = CameraControlsLayoutDefaults.BottomPadding),
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
-            Box(
+            BoxWithConstraints(
                 modifier = Modifier.fillMaxWidth(),
                 contentAlignment = Alignment.Center
             ) {
+                val isRecording = state.videoRecordingState.isRecording
+                val isProcessing = state.videoRecordingState.isProcessing
+                val recordingActionSize = 32.dp
+                val recordingActionSpacing = 8.dp
+                val centerControlsHalfWidth = CameraControlsLayoutDefaults.CaptureButtonSize / 2 +
+                    if (isRecording) recordingActionSize + recordingActionSpacing else 0.dp
+                val availableFilterWidth = (maxWidth / 2 - centerControlsHalfWidth - 16.dp)
+                    .coerceAtLeast(0.dp)
+                val filterWidth = minOf(CameraControlsLayoutDefaults.SideButtonSize, availableFilterWidth)
+                val filterEndInset = minOf(sideControlInset ?: 40.dp, availableFilterWidth - filterWidth)
+
                 Box(
                     modifier = Modifier
                         .align(Alignment.CenterStart)
@@ -2160,11 +2203,11 @@ private fun Controls(
                     onLongPressEnd = { viewModel.stopContinuousCapture() },
                 )
 
-                if (state.videoRecordingState.isRecording) {
+                if (isRecording) {
                     // Both recording actions share the shutter's center and spacing.
                     Row(
                         modifier = Modifier.align(Alignment.Center),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        horizontalArrangement = Arrangement.spacedBy(recordingActionSpacing),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         IconButton(
@@ -2176,7 +2219,7 @@ private fun Controls(
                                 }
                             },
                             modifier = Modifier
-                                .size(32.dp)
+                                .size(recordingActionSize)
                                 .autoRotate()
                         ) {
                             Icon(
@@ -2192,7 +2235,7 @@ private fun Controls(
                         IconButton(
                             onClick = { viewModel.captureVideoFrame() },
                             modifier = Modifier
-                                .size(32.dp)
+                                .size(recordingActionSize)
                                 .autoRotate()
                         ) {
                             Icon(
@@ -2207,19 +2250,20 @@ private fun Controls(
 
                 PhysicalButton(
                     onClick = onFilterClick,
-                    enabled = !state.videoRecordingState.isProcessing,
+                    enabled = !isProcessing,
                     modifier = Modifier
                         .align(Alignment.CenterEnd)
-                        .padding(end = sideControlInset ?: 40.dp)
-                        .size(CameraControlsLayoutDefaults.SideButtonSize)
-                        .autoRotate(),
+                        .padding(end = filterEndInset)
+                        .size(width = filterWidth, height = CameraControlsLayoutDefaults.SideButtonSize)
+                        .autoRotate()
+                        .semantics { selected = isFilterPanelOpen },
                     shape = CircleShape
                 ) {
                     Icon(
                         imageVector = AppIcons.ColorFilters,
                         contentDescription = stringResource(R.string.filters_panel),
                         tint = (if (isFilterPanelOpen) AccentColor else Color.White).copy(
-                            alpha = if (state.videoRecordingState.isProcessing) 0.35f else 1f
+                            alpha = if (isProcessing) 0.35f else 1f
                         ),
                         modifier = Modifier.size(28.dp)
                     )
