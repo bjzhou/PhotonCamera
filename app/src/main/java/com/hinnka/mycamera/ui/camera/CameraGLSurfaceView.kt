@@ -239,14 +239,13 @@ class CameraGLSurfaceView @JvmOverloads constructor(
         renderer.meteringEnabled = enabled
     }
 
-    /**
-     * 设置 LUT
-     * 
-     * @param lutConfig LUT 配置，传 null 表示移除 LUT
-     */
-    fun setLut(lutConfig: LutConfig?) {
+    /** Apply the creative LUT and its recipe on the same render thread turn. */
+    fun setCreativeLook(lutConfig: LutConfig?, recipe: ColorRecipeParams) {
         queueEvent {
             renderer.setLut(lutConfig)
+            renderer.lutEnabled = lutConfig != null
+            renderer.setRecipeParams(recipe)
+            renderer.colorRecipeEnabled = !recipe.isDefault()
             requestRender()
         }
     }
@@ -260,14 +259,6 @@ class CameraGLSurfaceView @JvmOverloads constructor(
             renderer.setBaselineLut(lutConfig)
             requestRender()
         }
-    }
-
-    /**
-     * 设置 LUT 是否启用
-     */
-    fun setLutEnabled(enabled: Boolean) {
-        renderer.lutEnabled = enabled
-        requestRender()
     }
 
     fun setBaselineLutEnabled(enabled: Boolean) {
@@ -304,24 +295,8 @@ class CameraGLSurfaceView @JvmOverloads constructor(
      */
     fun isLutEnabled(): Boolean = renderer.lutEnabled
 
-    /**
-     * 设置色彩配方是否启用
-     */
-    fun setColorRecipeEnabled(enabled: Boolean) {
-        renderer.colorRecipeEnabled = enabled
-        requestRender()
-    }
-
     fun setBaselineColorRecipeEnabled(enabled: Boolean) {
         renderer.baselineColorRecipeEnabled = enabled
-        requestRender()
-    }
-
-    /**
-     * 设置参数
-     */
-    fun setParams(params: ColorRecipeParams) {
-        renderer.setRecipeParams(params)
         requestRender()
     }
 

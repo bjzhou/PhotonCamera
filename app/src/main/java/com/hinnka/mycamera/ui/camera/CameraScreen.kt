@@ -262,9 +262,14 @@ fun CameraScreen(
     val focusPeakingEnabled by preferenceValue { it.focusPeakingEnabled }
     val eyeFocusEnabled by preferenceValue { it.eyeFocusEnabled }
     val keepScreenOn by preferenceValue { it.keepScreenOn }
-    val currentLutId by viewModel.currentLutId.collectAsState()
+    val lookSelection by viewModel.lutLookSelection.collectAsState()
+    val currentLutId = lookSelection.lutId
+    val presetLookSelected = lookSelection.presetRecipe != null
     val lutSwipeState = rememberLutSwipeState()
-    val currentRecipeParams by viewModel.currentRecipeParams.collectAsState()
+    val currentLutLook by viewModel.currentLutLook.collectAsState()
+    val currentRecipeParams = currentLutLook.recipe
+    val canEditCurrentLut = !presetLookSelected && !currentLutLook.fromPreset &&
+        currentLutId != "none" && currentLutLook.id == currentLutId
     val lutSelectorMode by viewModel.lutSelectorMode.collectAsState()
     val activePresetId by preferenceValue { it.activePresetId }
     val activePresetModified by viewModel.isActivePresetModified.collectAsState()
@@ -298,9 +303,12 @@ fun CameraScreen(
     val multipleExposureState = viewModel.multipleExposureState
     val canStartShutterAnimation by viewModel.canStartShutterAnimation.collectAsState()
     val currentCaptureModeForEffects by rememberUpdatedState(state.captureMode)
-    var previewRecipeParamsOverride by remember(currentLutId, activePresetId) {
+    var previewRecipeParamsOverride by remember(currentLutId, activePresetId, presetLookSelected) {
         mutableStateOf<ColorRecipeParams?>(null)
     }
+    val previewRecipeParams = previewRecipeParamsOverride
+        ?.takeIf { canEditCurrentLut }
+        ?: currentRecipeParams
     var pendingCaptureAnimationBitmap by remember { mutableStateOf<Bitmap?>(null) }
     var captureAnimationJob by remember { mutableStateOf<Job?>(null) }
     var cameraScreenBounds by remember { mutableStateOf<Rect?>(null) }
@@ -513,7 +521,7 @@ fun CameraScreen(
                         processedBitmap = if (animationStyle == DevelopAnimationStyle.INSTANT_PRINT) {
                             viewModel.renderCaptureAnimationFrame(bitmap, metadata)
                         } else {
-                            viewModel.applyLut(bitmap)
+                            viewModel.applyCaptureLook(bitmap, metadata)
                         }
                         processedBitmap.copyForCaptureAnimation()?.let {
                             captureAnimationSnapshot = CaptureAnimationSnapshot(
@@ -1312,10 +1320,10 @@ fun CameraScreen(
                             lensFacing = if (state.getCurrentCameraInfo()?.lensFacing == android.hardware.camera2.CameraCharacteristics.LENS_FACING_FRONT) 0 else 1,
                             calibrationOffset = calibrationOffset,
                             baselineLut = viewModel.currentBaselineLutConfig,
-                            currentLut = viewModel.currentLutConfig,
+                            currentLut = currentLutLook.config,
                             enginePreviewPlan = viewModel.currentEnginePreviewPlan,
                             baselineColorRecipeParams = currentBaselineRecipeParams,
-                            colorRecipeParams = previewRecipeParamsOverride ?: currentRecipeParams,
+                            colorRecipeParams = previewRecipeParams,
                             focusPoint = state.focusPoint,
                             meteringPoint = state.meteringPoint,
                             canMoveMeteringPoint = state.supportsPointMetering &&
@@ -1645,11 +1653,15 @@ fun CameraScreen(
                 currentLutId = currentLutId,
                 thumbnail = viewModel.previewThumbnail,
                 presetThumbnailInput = viewModel.presetThumbnailInput,
-                onLutSelected = { viewModel.setLut(it) },
+                onLutSelected = {
+                    discardTransientLookEdits()
+                    viewModel.setLut(it)
+                },
                 allPresets = selectablePresets,
                 presetModeEnabled = !isVideoLog,
                 activePresetId = activePresetId,
                 activePresetModified = activePresetModified,
+                presetLookActive = presetLookSelected,
                 selectedMode = if (isVideoLog) LutSelectorMode.Style else lutSelectorMode,
                 onModeSelected = { viewModel.setLutSelectorMode(it) },
                 availableFrames = viewModel.availableFrameList,
@@ -1680,9 +1692,9 @@ fun CameraScreen(
                     activePanel = ActivePanel.NONE
                     onPresetManagementClick()
                 },
-                onEditClick = {
-                    activePanel = ActivePanel.EDIT
-                },
+                onEditClick = if (canEditCurrentLut) {
+                    { activePanel = ActivePanel.EDIT }
+                } else null,
                 onManageClick = { lutId ->
                     activePanel = ActivePanel.NONE
                     onFilterManagementClick(lutId)
@@ -1979,17 +1991,19 @@ fun CameraScreen(
             contentTopPadding = CameraTopBarBaseTopPadding + topSafePadding
         )
 
-        if (activePanel == ActivePanel.EDIT) {
-            LutEditBottomSheet(
-                lutId = currentLutId,
-                initialParams = previewRecipeParamsOverride ?: currentRecipeParams,
-                onParamsPreviewChange = { previewRecipeParamsOverride = it },
-                showEffects = true,
-                onDismiss = {
-                    previewRecipeParamsOverride = null
-                    activePanel = ActivePanel.FILTERS
-                }
-            )
+        if (activePanel == ActivePanel.EDIT && canEditCurrentLut) {
+            key(currentLutId) {
+                LutEditBottomSheet(
+                    lutId = currentLutId,
+                    initialParams = previewRecipeParams,
+                    onParamsPreviewChange = { previewRecipeParamsOverride = it },
+                    showEffects = true,
+                    onDismiss = {
+                        previewRecipeParamsOverride = null
+                        activePanel = ActivePanel.FILTERS
+                    }
+                )
+            }
         }
 
         captureAnimationSnapshot?.let { snapshot ->

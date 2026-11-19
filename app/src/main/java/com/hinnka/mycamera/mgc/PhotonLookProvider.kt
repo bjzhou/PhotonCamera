@@ -42,7 +42,8 @@ class PhotonLookProvider : ContentProvider() {
 
         val normalizedLutId = lutId.takeUnless { it == LutConfigNone }
         val lutConfig = normalizedLutId?.let { repository.lutManager.loadLut(it) }
-        val recipe = normalizedLutId?.let { repository.lutManager.loadColorRecipeParams(it) }
+        val recipe = preferences.photoPresetRecipe
+            ?: normalizedLutId?.let { repository.lutManager.loadColorRecipeParams(it) }
             ?: ColorRecipeParams.DEFAULT
         val payload = lutConfig?.takeIf { it.isValid() }?.toByteArray()
         val recipeJson = recipe.toJson()

@@ -263,7 +263,7 @@ fun PresetEditorScreen(
             SettingsSection(title = stringResource(R.string.filter), isExpandable = false) {
                 LutSelector(
                     availableLuts = availableLuts,
-                    currentLutId = selectedLutId,
+                    currentLutId = selectedLutId ?: "none",
                     thumbnail = null,
                     onLutSelected = { selectedLutId = it },
                     modifier = Modifier.fillMaxWidth()
@@ -298,7 +298,7 @@ fun PresetEditorScreen(
                         }
                     },
                     hideNonBakeable = true,
-                    showLutIntensity = true,
+                    showLutIntensity = selectedLutId != null && selectedLutId != "none",
                     currentEffects = effects,
                     onEffectsChange = { effects = it },
                     containerShape = RoundedCornerShape(12.dp),

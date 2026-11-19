@@ -37,6 +37,7 @@ import com.hinnka.mycamera.frame.FramePreviewFactory
 import com.hinnka.mycamera.frame.FramePreviewSelection
 import com.hinnka.mycamera.gallery.GalleryManager
 import com.hinnka.mycamera.gallery.MediaMetadata
+import com.hinnka.mycamera.gallery.PhotoColorRecipeEdits
 import com.hinnka.mycamera.gallery.PhotoSavePath
 import com.hinnka.mycamera.lut.BaselineColorCorrectionTarget
 import com.hinnka.mycamera.lut.BakedLutExporter
@@ -142,6 +143,7 @@ private data class CaptureSettingsSnapshot(
     val lutId: String,
     val frameId: String?,
     val recipe: ColorRecipeParams,
+    val photoColorRecipeEdits: String?,
     val cameraId: String,
     val sensorOrientation: Int,
     val lensFacing: Int,
@@ -521,9 +523,7 @@ internal fun resolveLutIdForCaptureMode(
 
 private data class CameraFeatureUpdate(
     val captureMode: SettingValue<CaptureMode>? = null,
-    val lutId: String? = null, // null leaves the selection unchanged; "none" explicitly disables the LUT.
-    val colorRecipe: SettingValue<ColorRecipeParams>? = null,
-    val effects: SettingValue<EffectParams>? = null,
+    val preset: SettingValue<CameraPreset?>? = null,
     val aspectRatio: SettingValue<AspectRatio>? = null,
     val useRaw: SettingValue<Boolean>? = null,
     val useJpgMax: SettingValue<Boolean>? = null,
@@ -561,9 +561,31 @@ private data class CameraFeatureUpdate(
     val rawFotufilmDocument: SettingValue<FotufilmDocument?>? = null,
     val droMode: SettingValue<String>? = null,
     val rawBaselineLutId: SettingValue<String?>? = null,
-    val activePresetId: SettingValue<String?>? = null,
     val useMultipleExposure: SettingValue<Boolean>? = null,
 )
+
+internal data class CameraLookSelection(
+    val lutId: String,
+    val presetRecipe: ColorRecipeParams? = null,
+) {
+    companion object {
+        val None = CameraLookSelection("none")
+    }
+}
+
+data class CameraLutLook(
+    val id: String,
+    val config: LutConfig?,
+    val recipe: ColorRecipeParams,
+    val fromPreset: Boolean = false,
+) {
+    companion object {
+        val None = CameraLutLook("none", null, ColorRecipeParams.DEFAULT)
+    }
+}
+
+private fun CameraLutLook.photoColorRecipeEdits(): String? =
+    if (id == "none" && fromPreset) PhotoColorRecipeEdits(base = recipe).toJson() else null
 
 /**
  * 相机 ViewModel
@@ -650,9 +672,9 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     private val _canStartShutterAnimation = MutableStateFlow(false)
     val canStartShutterAnimation = _canStartShutterAnimation.asStateFlow()
 
-    // LUT 相关状态
-    var currentLutConfig: LutConfig? by mutableStateOf(null)
-        private set
+    // 预览和拍摄使用同一个已加载快照，直到新 LUT 和配方都已就绪。
+    private val _currentLutLook = MutableStateFlow(CameraLutLook.None)
+    val currentLutLook = _currentLutLook.asStateFlow()
 
     var currentBaselineLutConfig: LutConfig? by mutableStateOf(null)
         private set
@@ -660,21 +682,8 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     private val _currentEnginePreviewPlan = MutableStateFlow<RawEnginePreviewPlan?>(null)
     val currentEnginePreviewPlan = _currentEnginePreviewPlan.asStateFlow()
 
-    var currentLutId = MutableStateFlow("standard")
-        private set
-
-    @OptIn(ExperimentalCoroutinesApi::class)
-    val currentRecipeParams: StateFlow<ColorRecipeParams> = currentLutId.flatMapLatest { id ->
-        contentRepository.lutManager.getColorRecipeParams(id)
-    }.stateIn(
-        scope = viewModelScope,
-        started = SharingStarted.Eagerly,
-        initialValue = ColorRecipeParams.DEFAULT
-    )
-
-    val currentEffectParams: StateFlow<EffectParams> = currentRecipeParams
-        .map { it.toEffectParams() }
-        .stateIn(viewModelScope, SharingStarted.Eagerly, EffectParams.DEFAULT)
+    private val _lutLookSelection = MutableStateFlow(CameraLookSelection("standard"))
+    internal val lutLookSelection = _lutLookSelection.asStateFlow()
 
     // 合并内置预设与用户自定义预设
     val allPresets: StateFlow<List<com.hinnka.mycamera.model.CameraPreset>> = userPreferencesRepository.userPreferences
@@ -762,21 +771,17 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             if (initialized) prefs to presets else null
         },
         state.map { it.aspectRatio.name to it.isProfessionalMode }.distinctUntilChanged(),
-        currentLutId.flatMapLatest { lutId ->
-            contentRepository.lutManager.getColorRecipeParams(lutId).map { recipe ->
-                lutId to recipe
-            }
-        }
-    ) { inputs, (aspectRatio, isProfessionalMode), (lutId, recipe) ->
+        currentLutLook
+    ) { inputs, (aspectRatio, isProfessionalMode), look ->
         inputs?.let { (prefs, presets) ->
             ActivePresetMatchState(
                 prefs = prefs,
                 presets = presets,
                 isProfessionalMode = isProfessionalMode,
                 aspectRatio = aspectRatio,
-                lutId = lutId,
-                recipe = recipe,
-                effects = recipe.toEffectParams()
+                lutId = look.id,
+                recipe = look.recipe,
+                effects = look.recipe.toEffectParams()
             )
         }
     }.stateIn(viewModelScope, SharingStarted.Eagerly, null)
@@ -806,11 +811,10 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
 
     var draftPreset: com.hinnka.mycamera.model.CameraPreset? = null
 
-    private val presetApplyMutex = Mutex()
+    private val cameraLookMutex = Mutex()
     private val presetMutationMutex = Mutex()
     private var presetApplyGeneration = 0L
     private var lutLoadJob: Job? = null
-    private var lutLoadGeneration = 0L
     private var shootingModeSwitchJob: Job? = null
 
     fun prepareCurrentSettingsPresetDraft(name: String): com.hinnka.mycamera.model.CameraPreset {
@@ -828,12 +832,13 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         name: String,
         isBuiltIn: Boolean
     ): com.hinnka.mycamera.model.CameraPreset {
+        val look = currentLutLook.value
         return com.hinnka.mycamera.model.CameraPreset(
             id = id,
             name = name,
-            lutId = CameraPreset.normalizeLutId(currentLutId.value),
-            colorRecipe = currentRecipeParams.value.withoutIndependentEffects(),
-            effects = currentRecipeParams.value.toEffectParams(),
+            lutId = CameraPreset.normalizeLutId(look.id),
+            colorRecipe = look.recipe.withoutIndependentEffects(),
+            effects = look.recipe.toEffectParams(),
             aspectRatio = state.value.aspectRatio.name,
             ultraHdrGainMapEnabled = userPreferencesRepository.current.ultraHdrGainMapEnabled,
             frameId = currentFrameId,
@@ -874,17 +879,12 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         )
     }
 
-    fun getMergedRecipeParams(recipe: ColorRecipeParams = currentRecipeParams.value): ColorRecipeParams {
-        return recipe
-    }
-
     fun applyPreset(preset: com.hinnka.mycamera.model.CameraPreset?) {
         val applyGeneration = ++presetApplyGeneration
         presetApplyInProgress.value = true
         viewModelScope.launch {
-            var applied = false
             try {
-                presetApplyMutex.withLock {
+                cameraLookMutex.withLock {
                     if (presetApplyGeneration != applyGeneration) {
                         return@withLock
                     }
@@ -901,17 +901,8 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                         preset.toCameraFeatureUpdate(
                             includePhotoSettings = includePhotoSettings,
                             includeProfessionalSettings = includeProfessionalSettings
-                        ).copy(activePresetId = SettingValue(preset?.id))
+                        )
                     )
-                    applied = true
-                }
-
-                if (applied && presetApplyGeneration == applyGeneration) {
-                    activePresetMatchState.filterNotNull().first { matchState ->
-                        (preset != null && !preset.isAvailableInMode(matchState.isProfessionalMode)) ||
-                            (matchState.prefs.activePresetId == preset?.id &&
-                                (preset == null || matchState.toPresetMatchSnapshot().matches(preset)))
-                    }
                 }
             } finally {
                 if (presetApplyGeneration == applyGeneration) {
@@ -936,9 +927,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             null
         }
         val sharedUpdate = CameraFeatureUpdate(
-            lutId = CameraPreset.normalizeLutId(this?.lutId) ?: "none",
-            colorRecipe = SettingValue(this?.colorRecipe ?: ColorRecipeParams.DEFAULT),
-            effects = SettingValue(this?.effects ?: EffectParams.DEFAULT),
+            preset = SettingValue(this),
             aspectRatio = ratio?.let(::SettingValue),
             frameId = SettingValue(this?.frameId)
         )
@@ -1055,15 +1044,14 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 desiredUseRaw != prefs.useRaw ||
                 desiredMultiFrameOutputScale != currentState.multiFrameOutputScale
 
-        update.colorRecipe?.let {
-            val recipeLutId = update.lutId ?: currentLutId.value
-            val recipeWithEffects = update.effects?.value?.applyTo(it.value) ?: it.value
-            contentRepository.lutManager.saveColorRecipeParams(recipeLutId, recipeWithEffects)
+        val preset = update.preset?.value
+        val presetLook = update.preset?.let {
+            CameraLookSelection(
+                lutId = CameraPreset.normalizeLutId(preset?.lutId) ?: "none",
+                presetRecipe = preset?.let { it.effects.applyTo(it.colorRecipe) },
+            )
         }
-
-        update.lutId?.let {
-            setLut(it, persist = false)
-        }
+        val presetLoadJob = presetLook?.let(::applyLut)
 
         update.aspectRatio?.let {
             cameraController.setAspectRatio(it.value)
@@ -1102,7 +1090,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 // Photo mode disables the active Log profile without clearing the saved selection.
                 cameraController.setVideoLogProfile(prefs.videoLogProfile)
             }
-            resolveLutIdForMode(prefs, targetCaptureMode)?.let(::applyLut)
+            resolveLookForMode(prefs, targetCaptureMode)?.let(::applyLut)
             currentSurfaceTexture = null
             cameraController.closeCamera()
         }
@@ -1167,10 +1155,18 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
 
         userPreferencesRepository.update {
             update.captureMode?.let { captureMode = it.value }
-            update.lutId?.let {
-                if (persistLutInVideoSlot) videoLutId = it else lutId = it
+            presetLook?.let { look ->
+                photoPresetRecipe = null
+                videoPresetRecipe = null
+                if (persistLutInVideoSlot) {
+                    videoLutId = look.lutId
+                    videoPresetRecipe = look.presetRecipe
+                } else {
+                    lutId = look.lutId
+                    photoPresetRecipe = look.presetRecipe
+                }
+                activePresetId = preset?.id
             }
-            update.effects?.let { activeEffectParams = it.value }
             update.aspectRatio?.let { aspectRatio = it.value.name }
             if (update.useRaw != null || desiredUseRaw != prefs.useRaw) useRaw = desiredUseRaw
             if (update.useJpgMax != null || desiredUseJpgMax != prefs.useJpgMax) useJpgMax = desiredUseJpgMax
@@ -1209,15 +1205,15 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 rawBaselineLutId = it.value
                 rawBaselineLutConfigured = true
             }
-            update.activePresetId?.let { activePresetId = it.value }
         }
-        if (update.lutId != null && !persistLutInVideoSlot) {
+        if (presetLook != null) {
             PhotonLookContract.notifyLookChanged(getApplication<Application>())
         }
 
         if (reconfigureCameraIfNeeded && needsCameraReopen && !captureModeWillChange) {
             reopenCamera()
         }
+        presetLoadJob?.join()
     }
 
     private fun resolveCaptureRawRenderingEngine(userPrefs: UserPreferences?): RawRenderingEngine {
@@ -1326,8 +1322,16 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                     }
                 }
 
-                if (userPreferencesRepository.current.activePresetId == presetId) {
-                    userPreferencesRepository.update { activePresetId = null }
+                cameraLookMutex.withLock {
+                    if (userPreferencesRepository.latest().activePresetId == presetId) {
+                        userPreferencesRepository.update {
+                            activePresetId = null
+                            photoPresetRecipe = null
+                            videoPresetRecipe = null
+                        }
+                        resolveLookForMode(userPreferencesRepository.latest(), state.value.captureMode)?.let(::applyLut)
+                        PhotonLookContract.notifyLookChanged(getApplication<Application>())
+                    }
                 }
             }
         }
@@ -2155,9 +2159,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 cameraController.setMeteringMode(prefs.meteringMode)
 
                 // 根据启动时的拍摄模式应用照片 LUT 或独立的视频 LUT。
-                resolveLutIdForMode(prefs, prefs.captureMode)?.let {
-                    setLut(it, persist = false)
-                }
+                resolveLookForMode(prefs, prefs.captureMode)?.let(::applyLut)
 
                 // 应用保存的边框配置
                 if (prefs.frameId != null) {
@@ -2192,7 +2194,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             } else {
                 // 如果没有任何偏好设置，使用配置文件中的默认 LUT（第一个）
                 val defaultLut = availableLutList.firstOrNull { it.isDefault }
-                defaultLut?.let { setLut(it.id, persist = false) }
+                defaultLut?.let { applyLut(CameraLookSelection(it.id)) }
             }
 
             _isInitialized.value = true
@@ -2203,7 +2205,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         viewModelScope.launch {
             state.collect { currentState ->
                 if (currentState.captureMode == CaptureMode.VIDEO) {
-                    validateAndCancelNonMatchingVideoLut(currentState.videoConfig.logProfile, currentLutConfig)
+                    validateAndCancelNonMatchingVideoLut(currentState.videoConfig.logProfile)
                 }
                 glSurfaceView?.let { view ->
                     view.setVideoLogProfile(currentState.videoConfig.logProfile)
@@ -2686,37 +2688,16 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     private fun restorePreviewLutAfterResume() {
-        val lutId = currentLutId.value
-        val loadGeneration = lutLoadGeneration
-        PLog.d(TAG, "restorePreviewLutAfterResume: lutId=$lutId")
-        viewModelScope.launch {
-            val candidateLut = withContext(Dispatchers.IO) {
-                contentRepository.lutManager.loadLut(lutId)
-            }
-            if (currentLutId.value != lutId || lutLoadGeneration != loadGeneration) {
-                return@launch
-            }
-            val profile = state.value.videoConfig.logProfile
-            val loadedLut = candidateLut?.takeIf {
-                state.value.captureMode != CaptureMode.VIDEO || profile.matchesLut(it.curve, it.colorSpace)
-            }
-            if (candidateLut != null && loadedLut == null) applyLut("none")
-            currentLutConfig = loadedLut
-            cameraController.setLutEnabled(loadedLut != null)
-            cameraController.setLogLutActive(loadedLut?.curve?.isLog == true)
-            glSurfaceView?.let { view ->
-                val currentState = state.value
-                view.setEnginePreview(currentEnginePreviewPlan.value)
-                view.setBaselineLut(currentBaselineLutConfig)
-                view.setBaselineLutEnabled(currentBaselineLutConfig != null)
-                view.setBaselineParams(currentBaselineRecipeParams.value)
-                view.setLut(loadedLut)
-                view.setLutEnabled(loadedLut != null)
-                view.setParams(currentRecipeParams.value)
-                view.setColorRecipeEnabled(!currentRecipeParams.value.isDefault())
-                view.setVideoLogProfile(currentState.videoConfig.logProfile)
-                view.restoreRenderStateAfterResume()
-            }
+        updateLut(reload = true)
+        val look = currentLutLook.value
+        glSurfaceView?.let { view ->
+            view.setEnginePreview(currentEnginePreviewPlan.value)
+            view.setBaselineLut(currentBaselineLutConfig)
+            view.setBaselineLutEnabled(currentBaselineLutConfig != null)
+            view.setBaselineParams(currentBaselineRecipeParams.value)
+            view.setCreativeLook(look.config, look.recipe)
+            view.setVideoLogProfile(state.value.videoConfig.logProfile)
+            view.restoreRenderStateAfterResume()
         }
     }
 
@@ -2770,6 +2751,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             lutId = lutIdToSave,
             frameId = frameIdToSave,
             colorRecipeParams = settings.recipe,
+            photoColorRecipeEdits = settings.photoColorRecipeEdits,
             baselineTarget = baselineMetadata?.first,
             baselineLutId = baselineMetadata?.second,
             baselineColorRecipeParams = baselineMetadata?.third,
@@ -3091,12 +3073,13 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 cameraController.stopVideoRecording()
             } else {
                 val currentState = state.value
+                val look = currentLutLook.value
                 val orientationOffset = userPreferences.value.cameraOrientationOffsets[
                     currentState.currentCameraId
                 ] ?: 0
                 cameraController.startVideoRecording(
-                    creativeLutConfig = currentLutConfig.takeIf { currentState.lutEnabled },
-                    creativeRecipeParams = getMergedRecipeParams(),
+                    creativeLutConfig = look.config.takeIf { currentState.lutEnabled },
+                    creativeRecipeParams = look.recipe,
                     orientationOffsetDegrees = orientationOffset
                 )
             }
@@ -3118,7 +3101,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         val timerSeconds = state.value.timerSeconds
 
         // 检查 VIP 权限
-        val currentLut = getLutInfo(currentLutId.value)
+        val currentLut = getLutInfo(currentLutLook.value.id)
         if (currentLut?.isVip == true && !isPurchased.value) {
             showPaymentDialog = true
             return
@@ -3140,20 +3123,24 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         }
     }
 
-    private fun snapshotCaptureSettings() = CaptureSettingsSnapshot(
-        state = state.value,
-        preferences = userPreferencesRepository.current,
-        lutId = currentLutId.value,
-        frameId = currentFrameId,
-        recipe = getMergedRecipeParams(),
-        cameraId = cameraController.getCurrentCameraId(),
-        sensorOrientation = cameraController.getSensorOrientation(),
-        lensFacing = cameraController.getLensFacing(),
-        deviceRotation = OrientationObserver.captureRotationDegrees.toInt(),
-        blackBorderCrop = currentRawBlackBorderCrop(),
-        portraitMask = capturePortraitMaskSnapshot(),
-        multipleExposure = multipleExposureState.enabled,
-    )
+    private fun snapshotCaptureSettings(): CaptureSettingsSnapshot {
+        val look = currentLutLook.value
+        return CaptureSettingsSnapshot(
+            state = state.value,
+            preferences = userPreferencesRepository.current,
+            lutId = look.id,
+            frameId = currentFrameId,
+            recipe = look.recipe,
+            photoColorRecipeEdits = look.photoColorRecipeEdits(),
+            cameraId = cameraController.getCurrentCameraId(),
+            sensorOrientation = cameraController.getSensorOrientation(),
+            lensFacing = cameraController.getLensFacing(),
+            deviceRotation = OrientationObserver.captureRotationDegrees.toInt(),
+            blackBorderCrop = currentRawBlackBorderCrop(),
+            portraitMask = capturePortraitMaskSnapshot(),
+            multipleExposure = multipleExposureState.enabled,
+        )
+    }
 
     private fun submitPhotoCapture() {
         val settings = snapshotCaptureSettings()
@@ -3321,11 +3308,11 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             vibrationHelper.vibrate()
         }
 
-        val capturedLutId = currentLutId.value
+        val look = currentLutLook.value
         glSurfaceView?.capturePreviewFrame { bitmap ->
-            contentRepository.recordLutCapture(capturedLutId)
+            contentRepository.recordLutCapture(look.id)
             viewModelScope.launch {
-                saveVideoSnapshot(bitmap)
+                saveVideoSnapshot(bitmap, look)
             }
         } ?: PLog.w(TAG, "captureVideoFrame skipped: glSurfaceView unavailable")
     }
@@ -3597,12 +3584,14 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         if (state.value.captureMode == mode && !rawNeedsUpdate) return
 
         shootingModeSwitchJob = viewModelScope.launch {
-            applyCameraFeatureUpdate(
-                CameraFeatureUpdate(
-                    captureMode = SettingValue(mode),
-                    useRaw = useRaw?.let(::SettingValue),
+            cameraLookMutex.withLock {
+                applyCameraFeatureUpdate(
+                    CameraFeatureUpdate(
+                        captureMode = SettingValue(mode),
+                        useRaw = useRaw?.let(::SettingValue),
+                    )
                 )
-            )
+            }
         }
     }
 
@@ -3690,7 +3679,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         viewModelScope.launch {
             userPreferencesRepository.update { videoLogProfile = logProfile }
         }
-        validateAndCancelNonMatchingVideoLut(logProfile, currentLutConfig)
+        validateAndCancelNonMatchingVideoLut(logProfile)
     }
 
     fun setVideoLogLutMode(mode: VideoLogLutMode) {
@@ -3703,12 +3692,13 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
      * 验证并取消选择非匹配的视频 LUT
      * 如果当前处于视频模式且启用了 Log，若当前选中的 LUT 与 Log 格式不匹配，则取消该 LUT
      */
-    private fun validateAndCancelNonMatchingVideoLut(logProfile: VideoLogProfile, lutConfig: LutConfig?) {
-        if (logProfile != VideoLogProfile.OFF && lutConfig != null) {
-            if (!logProfile.matchesLut(lutConfig.curve, lutConfig.colorSpace)) {
-                PLog.d(TAG, "Cancelling selected LUT [${lutConfig.title}] because it does not match video log profile [${logProfile.name}] colorSpace/curve")
-                setLut(null, persist = false)
-            }
+    private fun validateAndCancelNonMatchingVideoLut(logProfile: VideoLogProfile) {
+        val look = currentLutLook.value
+        val lutConfig = look.config ?: return
+        if (logProfile != VideoLogProfile.OFF && !logProfile.matchesLut(lutConfig.curve, lutConfig.colorSpace)) {
+            PLog.d(TAG, "Cancelling active LUT [${lutConfig.title}] because it does not match video log profile [${logProfile.name}] colorSpace/curve")
+            if (look.id == lutLookSelection.value.lutId) applyLut(CameraLookSelection.None)
+            else publishLutLook(CameraLutLook.None)
         }
     }
 
@@ -3947,154 +3937,141 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     /**
      * 设置当前 LUT
      */
-    fun setLut(lutId: String?, persist: Boolean = true) {
-        val normalizedLutId = lutId ?: "none"
-        val profile = state.value.videoConfig.logProfile
-        if (state.value.captureMode == CaptureMode.VIDEO && profile.isEnabled && normalizedLutId != "none") {
-            val info = availableLutList.firstOrNull { it.id == normalizedLutId }
-            if (info != null && !profile.matchesLut(info.inputCurve, info.inputColorSpace)) {
-                if (!persist) applyLut("none")
-                return
-            }
-        }
-        applyLut(normalizedLutId)
+    fun setLut(lutId: String?) {
+        selectLut(lutId, videoSlot = null)
+    }
 
-        if (persist) {
-            val useVideoSlot = state.value.captureMode == CaptureMode.VIDEO &&
-                userPreferences.value.separateVideoLutEnabled
-            viewModelScope.launch {
-                if (useVideoSlot) {
-                    userPreferencesRepository.update { videoLutId = normalizedLutId }
-                } else {
-                    userPreferencesRepository.update { this.lutId = normalizedLutId }
-                    PhotonLookContract.notifyLookChanged(getApplication<Application>())
-                }
-            }
-        }
+    private fun canSelectLut(lutId: String): Boolean {
+        val cameraState = state.value
+        val profile = cameraState.videoConfig.logProfile
+        if (cameraState.captureMode != CaptureMode.VIDEO || !profile.isEnabled || lutId == "none") return true
+        val info = contentRepository.lutManager.getLutInfo(lutId) ?: return true
+        return profile.matchesLut(info.inputCurve, info.inputColorSpace)
     }
 
     private var lutIntensitySaveJob: Job? = null
 
     fun updateLutIntensity(intensity: Float) {
-        val lutId = currentLutId.value
-        if (lutId == "none") return
-        val current = currentRecipeParams.value
-        val updated = current.copy(lutIntensity = RecipeParam.LUT_INTENSITY.clamp(intensity))
+        val look = currentLutLook.value
+        val selection = lutLookSelection.value
+        if (selection.presetRecipe != null || look.fromPreset || look.id == "none" || look.id != selection.lutId) return
+        val updated = look.recipe.copy(lutIntensity = RecipeParam.LUT_INTENSITY.clamp(intensity))
         lutIntensitySaveJob?.cancel()
         lutIntensitySaveJob = viewModelScope.launch {
             delay(200)
-            contentRepository.lutManager.saveColorRecipeParams(lutId, updated)
+            contentRepository.lutManager.saveColorRecipeParams(look.id, updated)
         }
     }
 
     fun setPhotoLut(lutId: String?) {
-        val normalizedLutId = lutId ?: "none"
-        val shouldApply = state.value.captureMode != CaptureMode.VIDEO ||
-            !userPreferences.value.separateVideoLutEnabled
-        if (shouldApply) {
-            applyLut(normalizedLutId)
-        }
-        viewModelScope.launch {
-            userPreferencesRepository.update { this.lutId = normalizedLutId }
-            PhotonLookContract.notifyLookChanged(getApplication<Application>())
-        }
+        selectLut(lutId, videoSlot = false)
     }
 
     fun setVideoLut(lutId: String?) {
-        val normalizedLutId = lutId ?: "none"
-        if (state.value.captureMode == CaptureMode.VIDEO &&
-            userPreferences.value.separateVideoLutEnabled
-        ) {
-            applyLut(normalizedLutId)
-        }
+        selectLut(lutId, videoSlot = true)
+    }
+
+    private fun selectLut(lutId: String?, videoSlot: Boolean?) {
+        val selection = CameraLookSelection(CameraPreset.normalizeLutId(lutId) ?: "none")
         viewModelScope.launch {
-            userPreferencesRepository.update { videoLutId = normalizedLutId }
+            cameraLookMutex.withLock {
+                val prefs = userPreferencesRepository.latest()
+                val activeVideoSlot = state.value.captureMode == CaptureMode.VIDEO && prefs.separateVideoLutEnabled
+                val useVideoSlot = videoSlot ?: activeVideoSlot
+                if (useVideoSlot == activeVideoSlot) {
+                    if (videoSlot == null && !canSelectLut(selection.lutId)) return@withLock
+                    applyLut(selection)
+                }
+                userPreferencesRepository.update {
+                    if (useVideoSlot) videoLutId = selection.lutId else this.lutId = selection.lutId
+                }
+                if (!useVideoSlot) PhotonLookContract.notifyLookChanged(getApplication<Application>())
+            }
         }
     }
 
     fun setSeparateVideoLutEnabled(enabled: Boolean) {
-        if (userPreferences.value.separateVideoLutEnabled == enabled) return
         viewModelScope.launch {
-            val currentPreferences = userPreferencesRepository.userPreferences.first()
-            val initialVideoLutId = currentPreferences.videoLutId
-                ?: currentPreferences.lutId
-                ?: currentLutId.value
-            userPreferencesRepository.update {
-                separateVideoLutEnabled = enabled
-                if (enabled && videoLutId == null && initialVideoLutId != null) videoLutId = initialVideoLutId
-            }
-            if (state.value.captureMode == CaptureMode.VIDEO) {
-                val updatedPreferences = currentPreferences.edited {
+            cameraLookMutex.withLock {
+                val prefs = userPreferencesRepository.latest()
+                if (prefs.separateVideoLutEnabled == enabled) return@withLock
+                val initialVideoLutId = prefs.lutId ?: lutLookSelection.value.lutId
+                userPreferencesRepository.update {
                     separateVideoLutEnabled = enabled
-                    videoLutId = currentPreferences.videoLutId ?: initialVideoLutId
+                    if (enabled && videoLutId == null) videoLutId = initialVideoLutId
                 }
-                resolveLutIdForMode(updatedPreferences, CaptureMode.VIDEO)?.let {
-                    applyLut(it)
+                if (state.value.captureMode == CaptureMode.VIDEO) {
+                    resolveLookForMode(userPreferencesRepository.latest(), CaptureMode.VIDEO)?.let(::applyLut)
                 }
             }
         }
     }
 
-    private fun resolveLutIdForMode(preferences: UserPreferences, mode: CaptureMode): String? {
+    private fun resolveLookForMode(preferences: UserPreferences, mode: CaptureMode): CameraLookSelection? {
         val lutManager = contentRepository.lutManager
-        return resolveLutIdForCaptureMode(
-            photoLutId = preferences.lutId?.takeIf { lutManager.getLutInfo(it) != null },
-            videoLutId = preferences.videoLutId?.takeIf { lutManager.getLutInfo(it) != null },
+        val photoLutId = preferences.lutId?.takeIf { it == "none" || lutManager.getLutInfo(it) != null }
+        val videoLutId = preferences.videoLutId?.takeIf { it == "none" || lutManager.getLutInfo(it) != null }
+        val lutId = resolveLutIdForCaptureMode(
+            photoLutId = photoLutId,
+            videoLutId = videoLutId,
             separateVideoLutEnabled = preferences.separateVideoLutEnabled,
             captureMode = mode,
             defaultLutId = lutManager.getAvailableLuts().firstOrNull { it.isDefault }?.id,
-        )
+        ) ?: return null
+        val presetRecipe = if (mode == CaptureMode.VIDEO && preferences.separateVideoLutEnabled && videoLutId != null) {
+            preferences.videoPresetRecipe
+        } else if (photoLutId != null) {
+            preferences.photoPresetRecipe
+        } else {
+            null
+        }
+        return CameraLookSelection(lutId, presetRecipe)
     }
 
-    private fun applyLut(normalizedLutId: String) {
-        val loadGeneration = ++lutLoadGeneration
+    private fun applyLut(request: CameraLookSelection): Job? {
         lutLoadJob?.cancel()
-        val profile = state.value.videoConfig.logProfile
-        if (state.value.captureMode == CaptureMode.VIDEO && profile.isEnabled &&
-            !profile.matchesLut(currentLutConfig?.curve, currentLutConfig?.colorSpace)) {
-            currentLutConfig = null
-            cameraController.setLogLutActive(false)
+        val selection = request.takeIf { canSelectLut(it.lutId) } ?: CameraLookSelection.None
+        val lutId = selection.lutId
+        val presetRecipe = selection.presetRecipe
+        _lutLookSelection.value = selection
+        if (lutId == "none") {
+            publishLutLook(CameraLutLook(lutId, null, presetRecipe ?: ColorRecipeParams.DEFAULT, presetRecipe != null))
+            return null
         }
-        currentLutId.value = normalizedLutId
-        if (normalizedLutId == "none") {
-            currentLutConfig = null
-            // LUT 已禁用，通知相机控制器
-            cameraController.setLogLutActive(false)
-            cameraController.setLutEnabled(false)
-        } else {
-            val hadActiveLut = currentLutConfig != null
-            if (!hadActiveLut) {
-                // 首次启动时先保持”未启用”状态，避免 Live Photo 在 LUT 文件尚未加载完成前录入原始画面。
-                cameraController.setLutEnabled(false)
-            }
-            lutLoadJob = viewModelScope.launch {
-                val loadedLut = withContext(Dispatchers.IO) {
-                    contentRepository.lutManager.loadLut(normalizedLutId)
-                }
-                if (lutLoadGeneration != loadGeneration || currentLutId.value != normalizedLutId) {
-                    return@launch
-                }
-                if (state.value.captureMode == CaptureMode.VIDEO) {
-                    val logProfile = state.value.videoConfig.logProfile
-                    if (logProfile != VideoLogProfile.OFF && loadedLut != null) {
-                        if (!logProfile.matchesLut(loadedLut.curve, loadedLut.colorSpace)) {
-                            PLog.d(TAG, "Deselecting newly selected LUT [${loadedLut.title}] because it does not match video log profile [${logProfile.name}] colorSpace/curve")
-                            setLut(null, persist = false)
-                            return@launch
-                        }
-                    }
-                }
-                currentLutConfig = loadedLut
-                cameraController.setLogLutActive(loadedLut?.curve?.isLog == true)
-                cameraController.setLutEnabled(loadedLut != null)
-                if (lutLoadGeneration == loadGeneration) {
-                    lutLoadJob = null
-                }
-            }
-            if (hadActiveLut) {
-                cameraController.setLutEnabled(true)
-            }
+
+        val currentState = state.value
+        if (currentState.captureMode == CaptureMode.VIDEO) {
+            validateAndCancelNonMatchingVideoLut(currentState.videoConfig.logProfile)
+            if (lutLookSelection.value.lutId != lutId) return null
         }
+        return viewModelScope.launch {
+            val loadedLut = withContext(Dispatchers.IO) {
+                contentRepository.lutManager.loadLut(lutId)
+            }
+            fun publishRecipe(recipe: ColorRecipeParams) {
+                val activeState = state.value
+                val profile = activeState.videoConfig.logProfile
+                if (activeState.captureMode == CaptureMode.VIDEO && profile.isEnabled && loadedLut != null &&
+                    !profile.matchesLut(loadedLut.curve, loadedLut.colorSpace)
+                ) {
+                    PLog.d(TAG, "Deselecting newly selected LUT [${loadedLut.title}] because it does not match video log profile [${profile.name}] colorSpace/curve")
+                    applyLut(CameraLookSelection.None)
+                    return
+                }
+                publishLutLook(CameraLutLook(lutId, loadedLut, recipe, presetRecipe != null))
+            }
+            if (presetRecipe != null) {
+                publishRecipe(presetRecipe)
+            } else {
+                contentRepository.lutManager.getColorRecipeParams(lutId).collect(::publishRecipe)
+            }
+        }.also { lutLoadJob = it }
+    }
+
+    private fun publishLutLook(look: CameraLutLook) {
+        _currentLutLook.value = look
+        cameraController.setLogLutActive(look.config?.curve?.isLog == true)
+        cameraController.setLutEnabled(look.config != null)
     }
 
     /**
@@ -4103,7 +4080,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     fun peekNextLut(): LutInfo? {
         val luts = selectableLutList
         if (luts.isEmpty()) return null
-        val currentIndex = luts.indexOfFirst { it.id == currentLutId.value }
+        val currentIndex = luts.indexOfFirst { it.id == lutLookSelection.value.lutId }
         val nextIndex = if (currentIndex == -1 || currentIndex == luts.size - 1) 0 else currentIndex + 1
         return luts[nextIndex]
     }
@@ -4114,7 +4091,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     fun peekPreviousLut(): LutInfo? {
         val luts = selectableLutList
         if (luts.isEmpty()) return null
-        val currentIndex = luts.indexOfFirst { it.id == currentLutId.value }
+        val currentIndex = luts.indexOfFirst { it.id == lutLookSelection.value.lutId }
         val prevIndex = if (currentIndex <= 0) luts.size - 1 else currentIndex - 1
         return luts[prevIndex]
     }
@@ -4139,13 +4116,13 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         return previousLut
     }
 
-    fun updateLut() {
+    fun updateLut(reload: Boolean = false) {
         viewModelScope.launch {
-            presetApplyMutex.withLock {
+            cameraLookMutex.withLock {
                 val preferences = userPreferencesRepository.userPreferences.first()
-                val newLutId = resolveLutIdForMode(preferences, state.value.captureMode) ?: return@withLock
-                if (currentLutId.value != newLutId) {
-                    setLut(newLutId, persist = false)
+                val look = resolveLookForMode(preferences, state.value.captureMode) ?: return@withLock
+                if (reload || lutLookSelection.value != look) {
+                    applyLut(look)
                 }
             }
         }
@@ -4274,15 +4251,13 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         return rotated
     }
 
-    suspend fun applyLut(bitmap: Bitmap): Bitmap = withContext(Dispatchers.IO) {
-        currentLutConfig?.let { lut ->
-            val params = getMergedRecipeParams(contentRepository.lutManager.loadColorRecipeParams(currentLutId.value))
-            contentRepository.imageProcessor.applyLut(
-                bitmap = bitmap,
-                lutConfig = lut,
-                colorRecipeParams = params
-            )
-        } ?: bitmap
+    suspend fun applyCaptureLook(bitmap: Bitmap, metadata: MediaMetadata): Bitmap = withContext(Dispatchers.IO) {
+        val lut = metadata.lutId?.let(contentRepository.lutManager::loadLut) ?: return@withContext bitmap
+        contentRepository.imageProcessor.applyLut(
+            bitmap = bitmap,
+            lutConfig = lut,
+            colorRecipeParams = metadata.colorRecipeParams
+        )
     }
 
     /** The display preview already includes its look; only composite the captured photo's frame. */
@@ -5305,6 +5280,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 lutId = lutIdToSave,
                 frameId = frameIdToSave,
                 colorRecipeParams = settings.recipe,
+                photoColorRecipeEdits = settings.photoColorRecipeEdits,
                 baselineTarget = baselineMetadata?.first,
                 baselineLutId = baselineMetadata?.second,
                 baselineColorRecipeParams = baselineMetadata?.third,
@@ -5427,18 +5403,20 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         }
     }
 
-    private suspend fun saveVideoSnapshot(bitmap: Bitmap) {
+    private suspend fun saveVideoSnapshot(bitmap: Bitmap, look: CameraLutLook) {
         savePreviewBitmapCapture(
             bitmap = bitmap,
             metadataCaptureMode = "video_snapshot",
-            ratio = mapVideoAspectRatioToPhotoAspectRatio(state.value.videoConfig.aspectRatio)
+            ratio = mapVideoAspectRatioToPhotoAspectRatio(state.value.videoConfig.aspectRatio),
+            look = look
         )
     }
 
     private suspend fun savePreviewBitmapCapture(
         bitmap: Bitmap,
         metadataCaptureMode: String,
-        ratio: AspectRatio?
+        ratio: AspectRatio?,
+        look: CameraLutLook,
     ) {
         try {
             val context = getApplication<Application>()
@@ -5468,9 +5446,10 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             }
 
             val metadata = MediaMetadata(
-                lutId = currentLutId.value,
+                lutId = look.id,
                 frameId = currentFrameId,
-                colorRecipeParams = getMergedRecipeParams(),
+                colorRecipeParams = look.recipe,
+                photoColorRecipeEdits = look.photoColorRecipeEdits(),
                 sharpening = sharpeningValue,
                 noiseReduction = noiseReductionValue,
                 chromaNoiseReduction = chromaNoiseReductionValue,
@@ -5733,6 +5712,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 lutId = lutIdToSave,
                 frameId = frameIdToSave,
                 colorRecipeParams = settings.recipe,
+                photoColorRecipeEdits = settings.photoColorRecipeEdits,
                 baselineTarget = baselineMetadata?.first,
                 baselineLutId = baselineMetadata?.second,
                 baselineColorRecipeParams = baselineMetadata?.third,
@@ -6056,6 +6036,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             lutId = lutIdToSave,
             frameId = frameIdToSave,
             colorRecipeParams = settings.recipe,
+            photoColorRecipeEdits = settings.photoColorRecipeEdits,
             baselineTarget = baselineMetadata?.first,
             baselineLutId = baselineMetadata?.second,
             baselineColorRecipeParams = baselineMetadata?.third,

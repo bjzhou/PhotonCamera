@@ -22,16 +22,19 @@ import androidx.lifecycle.viewModelScope
 import com.hinnka.mycamera.data.ContentRepository
 import com.hinnka.mycamera.frame.FrameInfo
 import com.hinnka.mycamera.gallery.GalleryManager
+import com.hinnka.mycamera.gallery.GalleryEditLook
 import com.hinnka.mycamera.gallery.ProcessingPhoto
 import com.hinnka.mycamera.gallery.MediaData
 import com.hinnka.mycamera.gallery.AestheticScoreRepository
 import com.hinnka.mycamera.gallery.MediaMetadata
 import com.hinnka.mycamera.gallery.MediaType
+import com.hinnka.mycamera.gallery.PhotoColorRecipeEdits
 import com.hinnka.mycamera.gallery.PostEditGeometry
+import com.hinnka.mycamera.gallery.changedRecipeFields
+import com.hinnka.mycamera.gallery.copyRecipeFields
 import com.hinnka.mycamera.hdr.HdrGainmapStrength
 import com.hinnka.mycamera.hdr.UnifiedGainmapProducer
 import com.hinnka.mycamera.lut.BaselineColorCorrectionTarget
-import com.hinnka.mycamera.lut.LutConfig
 import com.hinnka.mycamera.lut.sortLutsByUserOrder
 import com.hinnka.mycamera.lut.LutInfo
 import com.hinnka.mycamera.lut.PhotoTransformation
@@ -271,8 +274,9 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
         private set
 
     // LUT 编辑状态
-    var editLutId = MutableStateFlow<String?>(null)
-        private set
+    private val _editLook = MutableStateFlow(GalleryEditLook())
+    internal val editLook = _editLook.asStateFlow()
+    private var editLutLoadJob: Job? = null
 
     var editSyncAdjustmentsToLut by mutableStateOf(false)
         private set
@@ -288,28 +292,6 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
         editApplyEffectsToVideo.value = apply
     }
 
-    @OptIn(ExperimentalCoroutinesApi::class)
-    var editLutRecipeParams = editLutId.flatMapLatest { id ->
-        if (id == null) {
-            flowOf(ColorRecipeParams.DEFAULT)
-        } else {
-            contentRepository.lutManager.getColorRecipeParams(id)
-                .map { params -> pendingEditLutRecipeSync[id] ?: params }
-        }
-    }.stateIn(
-        scope = viewModelScope,
-        started = SharingStarted.Eagerly,
-        initialValue = ColorRecipeParams.DEFAULT
-    )
-
-    /** 当前预览、保存使用的完整配方，与独立调节草稿分开保存。 */
-    var editPhotoRecipeParams = MutableStateFlow<ColorRecipeParams?>(null)
-        private set
-
-    private var independentEditPhotoRecipeParams = ColorRecipeParams.DEFAULT
-
-    var editLutConfig: LutConfig? by mutableStateOf(null)
-        private set
     var editVideoSourceProfile: VideoLogProfile? by mutableStateOf(null)
         private set
     var editVideoProfileDetected by mutableStateOf(false)
@@ -318,7 +300,8 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
 
     val selectableEditLuts: List<LutInfo>
         get() = availableLuts.filter {
-            (editVideoSourceProfile ?: VideoLogProfile.OFF).matchesLut(it.inputCurve, it.inputColorSpace)
+            it.id == "none" ||
+                (editVideoSourceProfile ?: VideoLogProfile.OFF).matchesLut(it.inputCurve, it.inputColorSpace)
         }
 
     fun selectEditVideoSourceProfile(profile: VideoLogProfile) {
@@ -330,7 +313,7 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
 
     private fun clearIncompatibleVideoLut() {
         val profile = editVideoSourceProfile ?: return
-        val selected = availableLuts.firstOrNull { it.id == editLutId.value } ?: return
+        val selected = availableLuts.firstOrNull { it.id == editLook.value.lutId } ?: return
         if (!profile.matchesLut(selected.inputCurve, selected.inputColorSpace)) {
             PLog.d(TAG, "Clearing LUT ${selected.id}: input does not match source $profile")
             setEditLut(null)
@@ -1497,7 +1480,6 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
         currentPhotoMetadataId = photo?.id
         currentMediaMetadata = metadata
         metadata?.let { m ->
-            editLutId.value = m.lutId
             editFrameId.value = m.frameId
             editSharpening.value = m.sharpening ?: 0f
             editNoiseReduction.value = DenoiseStrength.clamp(m.noiseReduction)
@@ -1539,14 +1521,6 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
             _editAiDenoiseEnabled.value = aiDenoiseApplied
             restoreCropEditState(photo, m)
 
-            // 加载 LUT 配置
-            m.lutId?.let { id ->
-                viewModelScope.launch {
-                    editLutConfig = withContext(Dispatchers.IO) {
-                        contentRepository.lutManager.loadLut(id)
-                    }
-                }
-            }
         } ?: run {
             editRotationDegrees.value = 0
             editStraightenDegrees.value = 0f
@@ -2147,7 +2121,6 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
         editVideoSourceProfile = null
         editVideoProfileDetected = false
         editVideoProfileOverride = null
-        editLutConfig = null
 
         if (currentMediaMetadata == null || currentPhotoMetadataId != targetPhoto.id) {
             val context = getApplication<Application>()
@@ -2165,14 +2138,10 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
 
         isEditing = true
         editSyncAdjustmentsToLut = false
-        independentEditPhotoRecipeParams = ColorRecipeParams.DEFAULT
+        publishEditLook(restoreEditLook(currentMediaMetadata), targetPhoto.isVideo)
         // 从当前元数据恢复编辑状态
         currentMediaMetadata?.let { metadata ->
-            editLutId.value = metadata.lutId
             editFrameId.value = metadata.frameId
-            val recipe = snapshotEditRecipe(metadata.colorRecipeParams, metadata.lutId)
-            editPhotoRecipeParams.value = recipe
-            independentEditPhotoRecipeParams = recipe.deepCopy()
             editApplyEffectsToVideo.value = metadata.applyEffectsToVideo
             
             if (!targetPhoto.isVideo) {
@@ -2225,9 +2194,7 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                 editFocusPointY.value = metadata.focusPointY
             }
         } ?: run {
-            editLutId.value = null
             editFrameId.value = null
-            editPhotoRecipeParams.value = ColorRecipeParams.DEFAULT
             editApplyEffectsToVideo.value = false
             
             if (!targetPhoto.isVideo) {
@@ -2272,8 +2239,8 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
 
         // Resolve the source from the file before exposing the video effect to the player.
         val manualProfile = VideoColorMetadata.manualProfile(currentMediaMetadata?.customProperties)
-        viewModelScope.launch {
-            if (targetPhoto.isVideo) {
+        if (targetPhoto.isVideo) {
+            viewModelScope.launch {
                 val detectedProfile = withContext(Dispatchers.IO) {
                     VideoColorMetadata.readProfile(getApplication(), targetPhoto.sourceUri ?: targetPhoto.uri)
                 }
@@ -2282,12 +2249,6 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                 editVideoProfileOverride = manualProfile.takeIf { detectedProfile == null }
                 editVideoSourceProfile = detectedProfile ?: manualProfile ?: VideoLogProfile.OFF
                 clearIncompatibleVideoLut()
-            }
-            editLutId.value?.let { id ->
-                val config = withContext(Dispatchers.IO) { contentRepository.lutManager.loadLut(id) }
-                if (isEditing && getCurrentPhoto()?.id == targetPhoto.id && editLutId.value == id) {
-                    editLutConfig = config
-                }
             }
         }
     }
@@ -2361,11 +2322,9 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
         editVideoProfileDetected = false
         editVideoProfileOverride = null
         editSyncAdjustmentsToLut = false
-        editLutId.value = null
-        editLutConfig = null
+        editLutLoadJob?.cancel()
+        _editLook.value = GalleryEditLook()
         editFrameId.value = null
-        editPhotoRecipeParams.value = null
-        independentEditPhotoRecipeParams = ColorRecipeParams.DEFAULT
         editApplyEffectsToVideo.value = false
         editCropRect.value = null
         editCropAspectOption.value = CropAspectOption.Free
@@ -2399,49 +2358,76 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
         editRawFotufilmDocument.value = null
     }
 
-    /**
-     * 切换绑定状态时保留当前调节，开启绑定后才将调节写入当前 LUT。
-     */
     fun setSyncAdjustmentsToLut(enabled: Boolean) {
-        val shouldSync = enabled && editLutId.value != null
-        if (editSyncAdjustmentsToLut == shouldSync) return
-
-        val params = snapshotEditRecipe(editPhotoRecipeParams.value, editLutId.value)
-        editSyncAdjustmentsToLut = shouldSync
-        if (shouldSync) {
-            setPhotoRecipeParams(params)
-        } else {
-            editPhotoRecipeParams.value = params
-        }
+        val lutId = editLook.value.lutId
+        editSyncAdjustmentsToLut = enabled && lutId != null && !PhotoColorMatch.isId(lutId)
     }
 
-    private fun snapshotEditRecipe(params: ColorRecipeParams?, lutId: String?): ColorRecipeParams {
-        // 旧照片可能只保存了 LUT 引用。读取一次实际配方后独立编辑，保持进入编辑时的画面。
-        // 按 ID 读取也避免快速切换后取消同步时，拿到 StateFlow 尚未更新的上一个 LUT 配方。
-        val recipe = params ?: lutId?.let { id ->
+    private fun loadEditLutRecipe(lutId: String?): ColorRecipeParams =
+        lutId?.let { id ->
             pendingEditLutRecipeSync[id] ?: runBlocking(Dispatchers.IO) {
                 contentRepository.lutManager.loadColorRecipeParams(id)
             }
         } ?: ColorRecipeParams.DEFAULT
-        return recipe.deepCopy()
+
+    private fun restoreEditLook(metadata: MediaMetadata?): GalleryEditLook {
+        val lutId = CameraPreset.normalizeLutId(metadata?.lutId)
+        val recipe = metadata?.colorRecipeParams?.deepCopy() ?: loadEditLutRecipe(lutId)
+        val edits = PhotoColorRecipeEdits.fromJson(metadata?.photoColorRecipeEdits)
+            ?: if (lutId == null) {
+                PhotoColorRecipeEdits.withoutLut(recipe)
+            } else {
+                // 旧照片只记录合成结果。保留拍摄时的外观，后续只跟踪明确的照片调节。
+                PhotoColorRecipeEdits(base = recipe)
+            }
+        return GalleryEditLook(lutId = lutId, recipe = recipe, edits = edits)
     }
 
-    /** 设置照片调节，并根据本次编辑的绑定状态同步到 LUT。 */
-    fun setPhotoRecipeParams(params: ColorRecipeParams) {
-        editPhotoRecipeParams.value = params
-        if (!editSyncAdjustmentsToLut) {
-            independentEditPhotoRecipeParams = params.deepCopy()
+    private fun publishEditLook(look: GalleryEditLook, loadConfig: Boolean) {
+        editLutLoadJob?.cancel()
+        val id = look.lutId
+        if (id == null || !loadConfig) {
+            _editLook.value = look
+            return
         }
-        if (editSyncAdjustmentsToLut) {
-            val lutId = editLutId.value ?: return
-            pendingEditLutRecipeSync[lutId] = params.deepCopy()
-            editLutRecipeSyncJob?.cancel()
-            editLutRecipeSyncJob = viewModelScope.launch {
-                delay(250)
-                editLutRecipeSyncJob = null
-                flushPendingEditLutRecipeSync()
+        _editLook.value = look.copy(isLutConfigLoading = true)
+        editLutLoadJob = viewModelScope.launch {
+            val config = withContext(Dispatchers.IO) {
+                contentRepository.lutManager.loadLut(id)
             }
+            _editLook.update { it.copy(lutConfig = config, isLutConfigLoading = false) }
         }
+    }
+
+    fun updatePhotoRecipeParams(update: (ColorRecipeParams) -> ColorRecipeParams) {
+        val recipe = editLook.value.recipe
+        updatePhotoRecipeParams(recipe, update(recipe))
+    }
+
+    fun updatePhotoRecipeParams(displayed: ColorRecipeParams, params: ColorRecipeParams) {
+        val changedFields = params.changedRecipeFields(displayed)
+        if (changedFields.isEmpty()) return
+        val look = editLook.value
+        val recipe = look.recipe.copyRecipeFields(params, changedFields)
+        val lutId = look.lutId
+        if (!editSyncAdjustmentsToLut || lutId == null) {
+            _editLook.value = look.withPhotoRecipe(recipe, changedFields)
+            return
+        }
+
+        val lutRecipe = loadEditLutRecipe(lutId).copyRecipeFields(recipe, changedFields)
+        _editLook.value = look.withSyncedRecipe(recipe, changedFields)
+        pendingEditLutRecipeSync[lutId] = lutRecipe
+        editLutRecipeSyncJob?.cancel()
+        editLutRecipeSyncJob = viewModelScope.launch {
+            delay(250)
+            editLutRecipeSyncJob = null
+            flushPendingEditLutRecipeSync()
+        }
+    }
+
+    fun resetPhotoRecipeParams() {
+        _editLook.update { it.resetPhotoRecipe() }
     }
 
     private suspend fun flushPendingEditLutRecipeSync() {
@@ -2534,42 +2520,16 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
         }
     }
 
-    fun setEditLut(lutId: String?) {
-        if (lutId != null && getCurrentPhoto()?.isVideo == true &&
+    fun setEditLut(selectedId: String?) {
+        val lutId = CameraPreset.normalizeLutId(selectedId)
+        val look = editLook.value
+        val isVideo = getCurrentPhoto()?.isVideo == true
+        if (look.lutId == lutId) return
+        if (lutId != null && isVideo &&
             (editVideoSourceProfile == null || selectableEditLuts.none { it.id == lutId })
         ) return
-        if (lutId == null) {
-            editSyncAdjustmentsToLut = false
-        }
-        if (editLutId.value != lutId) {
-            val lutRecipe = lutId?.let { id ->
-                pendingEditLutRecipeSync[id] ?: runBlocking(Dispatchers.IO) {
-                    contentRepository.lutManager.loadSavedColorRecipeParams(id)
-                }
-            }
-            // LUT 配方完整应用，但不能覆盖独立调节草稿；离开带配方的 LUT 后恢复草稿。
-            editPhotoRecipeParams.value = (
-                lutRecipe ?: if (editSyncAdjustmentsToLut) {
-                    ColorRecipeParams.DEFAULT
-                } else {
-                    independentEditPhotoRecipeParams
-                }
-            ).deepCopy()
-        }
-        editLutId.value = lutId
-        if (lutId == null) {
-            editLutConfig = null
-            return
-        }
-
-        viewModelScope.launch {
-            val config = withContext(Dispatchers.IO) {
-                contentRepository.lutManager.loadLut(lutId)
-            }
-            if (editLutId.value == lutId) {
-                editLutConfig = config
-            }
-        }
+        editSyncAdjustmentsToLut = false
+        publishEditLook(look.switchLut(lutId, loadEditLutRecipe(lutId)), isVideo)
     }
 
     /**
@@ -2578,7 +2538,7 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
     fun peekNextLut(): LutInfo? {
         val availableLuts = selectableEditLuts
         if (availableLuts.isEmpty()) return null
-        val currentLut = editLutId.value
+        val currentLut = editLook.value.lutId ?: "none"
         val currentIndex = availableLuts.indexOfFirst { it.id == currentLut }
         val nextIndex = (currentIndex + 1) % availableLuts.size
         return availableLuts[nextIndex]
@@ -2590,7 +2550,7 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
     fun peekPreviousLut(): LutInfo? {
         val availableLuts = selectableEditLuts
         if (availableLuts.isEmpty()) return null
-        val currentLut = editLutId.value
+        val currentLut = editLook.value.lutId ?: "none"
         val currentIndex = availableLuts.indexOfFirst { it.id == currentLut }
         val prevIndex = if (currentIndex <= 0) availableLuts.size - 1 else currentIndex - 1
         return availableLuts[prevIndex]
@@ -2647,11 +2607,13 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
     fun copyCurrentEditSettings(customProperties: Map<String, String>) {
         val normalizedCrop = editCropRect.value?.let(::RectF)
         val sourceIsRaw = getCurrentPhoto()?.let(::isRawMedia) == true
+        val look = editLook.value
+        val lutId = PhotoColorMatch.transferable(look.lutId)
         copiedEditSettings = CopiedEditSettings(
             metadata = MediaMetadata(
-                lutId = PhotoColorMatch.transferable(editLutId.value),
-                colorRecipeParams = (editPhotoRecipeParams.value ?: editLutRecipeParams.value)
-                    .deepCopy(),
+                lutId = lutId,
+                colorRecipeParams = look.recipe.deepCopy(),
+                photoColorRecipeEdits = look.copiedRecipeEdits(lutId),
                 sharpening = editSharpening.value.takeUnless { sourceIsRaw },
                 noiseReduction = editNoiseReduction.value.takeUnless { sourceIsRaw },
                 chromaNoiseReduction =
@@ -2682,9 +2644,10 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
     fun createPresetFromCurrentEdit(base: CameraPreset): CameraPreset {
         val sourcePhoto = getCurrentPhoto()?.let { it.relatedPhoto ?: it }
         val sourceIsRaw = sourcePhoto?.let(::isRawMedia) == true
-        val effectiveRecipe = editPhotoRecipeParams.value ?: editLutRecipeParams.value
+        val look = editLook.value
+        val effectiveRecipe = look.recipe
         val lookPreset = base.copy(
-            lutId = CameraPreset.normalizeLutId(PhotoColorMatch.transferable(editLutId.value)),
+            lutId = PhotoColorMatch.transferable(look.lutId),
             colorRecipe = effectiveRecipe.withoutIndependentEffects(),
             effects = effectiveRecipe.toEffectParams(),
             frameId = editFrameId.value,
@@ -2779,12 +2742,9 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                     onComplete(false)
                     return@launch
                 }
-                val effectiveRecipe = metadata.colorRecipeParams
-                    ?: metadata.lutId?.let { lutId ->
-                        withContext(Dispatchers.IO) {
-                            contentRepository.lutManager.loadColorRecipeParams(lutId)
-                        }
-                    }
+                val look = restoreEditLook(metadata)
+                val lutId = PhotoColorMatch.transferable(look.lutId)
+                val hasRecipe = metadata.colorRecipeParams != null || look.lutId != null
                 val baseWidth = metadata.width.takeIf { it > 0 } ?: sourcePhoto.width
                 val baseHeight = metadata.height.takeIf { it > 0 } ?: sourcePhoto.height
                 val (cropWidth, cropHeight) = PostEditGeometry.editedDimensions(
@@ -2806,8 +2766,9 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
 
                 copiedEditSettings = CopiedEditSettings(
                     metadata = MediaMetadata(
-                        lutId = PhotoColorMatch.transferable(metadata.lutId),
-                        colorRecipeParams = effectiveRecipe?.deepCopy(),
+                        lutId = lutId,
+                        colorRecipeParams = look.recipe.deepCopy().takeIf { hasRecipe },
+                        photoColorRecipeEdits = if (hasRecipe) look.copiedRecipeEdits(lutId) else null,
                         sharpening = metadata.sharpening.takeUnless { sourceIsRaw },
                         noiseReduction = metadata.noiseReduction.takeUnless { sourceIsRaw },
                         chromaNoiseReduction =
@@ -2849,10 +2810,7 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
         }
         editSyncAdjustmentsToLut = false
 
-        editLutId.value = settings.lutId
-        val recipe = snapshotEditRecipe(settings.colorRecipeParams, settings.lutId)
-        editPhotoRecipeParams.value = recipe
-        independentEditPhotoRecipeParams = recipe.deepCopy()
+        publishEditLook(restoreEditLook(settings), getCurrentPhoto()?.isVideo == true)
         editFrameId.value = settings.frameId
         val targetIsRaw = getCurrentPhoto()?.let(::isRawMedia) == true
         if (!targetIsRaw) {
@@ -2885,16 +2843,6 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
         )
 
         clearIncompatibleVideoLut()
-        editLutId.value?.let { lutId ->
-            viewModelScope.launch {
-                val config = withContext(Dispatchers.IO) {
-                    contentRepository.lutManager.loadLut(lutId)
-                }
-                if (editLutId.value == lutId) editLutConfig = config
-            }
-        } ?: run {
-            editLutConfig = null
-        }
         if (canPasteBokeh) updateBokehPhoto()
         return settings.customProperties.toMap()
     }
@@ -2907,6 +2855,9 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
             blueCurvePoints = blueCurvePoints?.copyOf()
         )
     }
+
+    private fun GalleryEditLook.copiedRecipeEdits(transferableLutId: String?): String =
+        (if (transferableLutId == lutId) edits else PhotoColorRecipeEdits.withoutLut(recipe)).toJson()
 
     /**
      * 设置锐化强度
@@ -3668,11 +3619,12 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                         ?: MediaMetadata()
 
                 if (useGlobalEdit) {
+                    val look = editLook.value
                     val spectralFilmTuning = editRawSpectralFilmTuning.value
                     finalMetadata = (currentMediaMetadata ?: metadata).copy(
-                        lutId = editLutId.value,
+                        lutId = look.lutId,
                         frameId = editFrameId.value,
-                        colorRecipeParams = recipeParamsOverride ?: editPhotoRecipeParams.value ?: editLutRecipeParams.value,
+                        colorRecipeParams = recipeParamsOverride ?: look.recipe,
                         sharpening = editSharpening.value,
                         noiseReduction = editNoiseReduction.value,
                         chromaNoiseReduction = editChromaNoiseReduction.value,
@@ -3961,8 +3913,9 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
      * 保存编辑（只更新元数据，不修改原图）
      */
     fun saveEditMetadata(photo: MediaData, onComplete: (Boolean) -> Unit = {}) {
+        val look = editLook.value
         // 检查 VIP 权限
-        val currentLut = availableLuts.find { it.id == editLutId.value }
+        val currentLut = availableLuts.find { it.id == look.lutId }
         if (currentLut?.isVip == true && !isPurchased.value) {
             showPaymentDialog = true
             onComplete(false)
@@ -3980,7 +3933,7 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                         val importedId = GalleryManager.importPhoto(
                             context,
                             photo.uri,
-                            editLutId.value
+                            look.lutId
                         )
                         if (importedId != null) {
                             photo.metadata = GalleryManager.loadMetadata(context, importedId)
@@ -4027,7 +3980,7 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                 val spectralFilmTuning = editRawSpectralFilmTuning.value
                 val success = GalleryManager.updateMetadata(context, targetPhotoId) { current ->
                     current.copy(
-                        lutId = editLutId.value,
+                        lutId = look.lutId,
                         frameId = editFrameId.value,
                         customProperties = (currentMediaMetadata?.customProperties
                             ?: targetMetadata?.customProperties.orEmpty()).toMutableMap().apply {
@@ -4036,7 +3989,8 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                                 editVideoProfileOverride?.let { put(VideoColorMetadata.OVERRIDE_KEY, it.name) }
                             }
                         },
-                        colorRecipeParams = editPhotoRecipeParams.value,
+                        colorRecipeParams = look.recipe,
+                        photoColorRecipeEdits = look.edits.toJson(),
                         sharpening = editSharpening.value,
                         noiseReduction = editNoiseReduction.value,
                         chromaNoiseReduction = editChromaNoiseReduction.value,
@@ -4375,6 +4329,7 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
             customProperties = (settings.customProperties - VideoColorMetadata.OVERRIDE_KEY) +
                 current.customProperties.filterKeys { it == VideoColorMetadata.OVERRIDE_KEY },
             colorRecipeParams = settings.colorRecipeParams?.deepCopy(),
+            photoColorRecipeEdits = settings.photoColorRecipeEdits,
             sharpening = if (copyDetailProcessing && settings.sharpening != null) {
                 settings.sharpening
             } else {

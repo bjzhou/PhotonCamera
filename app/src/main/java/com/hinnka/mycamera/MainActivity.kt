@@ -310,11 +310,11 @@ class MainActivity : AppCompatActivity() {
         StartupTrace.mark("MainActivity.setContent start")
         setContent {
             StartupComposeReadyEffect()
-            val currentRecipeParams by cameraViewModel.currentRecipeParams.collectAsState()
+            val currentLutLook by cameraViewModel.currentLutLook.collectAsState()
             val phantomPipCrop by preferenceValue { it.phantomPipCrop }
             ScreenCaptureRenderConfigStore.save(
-                creativeLutConfig = cameraViewModel.currentLutConfig,
-                creativeColorRecipeParams = currentRecipeParams,
+                creativeLutConfig = currentLutLook.config,
+                creativeColorRecipeParams = currentLutLook.recipe,
                 crop = phantomPipCrop
             )
 

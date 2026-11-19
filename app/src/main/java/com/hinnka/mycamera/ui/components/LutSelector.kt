@@ -196,7 +196,8 @@ fun LutSelector(
     presentation: LutSelectorPresentation = LutSelectorPresentation.Horizontal,
     onExpandedChange: (Boolean) -> Unit = {},
     presetThumbnailInput: com.hinnka.mycamera.lut.PresetThumbnailInput? = null,
-    onEditPreset: ((String) -> Unit)? = null
+    onEditPreset: ((String) -> Unit)? = null,
+    presetLookActive: Boolean = false,
 ) {
     val favoriteText = stringResource(R.string.favorite)
     val uncategorizedText = stringResource(R.string.uncategorized)
@@ -209,6 +210,9 @@ fun LutSelector(
     }
 
     val activeLutId = currentLutId
+    val editActiveLut = onEditClick.takeIf {
+        !presetLookActive && activeLutId != null && activeLutId != "none"
+    }
     val supportsFrames = onFrameSelected != null
     val supportsPresets = presetModeEnabled
     val expanded = presentation == LutSelectorPresentation.Expanded
@@ -256,15 +260,15 @@ fun LutSelector(
                     isSelected = activeLutId == lut.id,
                     isVip = lut.isVip,
                     onClick = {
-                        if (activeLutId != lut.id) {
+                        if (activeLutId != lut.id || presetLookActive) {
                             browsedCategory = selectedCategory
                             onLutSelected(lut.id)
-                        } else if (presentation == LutSelectorPresentation.Horizontal || lut.id != "none") {
-                            onEditClick?.invoke()
+                        } else {
+                            editActiveLut?.invoke()
                         }
                     },
-                    onEditClick = onEditClick.takeIf {
-                        presentation != LutSelectorPresentation.Horizontal && activeLutId == lut.id && lut.id != "none"
+                    onEditClick = editActiveLut.takeIf {
+                        presentation != LutSelectorPresentation.Horizontal && activeLutId == lut.id
                     },
                     onManageClick = onManageClick?.let { manage ->
                         {
@@ -438,8 +442,10 @@ fun LutSelector(
                             LutItem(
                                 id = lut.id, name = lut.getName(), previewBitmap = thumbnail,
                                 isSelected = selected, isVip = lut.isVip, thumbnailOnly = true,
-                                onClick = click,
-                                onEditClick = onEditClick.takeUnless { lut.id == "none" },
+                                onClick = if (selected && presetLookActive) {
+                                    { onLutSelected(lut.id) }
+                                } else click,
+                                onEditClick = editActiveLut,
                                 onManageClick = onManageClick?.let { manage -> { manage(lut.id) } },
                                 modifier = cardModifier
                             )
@@ -548,8 +554,8 @@ fun LutSelector(
                             verticalAlignment = Alignment.CenterVertically,
                             horizontalArrangement = Arrangement.spacedBy(6.dp)
                         ) {
-                            if (onEditClick != null && activeLutId != null) {
-                                LutEditButton(onClick = onEditClick)
+                            if (editActiveLut != null) {
+                                LutEditButton(onClick = editActiveLut)
                             }
 
                             if (onManageClick != null) {

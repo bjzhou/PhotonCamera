@@ -24,7 +24,7 @@ import com.hinnka.mycamera.color.TransferCurve
 import com.hinnka.mycamera.gallery.PhotoSavePath
 import com.hinnka.mycamera.model.AppAppearance
 import com.hinnka.mycamera.model.CameraPreset
-import com.hinnka.mycamera.model.EffectParams
+import com.hinnka.mycamera.model.ColorRecipeParams
 import com.hinnka.mycamera.model.LutSelectorMode
 import com.hinnka.mycamera.processor.MgcRawMaxMode
 import com.hinnka.mycamera.raw.CanonPictureStyle
@@ -118,7 +118,10 @@ class UserPreferences internal constructor(
 
     var captureMode by enum("capture_mode", CaptureMode.PHOTO)
     var aspectRatio by string("aspect_ratio", "RATIO_4_3")
-    var videoLutId by nullableString("video_lut_id")
+    var videoLutId: String? by stored({ p -> p[K.VIDEO_LUT_ID_KEY] }) { p, v ->
+        p.put(K.VIDEO_LUT_ID_KEY, v)
+        videoPresetRecipe = null
+    }
     var rawBaselineLutId by nullableString("raw_baseline_lut_id")
     var rawDcpId by nullableString("raw_dcp_id")
     var rawExposureCompensation by float("raw_exposure_compensation", 0f, normalize = { it.coerceIn(-4f, 4f) })
@@ -152,7 +155,6 @@ class UserPreferences internal constructor(
     var rawSpectralFilmStock by nullableString("raw_spectral_film_stock")
     var rawSpectralFilmPrint by nullableString("raw_spectral_film_print")
     var rawFotufilmDocument by nullableString("raw_fotufilm_document")
-    var activeEffectParamsJson by string("active_effect_params_json", "")
     var customPresetsJson by string("custom_presets_json", "")
     var activePresetId by nullableString("active_preset_id")
     var deletedBuiltInIds by string("deleted_built_in_ids", "")
@@ -212,7 +214,18 @@ class UserPreferences internal constructor(
     var lutId: String? by stored({ p -> p[K.LUT_ID_KEY] ?: p[K.LEGACY_PHANTOM_LUT_ID_KEY] }) { p, v ->
         p.put(K.LUT_ID_KEY, v)
         p.remove(K.LEGACY_PHANTOM_LUT_ID_KEY)
+        photoPresetRecipe = null
     }
+    var photoPresetRecipe by json(
+        "photo_preset_recipe",
+        decode = { it?.let(ColorRecipeParams::fromJson) },
+        encode = ColorRecipeParams::toJson,
+    )
+    var videoPresetRecipe by json(
+        "video_preset_recipe",
+        decode = { it?.let(ColorRecipeParams::fromJson) },
+        encode = ColorRecipeParams::toJson,
+    )
     var separateVideoLutEnabled by bool("separate_video_lut_enabled", false)
     var rawBaselineLutConfigured: Boolean by stored({ p ->
         p[K.RAW_BASELINE_LUT_CONFIGURED_KEY] ?: p.contains(K.RAW_BASELINE_LUT_ID_KEY)
@@ -623,10 +636,6 @@ class UserPreferences internal constructor(
     var nrLevel by int("nr_level", NoiseReductionLevel.DEFAULT, normalize = NoiseReductionLevel::normalize)
     var videoNrLevel by int("video_nr_level", NoiseReductionLevel.DEFAULT, normalize = NoiseReductionLevel::normalize)
 
-    var activeEffectParams: EffectParams by stored({ EffectParams.fromJson(activeEffectParamsJson) }) { _, v ->
-        activeEffectParamsJson = v.toJson()
-    }
-
     var customPresets: List<CameraPreset> by stored({ CameraPreset.listFromJson(customPresetsJson) }) { _, v ->
         customPresetsJson = CameraPreset.listToJson(v)
     }
@@ -785,6 +794,7 @@ internal object PreferenceKeys {
     val TOP_SHEET_ASPECT_RATIOS = stringPreferencesKey("top_sheet_aspect_ratios")
     val CUSTOM_ASPECT_RATIOS = stringPreferencesKey("custom_aspect_ratios")
     val LUT_ID_KEY = stringPreferencesKey("lut_id")
+    val VIDEO_LUT_ID_KEY = stringPreferencesKey("video_lut_id")
     val LEGACY_PHANTOM_LUT_ID_KEY = stringPreferencesKey("phantom_lut_id")
     val RAW_BASELINE_LUT_ID_KEY = stringPreferencesKey("raw_baseline_lut_id")
     val RAW_BASELINE_LUT_CONFIGURED_KEY = booleanPreferencesKey("raw_baseline_lut_configured")

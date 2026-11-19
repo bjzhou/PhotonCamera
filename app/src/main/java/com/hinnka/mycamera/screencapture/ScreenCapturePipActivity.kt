@@ -320,13 +320,10 @@ private fun ScreenCapturePipContent(
                 glSurfaceView.setLensFacing(1)
                 glSurfaceView.setDeviceRotation(0)
                 glSurfaceView.setCalibrationOffset(0)
-                glSurfaceView.setLut(renderConfig.creativeLutConfig)
-                glSurfaceView.setLutEnabled(renderConfig.creativeLutConfig != null)
-                glSurfaceView.setColorRecipeEnabled(!renderConfig.creativeColorRecipeParams.isDefault())
+                glSurfaceView.setCreativeLook(renderConfig.creativeLutConfig, renderConfig.creativeColorRecipeParams)
                 // MediaProjection feeds the SurfaceTexture with a vertically flipped source space.
                 // Map the user-selected crop from display coordinates into projection coordinates here.
                 glSurfaceView.setSourceCrop(renderConfig.crop.flipVertically())
-                glSurfaceView.setParams(renderConfig.creativeColorRecipeParams)
                 glSurfaceView.getRenderSurface()?.let { surface ->
                     controller.attachPreviewSurface(
                         surface = surface,

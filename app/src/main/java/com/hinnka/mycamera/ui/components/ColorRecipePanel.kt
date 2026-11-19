@@ -132,6 +132,7 @@ fun ColorRecipePanel(
     onEffectsChange: ((EffectParams) -> Unit)? = null,
     headerControls: (@Composable () -> Unit)? = null,
     containerShape: Shape = RoundedCornerShape(topStart = 16.dp, topEnd = 16.dp),
+    onResetAll: (() -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
     val isBakeable: (RecipeParam) -> Boolean = { param ->
@@ -430,7 +431,7 @@ fun ColorRecipePanel(
                         .height(30.dp)
                         .clip(CircleShape)
                         .background(Color.White.copy(alpha = 0.08f))
-                        .clickable { resetAllParams() }
+                        .clickable(onClick = onResetAll ?: ::resetAllParams)
                         .padding(horizontal = 12.dp),
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(4.dp)

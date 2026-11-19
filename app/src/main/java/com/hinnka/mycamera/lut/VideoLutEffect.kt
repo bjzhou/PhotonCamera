@@ -21,15 +21,15 @@ import java.nio.ByteOrder
  */
 @UnstableApi
 class VideoLutEffect(
-    @Volatile var lutConfig: LutConfig?,
+    lutConfig: LutConfig?,
     recipeParams: ColorRecipeParams?,
     val sourceLogProfile: VideoLogProfile = VideoLogProfile.OFF,
 ) : GlEffect {
-    @Volatile
-    var recipeParams: ColorRecipeParams? = recipeParams
-        private set
+    internal data class Look(val lutConfig: LutConfig?, val recipeParams: ColorRecipeParams?)
 
-    private var shaderProgram: VideoLutShaderProgram? = null
+    @Volatile
+    internal var look = Look(lutConfig, recipeParams)
+        private set
 
     private val _outputSize = MutableStateFlow<Size?>(null)
 
@@ -42,10 +42,9 @@ class VideoLutEffect(
     }
 
     override fun toGlShaderProgram(context: Context, useHdr: Boolean): GlShaderProgram {
+        val (lutConfig, recipeParams) = look
         PLog.d("VideoLutEffect", "toGlShaderProgram called, useHdr: $useHdr, sourceLog: $sourceLogProfile, initialLut: ${lutConfig?.title}, recipeEnabled: ${recipeParams != null}")
-        return VideoLutShaderProgram(context, useHdr, this).also {
-            shaderProgram = it
-        }
+        return VideoLutShaderProgram(context, useHdr, this)
     }
 
     /**
@@ -53,9 +52,7 @@ class VideoLutEffect(
      */
     fun update(lutConfig: LutConfig?, recipeParams: ColorRecipeParams?) {
         PLog.d("VideoLutEffect", "update called, lutConfig: ${lutConfig?.title}, recipeParams: ${recipeParams != null}")
-        this.lutConfig = lutConfig
-        this.recipeParams = recipeParams
-        shaderProgram?.triggerUpdate()
+        look = Look(lutConfig, recipeParams)
     }
 }
 
@@ -712,8 +709,6 @@ private class VideoLutShaderProgram(
     private var lastLutConfig: LutConfig? = null
     private var lastRecipeParams: ColorRecipeParams? = null
 
-    @Volatile
-    private var hasPendingUpdate = false
 
     init {
         val vertexShader = GlUtils.compileShader(GLES30.GL_VERTEX_SHADER, VERTEX_SHADER)
@@ -736,11 +731,6 @@ private class VideoLutShaderProgram(
         }
     }
 
-    fun triggerUpdate() {
-        PLog.d("VideoLutShaderProgram", "triggerUpdate called, hasPendingUpdate: true")
-        hasPendingUpdate = true
-    }
-
     override fun configure(inputWidth: Int, inputHeight: Int): Size {
         PLog.d("VideoLutShaderProgram", "configure called, inputWidth: $inputWidth, inputHeight: $inputHeight")
         this.inputWidth = inputWidth.coerceAtLeast(1)
@@ -750,13 +740,12 @@ private class VideoLutShaderProgram(
 
     override fun drawFrame(inputTexId: Int, presentationTimeUs: Long) {
         if (programId == 0) throw VideoFrameProcessingException("Video color program unavailable", presentationTimeUs)
-        val currentLutConfig = effect.lutConfig
+        val (currentLutConfig, currentRecipeParams) = effect.look
         if (currentLutConfig != null &&
             !effect.sourceLogProfile.matchesLut(currentLutConfig.curve, currentLutConfig.colorSpace)
         ) {
             throw VideoFrameProcessingException("LUT input does not match source Log profile ${effect.sourceLogProfile}", presentationTimeUs)
         }
-        val currentRecipeParams = effect.recipeParams
         val softLight = currentRecipeParams?.softLight ?: 0f
         val bloom = currentRecipeParams?.bloom ?: 0f
         val halation = currentRecipeParams?.redHalation ?: 0f
@@ -799,7 +788,7 @@ private class VideoLutShaderProgram(
         deferFilmGrain: Boolean,
     ) {
         // 检查并重新上传 LUT 纹理
-        if (currentLutConfig != lastLutConfig || hasPendingUpdate) {
+        if (currentLutConfig != lastLutConfig) {
             lastLutConfig = currentLutConfig
             if (currentLutConfig != null) {
                 uploadLutTexture(currentLutConfig)
@@ -815,14 +804,13 @@ private class VideoLutShaderProgram(
         val bluePts = currentRecipeParams?.blueCurvePoints
         val curveActive = masterPts != null || redPts != null || greenPts != null || bluePts != null
 
-        if (currentRecipeParams != lastRecipeParams || hasPendingUpdate) {
+        if (currentRecipeParams != lastRecipeParams) {
             lastRecipeParams = currentRecipeParams
             if (curveActive) {
                 uploadCurveTexture(masterPts, redPts, greenPts, bluePts)
             } else {
                 deleteCurveTexture()
             }
-            hasPendingUpdate = false
         }
 
         GLES30.glUseProgram(programId)

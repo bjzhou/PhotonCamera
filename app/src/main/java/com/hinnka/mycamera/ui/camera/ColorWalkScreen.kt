@@ -89,7 +89,7 @@ fun ColorWalkScreen(
         value = viewModel.recommendLutsForColor(selectedColor.toArgb())
     }
 
-    val currentLutId by viewModel.currentLutId.collectAsState()
+    val lookSelection by viewModel.lutLookSelection.collectAsState()
 
     Scaffold(
         topBar = {
@@ -247,7 +247,7 @@ fun ColorWalkScreen(
                     CompactLutRecommendationItem(
                         lut = lut,
                         color = selectedColor,
-                        isCurrent = currentLutId == lut.id,
+                        isCurrent = lookSelection.lutId == lut.id,
                         onClick = {
                             viewModel.setLut(lut.id)
                         }

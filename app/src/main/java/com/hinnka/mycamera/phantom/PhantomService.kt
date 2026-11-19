@@ -96,11 +96,12 @@ import com.hinnka.mycamera.gallery.ExifWriter
 import com.hinnka.mycamera.gallery.GalleryManager
 import com.hinnka.mycamera.gallery.GalleryManager.loadMetadata
 import com.hinnka.mycamera.gallery.GalleryManager.saveMetadata
+import com.hinnka.mycamera.gallery.PhotoColorRecipeEdits
 import com.hinnka.mycamera.livephoto.GoogleLivePhotoCreator
 import com.hinnka.mycamera.livephoto.MotionPhotoWriter
 import com.hinnka.mycamera.livephoto.VivoLivePhotoCreator
 import com.hinnka.mycamera.model.ColorRecipeParams
-import com.hinnka.mycamera.model.EffectParams
+import com.hinnka.mycamera.model.toEffectParams
 import com.hinnka.mycamera.ui.components.ColorRecipePanel
 import com.hinnka.mycamera.ui.components.CurveChannel
 import com.hinnka.mycamera.ui.components.LutSelector
@@ -574,13 +575,19 @@ class PhantomService(val context: Context) : LifecycleOwner, SavedStateRegistryO
         sourceHeight: Int
     ) = withContext(Dispatchers.IO) {
         var shouldNotifyGallery = false
-        val userPreferencesRepository =
-            ContentRepository.getInstance(context).userPreferencesRepository
-        val availableLutList = ContentRepository.getInstance(context).getAvailableLuts()
-        val photoProcessor = ContentRepository.getInstance(context).photoProcessor
+        val repository = ContentRepository.getInstance(context)
+        val userPreferencesRepository = repository.userPreferencesRepository
+        val availableLutList = repository.getAvailableLuts()
+        val photoProcessor = repository.photoProcessor
         val preferences = userPreferencesRepository.userPreferences.firstOrNull()
         val lutId = preferences?.lutId
             ?: availableLutList.firstOrNull { it.isDefault }?.id
+        val presetRecipe = preferences?.photoPresetRecipe
+        val recipe = presetRecipe ?: lutId?.let { repository.lutManager.loadColorRecipeParams(it) }
+            ?: ColorRecipeParams.DEFAULT
+        val metadataRecipe = recipe.takeUnless {
+            presetRecipe == null && it.isSameAs(ColorRecipeParams.DEFAULT)
+        }
         val saveAsNew = userPreferencesRepository.latest().phantomSaveAsNew
         val phantomFrameId = preferences?.phantomFrameId
         val computationalAperture = userPreferencesRepository.latest().defaultVirtualAperture.takeIf { it > 0f }
@@ -596,21 +603,16 @@ class PhantomService(val context: Context) : LifecycleOwner, SavedStateRegistryO
             ) ?: run {
                 return@withContext
             }
-        val creativeColorRecipeParams = lutId?.let {
-            ContentRepository.getInstance(context).lutManager.loadColorRecipeParams(it)
-        } ?: ColorRecipeParams.DEFAULT
-        val effectiveCreativeColorRecipeParams = preferences
-            ?.activeEffectParams
-            ?.applyTo(creativeColorRecipeParams)
-            ?: creativeColorRecipeParams
-        val metadataCreativeColorRecipeParams = effectiveCreativeColorRecipeParams
-            .takeUnless { it.isDefault() }
-
         var updatedMetadata = GalleryManager.updateMetadata(context, photoId) { current ->
             current.copy(
                 lutId = lutId,
                 frameId = phantomFrameId,
-                colorRecipeParams = metadataCreativeColorRecipeParams,
+                colorRecipeParams = metadataRecipe,
+                photoColorRecipeEdits = if (lutId == "none" && presetRecipe != null) {
+                    PhotoColorRecipeEdits(base = presetRecipe).toJson()
+                } else {
+                    null
+                },
                 baselineTarget = null,
                 baselineLutId = null,
                 baselineColorRecipeParams = null,
@@ -953,22 +955,22 @@ class PhantomService(val context: Context) : LifecycleOwner, SavedStateRegistryO
 
                 val scope = rememberCoroutineScope()
                 val processingInfo = processingInfo
-                val currentLutIdFlow = remember {
-                    userPreferencesRepository.userPreferences.map {
-                        it.lutId
-                    }
-                }
-                val currentLutId by currentLutIdFlow.collectAsState(initial = null)
-                val currentEffectParamsFlow = remember {
-                    userPreferencesRepository.userPreferences.map {
-                        it.activeEffectParams
-                    }
-                }
-                val currentEffectParams by currentEffectParamsFlow.collectAsState(
-                    initial = EffectParams.DEFAULT
-                )
-                var recipePreviewParams by remember(currentLutId) {
+                val currentLutSelection by remember {
+                    userPreferencesRepository.flow { it.lutId to (it.photoPresetRecipe != null) }
+                }.collectAsState(initial = userPreferencesRepository.current.let {
+                    it.lutId to (it.photoPresetRecipe != null)
+                })
+                val (currentLutId, presetLookActive) = currentLutSelection
+                val editingLutId = currentLutId?.takeIf { it != "none" && !presetLookActive }
+                var recipePreviewParams by remember(editingLutId) {
                     mutableStateOf<ColorRecipeParams?>(null)
+                }
+                LaunchedEffect(editingLutId) {
+                    if (editingLutId == null && showRecipeEditor) {
+                        showRecipeEditor = false
+                        updateWindowParams(false)
+                        composeView?.let { windowManager.updateViewLayout(it, windowParams) }
+                    }
                 }
                 LaunchedEffect(expanded, processingInfo, showFilterPicker) {
                     if (expanded && !showFilterPicker) {
@@ -1095,10 +1097,11 @@ class PhantomService(val context: Context) : LifecycleOwner, SavedStateRegistryO
                                             scope.launch {
                                                 userPreferencesRepository.update { this.lutId = lutId }
                                                 PhotonLookContract.notifyLookChanged(context)
-                                                syncScreenCaptureRenderConfig(lutId)
+                                                syncScreenCaptureRenderConfig()
                                                 closeFilterPicker()
                                             }
                                         },
+                                        presetLookActive = presetLookActive,
                                         categoryOrder = categoryOrder,
                                         modifier = Modifier.fillMaxWidth()
                                     )
@@ -1157,7 +1160,7 @@ class PhantomService(val context: Context) : LifecycleOwner, SavedStateRegistryO
                                 ) {
                                     IconButton(
                                         onClick = {
-                                            if (currentLutId != null) {
+                                            if (editingLutId != null) {
                                                 showRecipeEditor = true
                                                 updateWindowParams(false)
                                                 composeView?.let {
@@ -1165,13 +1168,13 @@ class PhantomService(val context: Context) : LifecycleOwner, SavedStateRegistryO
                                                 }
                                             }
                                         },
-                                        enabled = currentLutId != null,
+                                        enabled = editingLutId != null,
                                         modifier = Modifier.size(48.dp)
                                     ) {
                                         Icon(
                                             imageVector = AppIcons.Tune,
                                             contentDescription = stringResource(R.string.edit),
-                                            tint = if (currentLutId != null) {
+                                            tint = if (editingLutId != null) {
                                                 Color.White
                                             } else {
                                                 Color.White.copy(alpha = 0.3f)
@@ -1205,7 +1208,6 @@ class PhantomService(val context: Context) : LifecycleOwner, SavedStateRegistryO
                     }
                 }
 
-                val editingLutId = currentLutId
                 if (showRecipeEditor && editingLutId != null) {
                     var editingParams by remember(editingLutId) {
                         mutableStateOf(ColorRecipeParams.DEFAULT)
@@ -1219,10 +1221,7 @@ class PhantomService(val context: Context) : LifecycleOwner, SavedStateRegistryO
                                 editingLutId,
                                 params
                             )
-                            syncScreenCaptureRenderConfig(
-                                lutId = editingLutId,
-                                creativeRecipeParamsOverride = params
-                            )
+                            syncScreenCaptureRenderConfig()
                         }
                     }
 
@@ -1237,10 +1236,7 @@ class PhantomService(val context: Context) : LifecycleOwner, SavedStateRegistryO
                                     finalPreviewParams
                                 )
                             }
-                            syncScreenCaptureRenderConfig(
-                                lutId = editingLutId,
-                                creativeRecipeParamsOverride = finalPreviewParams
-                            )
+                            syncScreenCaptureRenderConfig()
                             updateWindowParams(false)
                             composeView?.let { windowManager.updateViewLayout(it, windowParams) }
                         }
@@ -1286,16 +1282,9 @@ class PhantomService(val context: Context) : LifecycleOwner, SavedStateRegistryO
                                 )
                             },
                             showLutIntensity = true,
-                            currentEffects = currentEffectParams,
+                            currentEffects = editingParams.toEffectParams(),
                             onEffectsChange = { effects ->
-                                scope.launch {
-                                    userPreferencesRepository.update { activeEffectParams = effects }
-                                    syncScreenCaptureRenderConfig(
-                                        lutId = currentLutId,
-                                        creativeRecipeParamsOverride = editingParams,
-                                        effectParamsOverride = effects
-                                    )
-                                }
+                                updateRecipeParams(effects.applyTo(editingParams))
                             },
                             modifier = Modifier.fillMaxWidth()
                         )
@@ -1389,17 +1378,8 @@ class PhantomService(val context: Context) : LifecycleOwner, SavedStateRegistryO
         }
     }
 
-    private suspend fun syncScreenCaptureRenderConfig(
-        lutId: String?,
-        creativeRecipeParamsOverride: ColorRecipeParams? = null,
-        effectParamsOverride: EffectParams? = null
-    ) {
-        ScreenCaptureRenderConfigStore.syncFromPreferences(
-            context = context,
-            lutIdOverride = lutId,
-            creativeRecipeParamsOverride = creativeRecipeParamsOverride,
-            effectParamsOverride = effectParamsOverride
-        )
+    private suspend fun syncScreenCaptureRenderConfig() {
+        ScreenCaptureRenderConfigStore.syncFromPreferences(context)
     }
 
     fun stop() {

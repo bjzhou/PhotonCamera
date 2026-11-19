@@ -146,9 +146,7 @@ private data class PreviewRenderSignature(
     val photoId: String,
     val refreshKey: Long,
     val editLutId: String?,
-    val editPhotoRecipeParams: ColorRecipeParams?,
-    val editLutRecipeParams: ColorRecipeParams?,
-    val editLutConfig: Any?,
+    val recipeParams: ColorRecipeParams,
     val editFrameId: String?,
     val editFrameCustomProperties: Map<String, String>,
     val editSharpening: Float,
@@ -244,13 +242,12 @@ fun GalleryEditScreen(
     val currentPhotos by viewModel.currentPhotos.collectAsState()
     val currentPhoto = currentPhotos.getOrNull(viewModel.currentPhotoIndex)
     val editSourcePhoto = currentPhoto?.relatedPhoto ?: currentPhoto
-    val editLutId by viewModel.editLutId.collectAsState()
+    val editLook by viewModel.editLook.collectAsState()
+    val editLutId = editLook.lutId
+    val effectiveRecipe = editLook.recipe
     val activeColorMatchReferenceId by produceState<String?>(null, editLutId) {
         value = viewModel.aiColorMatchReferenceId(editLutId)
     }
-    val editLutRecipeParams by viewModel.editLutRecipeParams.collectAsState()
-    val editPhotoRecipeParams by viewModel.editPhotoRecipeParams.collectAsState()
-    val editLutConfig = viewModel.editLutConfig
     val availableLuts = viewModel.selectableEditLuts
     val videoSourceProfile = viewModel.editVideoSourceProfile
     val lutSwipeState = rememberLutSwipeState()
@@ -426,13 +423,12 @@ fun GalleryEditScreen(
     fun currentPreviewSignature(fast: Boolean = false): PreviewRenderSignature? {
         val photo = editSourcePhoto ?: return null
         val rawDevelopIsBaked = isRaw
+        val look = editLook
         return PreviewRenderSignature(
             photoId = photo.id,
             refreshKey = refreshKey,
-            editLutId = editLutId,
-            editPhotoRecipeParams = editPhotoRecipeParams,
-            editLutRecipeParams = editLutRecipeParams,
-            editLutConfig = editLutConfig,
+            editLutId = look.lutId,
+            recipeParams = look.recipe,
             editFrameId = editFrameId,
             editFrameCustomProperties = editFrameCustomProperties.toMap(),
             editSharpening = if (rawDevelopIsBaked) 0f else editSharpening,
@@ -959,7 +955,7 @@ fun GalleryEditScreen(
                                         val nextLut = viewModel.peekNextLut()
                                         // 先确认以横向为主，竖向/斜向手势不触发切换
                                         val horizontal = abs(dx) > abs(dy) * 1.5f
-                                        if (horizontal && nextLut != null && nextLut.id != editLutId) {
+                                        if (horizontal && nextLut != null && nextLut.id != (editLook.lutId ?: "none")) {
                                             swipeTracking = true
                                             lutSwipeState.begin(
                                                 width = size.width,
@@ -1087,8 +1083,9 @@ fun GalleryEditScreen(
                     if (videoSourceProfile != null) {
                         VideoEditPlayer(
                             photo = currentPhoto,
-                            lutConfig = if (showOrigin) null else editLutConfig,
-                            recipeParams = if (showOrigin) null else (editPhotoRecipeParams ?: editLutRecipeParams),
+                            lutConfig = if (showOrigin) null else editLook.lutConfig,
+                            recipeParams = if (showOrigin) null else effectiveRecipe,
+                            updateLook = showOrigin || !editLook.isLutConfigLoading,
                             sourceLogProfile = videoSourceProfile,
                             modifier = previewMediaModifier
                         )
@@ -1573,11 +1570,9 @@ fun GalleryEditScreen(
                                                     onProfileSelected = viewModel::selectEditVideoSourceProfile,
                                                 )
                                             }
-                                            val effectiveRecipe =
-                                                editPhotoRecipeParams ?: editLutRecipeParams
                                             LutSelector(
                                                 availableLuts = availableLuts,
-                                                currentLutId = editLutId,
+                                                currentLutId = editLutId ?: "none",
                                                 thumbnail = thumbnailBitmap.takeUnless { videoSourceProfile?.isEnabled == true },
                                                 onLutSelected = { viewModel.setEditLut(it) },
                                                 onManageClick = { onFilterManagementClick(it) },
@@ -1614,12 +1609,9 @@ fun GalleryEditScreen(
                                             LutIntensitySlider(
                                                 intensity = effectiveRecipe.lutIntensity,
                                                 onIntensityChange = { intensity ->
-                                                    viewModel.setPhotoRecipeParams(
-                                                        RecipeParam.LUT_INTENSITY.setValue(
-                                                            effectiveRecipe,
-                                                            intensity
-                                                        )
-                                                    )
+                                                    viewModel.updatePhotoRecipeParams { current ->
+                                                        RecipeParam.LUT_INTENSITY.setValue(current, intensity)
+                                                    }
                                                 },
                                                 enabled = editLutId != null,
                                                 modifier = Modifier.fillMaxWidth()
@@ -1703,55 +1695,52 @@ fun GalleryEditScreen(
                                         }
                                 EDIT_TAB_ADJUSTMENTS -> {
                                     Spacer(modifier = Modifier.height(6.dp))
-                                    val effectiveRecipe = editPhotoRecipeParams ?: editLutRecipeParams
                                     val applyEffectsToVideo by viewModel.editApplyEffectsToVideo.collectAsState()
+                                    val canSyncAdjustmentsToLut = editLutId != null && !PhotoColorMatch.isId(editLutId)
 
                                     ColorRecipePanel(
                                         currentParams = effectiveRecipe,
                                         onParamChange = { param, value ->
-                                            viewModel.setPhotoRecipeParams(
-                                                param.setValue(effectiveRecipe, value)
-                                            )
+                                            viewModel.updatePhotoRecipeParams { current ->
+                                                param.setValue(current, value)
+                                            }
                                         },
                                         onParamsChange = { params ->
-                                            viewModel.setPhotoRecipeParams(
-                                                params
-                                            )
+                                            viewModel.updatePhotoRecipeParams(displayed = effectiveRecipe, params = params)
                                         },
                                         onRemarksChange = { remarks ->
-                                            viewModel.setPhotoRecipeParams(
-                                                effectiveRecipe.copy(remarks = remarks)
-                                            )
+                                            viewModel.updatePhotoRecipeParams { current ->
+                                                current.copy(remarks = remarks)
+                                            }
                                         },
                                         onCurveChange = { channel, points ->
-                                            val updated = when (channel) {
-                                                CurveChannel.MASTER -> effectiveRecipe.copy(masterCurvePoints = points)
-                                                CurveChannel.RED -> effectiveRecipe.copy(redCurvePoints = points)
-                                                CurveChannel.GREEN -> effectiveRecipe.copy(greenCurvePoints = points)
-                                                CurveChannel.BLUE -> effectiveRecipe.copy(blueCurvePoints = points)
+                                            viewModel.updatePhotoRecipeParams { current ->
+                                                when (channel) {
+                                                    CurveChannel.MASTER -> current.copy(masterCurvePoints = points)
+                                                    CurveChannel.RED -> current.copy(redCurvePoints = points)
+                                                    CurveChannel.GREEN -> current.copy(greenCurvePoints = points)
+                                                    CurveChannel.BLUE -> current.copy(blueCurvePoints = points)
+                                                }
                                             }
-                                            viewModel.setPhotoRecipeParams(
-                                                updated
-                                            )
                                         },
+                                        onResetAll = viewModel::resetPhotoRecipeParams,
                                         imageHistogram = imageHistogram,
                                         currentEffects = effectiveRecipe.toEffectParams(),
                                         onEffectsChange = { effects ->
-                                            val latestRecipe = viewModel.editPhotoRecipeParams.value
-                                                ?: viewModel.editLutRecipeParams.value
-                                            viewModel.setPhotoRecipeParams(
-                                                effects.applyTo(latestRecipe)
+                                            viewModel.updatePhotoRecipeParams(
+                                                displayed = effectiveRecipe,
+                                                params = effects.applyTo(effectiveRecipe)
                                             )
                                         },
                                         headerControls = if (
-                                            editLutId != null || currentPhoto.isMotionPhoto
+                                            canSyncAdjustmentsToLut || currentPhoto.isMotionPhoto
                                         ) {
                                             {
                                                 Row(
                                                     horizontalArrangement = Arrangement.spacedBy(6.dp),
                                                     verticalAlignment = Alignment.CenterVertically
                                                 ) {
-                                                    if (editLutId != null) {
+                                                    if (canSyncAdjustmentsToLut) {
                                                         CompactToggleChip(
                                                             title = stringResource(
                                                                 R.string.edit_sync_lut_recipe
@@ -2678,6 +2667,7 @@ private fun VideoEditPlayer(
     photo: MediaData,
     lutConfig: LutConfig?,
     recipeParams: ColorRecipeParams?,
+    updateLook: Boolean,
     sourceLogProfile: VideoLogProfile,
     modifier: Modifier = Modifier
 ) {
@@ -2688,24 +2678,26 @@ private fun VideoEditPlayer(
     
     PLog.d("VideoEditPlayer", "VideoEditPlayer composable recomposing/initializing. photoId: ${photo.id}, mediaUri: $mediaUri")
 
-    var isPlayerActive by remember { mutableStateOf(false) }
-    LaunchedEffect(photo.id) {
+    var isPlayerActive by remember(photo.id, mediaUri, sourceLogProfile) { mutableStateOf(false) }
+    LaunchedEffect(photo.id, mediaUri, sourceLogProfile, updateLook) {
+        if (isPlayerActive || !updateLook) return@LaunchedEffect
         delay(150) // Wait for the transitions to complete and EGL context release
         isPlayerActive = true
     }
 
-    val videoLutEffect = remember(photo.id, mediaUri, sourceLogProfile) {
+    val videoLutEffect = remember(photo.id, mediaUri, sourceLogProfile, isPlayerActive) {
+        if (!isPlayerActive) return@remember null
         PLog.d("VideoEditPlayer", "Instantiating new VideoLutEffect.")
         VideoLutEffect(lutConfig, recipeParams, sourceLogProfile)
     }
     
-    val exoPlayer = remember(photo.id, mediaUri, isPlayerActive, videoLutEffect) {
-        if (!isPlayerActive) return@remember null
+    val exoPlayer = remember(videoLutEffect) {
+        val effect = videoLutEffect ?: return@remember null
         PLog.d("VideoEditPlayer", "Re-creating loopable ExoPlayer instance for video preview.")
         ExoPlayer.Builder(context, VideoEditRenderersFactory(context, sourceLogProfile.isEnabled)).build().apply {
             setMediaItem(MediaItem.fromUri(mediaUri))
             repeatMode = Player.REPEAT_MODE_ONE
-            setVideoEffects(listOf(videoLutEffect))
+            setVideoEffects(listOf(effect))
             prepare()
             playWhenReady = true
             
@@ -2720,7 +2712,8 @@ private fun VideoEditPlayer(
         }
     }
 
-    LaunchedEffect(lutConfig, recipeParams, exoPlayer) {
+    LaunchedEffect(lutConfig, recipeParams, updateLook, exoPlayer) {
+        if (!updateLook || videoLutEffect == null) return@LaunchedEffect
         PLog.d("VideoEditPlayer", "Updating VideoLutEffect with lutConfig: ${lutConfig?.title}, recipeParams: ${recipeParams != null}")
         videoLutEffect.update(lutConfig, recipeParams)
 

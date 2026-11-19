@@ -172,9 +172,15 @@ private fun MgcFilterSelectionRoute(
     }
     val activeLutId = preferences?.lutId
         ?: sortedLuts.firstOrNull { it.isDefault }?.id
-    var editingLutId by remember { mutableStateOf<String?>(null) }
+    val presetLookActive = preferences?.photoPresetRecipe != null
+    val editableLutId = activeLutId?.takeIf { id ->
+        !presetLookActive && id != "none" && sortedLuts.any { it.id == id }
+    }
+    var editingLutId by remember(editableLutId) { mutableStateOf<String?>(null) }
+    val editLut = editableLutId?.let { id -> { editingLutId = id } }
 
-    if (editingLutId == null) {
+    val openedLutId = editingLutId
+    if (openedLutId == null) {
         val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
         AppModalBottomSheet(
             containerColor = Color.Black.copy(alpha = 0.8f),
@@ -199,13 +205,7 @@ private fun MgcFilterSelectionRoute(
                         .weight(1f)
                         .basicMarquee(),
                 )
-                LutEditButton(
-                    onClick = {
-                        activeLutId
-                            ?.takeIf { currentId -> sortedLuts.any { it.id == currentId } }
-                            ?.let { editingLutId = it }
-                    },
-                )
+                if (editLut != null) LutEditButton(onClick = editLut)
             }
 
             LutSelector(
@@ -222,11 +222,8 @@ private fun MgcFilterSelectionRoute(
                         onLutSelected(lutId)
                     }
                 },
-                onEditClick = {
-                    activeLutId
-                        ?.takeIf { currentId -> sortedLuts.any { it.id == currentId } }
-                        ?.let { editingLutId = it }
-                },
+                onEditClick = editLut,
+                presetLookActive = presetLookActive,
                 categoryOrder = preferences?.categoryOrder.orEmpty(),
                 modifier = Modifier
                     .fillMaxWidth()
@@ -240,7 +237,7 @@ private fun MgcFilterSelectionRoute(
         }
     } else {
         LutEditBottomSheet(
-            lutId = editingLutId!!,
+            lutId = openedLutId,
             showEffects = true,
             onDismiss = { editingLutId = null },
         )

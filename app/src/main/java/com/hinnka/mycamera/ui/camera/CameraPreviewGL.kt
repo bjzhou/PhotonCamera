@@ -309,19 +309,15 @@ fun CameraPreviewGL(
                                 }
                             }
                         }
-                        val colorRecipeEnabled = !colorRecipeParams.isDefault()
                         val baselineColorRecipeEnabled = !baselineColorRecipeParams.isDefault()
                         // 更新 LUT 设置
                         glSurfaceView.setEnginePreview(enginePreviewPlan.value)
                         glSurfaceView.setBaselineLut(baselineLut)
                         glSurfaceView.setBaselineLutEnabled(baselineLut != null)
-                        glSurfaceView.setLut(currentLut)
-                        glSurfaceView.setLutEnabled(currentLut != null)
+                        glSurfaceView.setCreativeLook(currentLut, colorRecipeParams)
                         glSurfaceView.setBaselineColorRecipeEnabled(baselineColorRecipeEnabled)
-                        glSurfaceView.setColorRecipeEnabled(colorRecipeEnabled)
 
                         glSurfaceView.setBaselineParams(baselineColorRecipeParams)
-                        glSurfaceView.setParams(colorRecipeParams)
 
                         glSurfaceView.setMeteringPoint((meteringPoint ?: focusPoint)?.takeIf {
                             focusPointSource == FocusPointSource.MANUAL

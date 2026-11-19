@@ -55,6 +55,8 @@ data class MediaMetadata(
     val tonemapMode: String? = null,
     // 色彩配方配置
     val colorRecipeParams: ColorRecipeParams? = null,
+    /** LUT 配方基底与照片独立调节，用于再次编辑。colorRecipeParams 保留渲染快照。 */
+    val photoColorRecipeEdits: String? = null,
     val baselineTarget: BaselineColorCorrectionTarget? = null,
     val baselineLutId: String? = null,
     val baselineColorRecipeParams: ColorRecipeParams? = null,
@@ -314,6 +316,11 @@ data class MediaMetadata(
                     lutId = if (obj.isNull("lutId")) null else obj.optString("lutId"),
                     tonemapMode = if (obj.isNull("tonemapMode")) null else obj.optString("tonemapMode"),
                     colorRecipeParams = colorRecipeParams,
+                    photoColorRecipeEdits = if (obj.isNull("photoColorRecipeEdits")) {
+                        null
+                    } else {
+                        obj.optString("photoColorRecipeEdits")
+                    },
                     baselineTarget = if (obj.isNull("baselineTarget")) null else runCatching {
                         BaselineColorCorrectionTarget.valueOf(obj.optString("baselineTarget"))
                     }.getOrNull(),
