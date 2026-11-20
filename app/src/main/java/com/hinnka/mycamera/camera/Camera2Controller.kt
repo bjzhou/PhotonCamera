@@ -7156,13 +7156,11 @@ class Camera2Controller(private val context: Context) {
     fun setLutEnabled(enabled: Boolean) {
         if (_state.value.lutEnabled == enabled) return
         _state.value = _state.value.copy(lutEnabled = enabled)
-        createPreviewSession()
     }
 
     fun setLogLutActive(isLogLut: Boolean) {
         if (_state.value.isLogLutActive == isLogLut) return
         _state.value = _state.value.copy(isLogLutActive = isLogLut)
-        createPreviewSession()
     }
 
     fun setCaptureMode(mode: CaptureMode) {
