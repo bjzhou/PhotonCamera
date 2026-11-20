@@ -41,6 +41,7 @@ import kotlin.math.roundToInt
 enum class CameraParameter {
     EXPOSURE_COMPENSATION,
     SHUTTER_SPEED,
+    APERTURE,
     ISO,
     FOCUS,
     WHITE_BALANCE
@@ -60,6 +61,7 @@ fun ParameterRuler(
     showAutoButton: Boolean,
     isAutoModeToggleEnabled: Boolean = true,
     valueStep: Float = 1f / 3f,
+    discreteValues: List<Float>? = null,
     resetValue: Float? = null,
     showHyperfocalButton: Boolean = false,
     hyperfocalEnabled: Boolean = false,
@@ -69,8 +71,8 @@ fun ParameterRuler(
     onAutoModeToggle: () -> Unit,
     modifier: Modifier = Modifier
 ) {
-    val scaleValues = remember(parameter, minValue, maxValue, valueStep) {
-        getScaleValues(parameter, minValue, maxValue, valueStep)
+    val scaleValues = remember(parameter, minValue, maxValue, valueStep, discreteValues) {
+        discreteValues?.takeIf { it.isNotEmpty() } ?: getScaleValues(parameter, minValue, maxValue, valueStep)
     }
     val accentColor = AccentColor
     var selectedValue by remember(parameter, scaleValues) { mutableFloatStateOf(currentValue) }
@@ -79,6 +81,7 @@ fun ParameterRuler(
     }
     var isDragging by remember(parameter, scaleValues) { mutableStateOf(false) }
     val currentValueState by rememberUpdatedState(currentValue)
+    val canReset = resetValue != null
     val resetValueState by rememberUpdatedState(resetValue)
     val adjustableState by rememberUpdatedState(isAdjustable && scaleValues.size > 1)
     val autoModeState by rememberUpdatedState(isAutoMode)
@@ -105,6 +108,7 @@ fun ParameterRuler(
     }
 
     val displayedValue = if (isDragging) selectedValue else currentValue
+    val displayedValueLabel = formatParameterValue(parameter, displayedValue)
     Row(
         modifier = modifier.fillMaxWidth().height(CameraParameterRulerHeight)
             .padding(horizontal = 12.dp),
@@ -150,7 +154,7 @@ fun ParameterRuler(
         Box(
             modifier = Modifier.weight(1f).fillMaxHeight().clipToBounds()
                 .semantics {
-                    stateDescription = formatParameterValue(parameter, displayedValue)
+                    stateDescription = displayedValueLabel
                     progressBarRangeInfo = ProgressBarRangeInfo(
                         closestScaleIndex(scaleValues, displayedValue).toFloat(),
                         0f..scaleValues.lastIndex.toFloat(),
@@ -163,13 +167,15 @@ fun ParameterRuler(
                         }
                     }
                 }
-                .pointerInput(parameter, scaleValues) {
+                .pointerInput(parameter, scaleValues, canReset) {
                     detectTapGestures(
-                        onDoubleTap = {
-                            if (adjustableState) {
-                                resetValueState?.let { selectValue(it, force = true) }
+                        onDoubleTap = if (canReset) {
+                            {
+                                if (adjustableState) {
+                                    resetValueState?.let { selectValue(it, force = true) }
+                                }
                             }
-                        },
+                        } else null,
                         onTap = { position ->
                             if (adjustableState) {
                                 val index = (scrollIndex + (position.x - size.width / 2f) /
@@ -204,7 +210,7 @@ fun ParameterRuler(
             contentAlignment = Alignment.TopCenter
         ) {
             Text(
-                text = formatParameterValue(parameter, displayedValue),
+                text = displayedValueLabel,
                 modifier = Modifier.padding(top = 3.dp),
                 color = AccentColor,
                 fontSize = 14.sp,
@@ -282,6 +288,7 @@ private fun formatHyperfocalDistance(distanceMeters: Float): String = if (distan
 private fun closestScaleIndex(values: List<Float>, value: Float): Int =
     values.indices.minByOrNull { abs(values[it] - value) } ?: 0
 
+@Composable
 private fun formatParameterValue(parameter: CameraParameter, value: Float): String = when (parameter) {
     CameraParameter.EXPOSURE_COMPENSATION -> when {
         abs(value) < 0.05f -> "0"
@@ -289,6 +296,7 @@ private fun formatParameterValue(parameter: CameraParameter, value: Float): Stri
         else -> String.format("%.1f", value)
     }
     CameraParameter.SHUTTER_SPEED -> formatShutterSpeedValue(value.toLong())
+    CameraParameter.APERTURE -> if (value > 0f) formatPhysicalAperture(value) else stringResource(R.string.unknown)
     CameraParameter.ISO -> value.roundToInt().toString()
     CameraParameter.WHITE_BALANCE -> "${value.roundToInt()}K"
     CameraParameter.FOCUS -> formatFocusDistance(value)
@@ -297,6 +305,8 @@ private fun formatParameterValue(parameter: CameraParameter, value: Float): Stri
 private fun getScaleValues(parameter: CameraParameter, minValue: Float, maxValue: Float, valueStep: Float): List<Float> {
     if (maxValue <= minValue) return listOf(minValue)
     return when (parameter) {
+        CameraParameter.APERTURE -> listOf(minValue)
+
         CameraParameter.EXPOSURE_COMPENSATION -> {
             (0..((maxValue - minValue) / valueStep).roundToInt()).map { minValue + it * valueStep }
         }

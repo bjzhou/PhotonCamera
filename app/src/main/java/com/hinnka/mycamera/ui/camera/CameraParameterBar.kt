@@ -11,11 +11,13 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.selected
@@ -30,6 +32,7 @@ import com.hinnka.mycamera.R
 import com.hinnka.mycamera.camera.CameraState
 import com.hinnka.mycamera.camera.CameraUtils
 import com.hinnka.mycamera.video.CaptureMode
+import java.text.NumberFormat
 import kotlin.math.roundToLong
 
 
@@ -68,7 +71,7 @@ internal fun cameraParameterItems(state: CameraState): List<CameraParameterItem>
     // Match the mode switcher: PHOTO capture also backs the RAW professional mode.
     val showValues = state.captureMode == CaptureMode.VIDEO ||
         (state.useRaw && state.isRawSupported)
-    return listOf(
+    return listOfNotNull(
         CameraParameterItem(
             CameraParameter.EXPOSURE_COMPENSATION,
             stringResource(R.string.camera_parameter_exposure),
@@ -83,6 +86,13 @@ internal fun cameraParameterItems(state: CameraState): List<CameraParameterItem>
             if (showValues) formatShutterSpeedValue(state.shutterSpeed) else null,
             isWarning = showValues && state.isPreviewExposureLimited()
         ),
+        if (state.isApertureAdjustable) {
+            CameraParameterItem(
+                CameraParameter.APERTURE,
+                stringResource(R.string.camera_parameter_aperture),
+                if (showValues) state.physicalAperture?.let { formatPhysicalAperture(it) } else null
+            )
+        } else null,
         CameraParameterItem(
             CameraParameter.ISO,
             stringResource(R.string.camera_parameter_iso),
@@ -245,6 +255,15 @@ internal fun formatShutterSpeedValue(value: Long): String {
         value < 1_000_000_000L -> "1/${(1_000_000_000.0 / value).roundToLong()}"
         else -> CameraUtils.formatShutterSpeed(value)
     }
+}
+
+@Composable
+internal fun formatPhysicalAperture(value: Float): String {
+    val locale = LocalConfiguration.current.locales[0]
+    val formatter = remember(locale) {
+        NumberFormat.getNumberInstance(locale).apply { maximumFractionDigits = 2 }
+    }
+    return stringResource(R.string.camera_aperture_f_number, formatter.format(value.toDouble()))
 }
 
 internal fun formatFocusDistance(value: Float): String {

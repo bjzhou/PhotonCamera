@@ -221,10 +221,11 @@ private fun PanelDismissPreviewOverlay(
     )
 }
 
-private fun CameraParameter.defaultResetValue(): Float {
+private fun CameraParameter.defaultResetValue(): Float? {
     return when (this) {
         CameraParameter.EXPOSURE_COMPENSATION -> 0f
         CameraParameter.SHUTTER_SPEED -> DefaultShutterSpeedNs
+        CameraParameter.APERTURE -> null
         CameraParameter.ISO -> DefaultIso
         CameraParameter.FOCUS -> DefaultFocusDistance
         CameraParameter.WHITE_BALANCE -> DefaultAwbTemperature
@@ -931,6 +932,11 @@ fun CameraScreen(
                 parameterRulerBounds = null
             }
         }
+        LaunchedEffect(state.isApertureAdjustable) {
+            if (selectedParameter == CameraParameter.APERTURE && !state.isApertureAdjustable) {
+                showParameterRuler = false
+            }
+        }
 
         val density = LocalDensity.current
         val width = with(density) { constraints.maxWidth.toDp() }
@@ -1058,11 +1064,16 @@ fun CameraScreen(
             } else {
                 state.awbTemperature.toFloat()
             }
+            val apertureValue = state.requestedPhysicalAperture
+                ?: state.physicalAperture
+                ?: state.availableApertures.firstOrNull() ?: 0f
+            val apertureSelected = selectedParameter == CameraParameter.APERTURE
             ParameterRuler(
                 parameter = selectedParameter,
                 currentValue = when (selectedParameter) {
                     CameraParameter.EXPOSURE_COMPENSATION -> state.exposureCompensation * state.getExposureCompensationStep()
                     CameraParameter.SHUTTER_SPEED -> state.shutterSpeed.toFloat()
+                    CameraParameter.APERTURE -> apertureValue
                     CameraParameter.ISO -> state.iso.toFloat()
                     CameraParameter.FOCUS -> state.focusDistance
                     CameraParameter.WHITE_BALANCE -> whiteBalanceCurrentValue
@@ -1070,6 +1081,7 @@ fun CameraScreen(
                 minValue = when (selectedParameter) {
                     CameraParameter.EXPOSURE_COMPENSATION -> state.getExposureCompensationRange().lower * state.getExposureCompensationStep()
                     CameraParameter.SHUTTER_SPEED -> state.getManualShutterSpeedRange().lower.toFloat()
+                    CameraParameter.APERTURE -> state.availableApertures.firstOrNull() ?: apertureValue
                     CameraParameter.ISO -> state.getIsoRange().lower.toFloat()
                     CameraParameter.FOCUS -> 0f
                     CameraParameter.WHITE_BALANCE -> state.awbTemperatureMin.toFloat()
@@ -1077,6 +1089,7 @@ fun CameraScreen(
                 maxValue = when (selectedParameter) {
                     CameraParameter.EXPOSURE_COMPENSATION -> state.getExposureCompensationRange().upper * state.getExposureCompensationStep()
                     CameraParameter.SHUTTER_SPEED -> state.getManualShutterSpeedRange().upper.toFloat()
+                    CameraParameter.APERTURE -> state.availableApertures.lastOrNull() ?: apertureValue
                     CameraParameter.ISO -> state.getIsoRange().upper.toFloat()
                     CameraParameter.FOCUS -> state.minimumFocusDistance
                     CameraParameter.WHITE_BALANCE -> state.awbTemperatureMax.toFloat()
@@ -1084,27 +1097,28 @@ fun CameraScreen(
                 isAdjustable = when (selectedParameter) {
                     CameraParameter.EXPOSURE_COMPENSATION -> state.isAutoExposure
                     CameraParameter.SHUTTER_SPEED, CameraParameter.ISO -> true
+                    CameraParameter.APERTURE -> state.isApertureAdjustable
                     CameraParameter.FOCUS -> state.minimumFocusDistance > 0f
                     CameraParameter.WHITE_BALANCE -> state.canAdjustWhiteBalance
                 },
                 isAutoMode = when (selectedParameter) {
                     CameraParameter.SHUTTER_SPEED -> state.isShutterSpeedAuto
+                    CameraParameter.APERTURE -> state.isApertureAuto
                     CameraParameter.ISO -> state.isIsoAuto
                     CameraParameter.FOCUS -> state.isAutoFocus
                     CameraParameter.WHITE_BALANCE ->
                         state.awbMode == android.hardware.camera2.CameraMetadata.CONTROL_AWB_MODE_AUTO
                     CameraParameter.EXPOSURE_COMPENSATION -> false
                 },
-                showAutoButton = when (selectedParameter) {
-                    CameraParameter.SHUTTER_SPEED, CameraParameter.ISO, CameraParameter.WHITE_BALANCE, CameraParameter.FOCUS -> true
-                    else -> false
-                },
+                showAutoButton = selectedParameter != CameraParameter.EXPOSURE_COMPENSATION,
                 isAutoModeToggleEnabled = when (selectedParameter) {
                     CameraParameter.WHITE_BALANCE -> state.canAdjustWhiteBalance
                     CameraParameter.FOCUS -> state.minimumFocusDistance > 0f
+                    CameraParameter.APERTURE -> state.isApertureAdjustable
                     else -> true
                 },
                 valueStep = state.getExposureCompensationStep(),
+                discreteValues = state.availableApertures.takeIf { apertureSelected },
                 resetValue = selectedParameter.defaultResetValue(),
                 showHyperfocalButton = selectedParameter == CameraParameter.FOCUS && state.minimumFocusDistance > 0f,
                 hyperfocalEnabled = state.isHyperfocalFocusEnabled,
@@ -1116,6 +1130,7 @@ fun CameraScreen(
                     when (selectedParameter) {
                         CameraParameter.EXPOSURE_COMPENSATION -> viewModel.setExposureCompensation((value / state.getExposureCompensationStep()).roundToInt())
                         CameraParameter.SHUTTER_SPEED -> viewModel.setShutterSpeed(value.toLong())
+                        CameraParameter.APERTURE -> viewModel.setPhysicalAperture(value)
                         CameraParameter.ISO -> viewModel.setIso(value.toInt())
                         CameraParameter.FOCUS -> viewModel.setFocusDistance(value)
                         CameraParameter.WHITE_BALANCE -> viewModel.setAwbTemperature(value.toInt())
@@ -1124,6 +1139,7 @@ fun CameraScreen(
                 onAutoModeToggle = {
                     when (selectedParameter) {
                         CameraParameter.SHUTTER_SPEED -> viewModel.setShutterSpeedAuto(!state.isShutterSpeedAuto)
+                        CameraParameter.APERTURE -> viewModel.setPhysicalApertureAuto(!state.isApertureAuto)
                         CameraParameter.ISO -> viewModel.setIsoAuto(!state.isIsoAuto)
                         CameraParameter.WHITE_BALANCE -> {
                             if (state.canAdjustWhiteBalance) {

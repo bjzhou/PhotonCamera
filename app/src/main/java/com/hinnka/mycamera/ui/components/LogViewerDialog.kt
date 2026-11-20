@@ -72,10 +72,9 @@ fun LogViewerDialog(
                 LogViewerHeader(
                     logCount = logs.size,
                     onDownload = {
-                        val formattedLogs = PLog.getFormattedLogs()
                         coroutineScope.launch {
                             val fileName = withContext(Dispatchers.IO) {
-                                downloadLogs(context, formattedLogs).getOrNull()
+                                downloadLogs(context, PLog.getFormattedLogs(context)).getOrNull()
                             }
                             val message = if (fileName != null) {
                                 downloadSuccessMessage.format(fileName)

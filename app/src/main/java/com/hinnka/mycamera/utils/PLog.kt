@@ -1,7 +1,13 @@
 package com.hinnka.mycamera.utils
 
+import android.content.Context
+import android.content.pm.PackageManager
 import android.os.Build
 import android.util.Log
+import com.hinnka.mycamera.BuildConfig
+import java.io.File
+import java.io.IOException
+import java.security.MessageDigest
 import java.text.SimpleDateFormat
 import java.util.*
 import java.util.concurrent.ConcurrentLinkedQueue
@@ -134,25 +140,60 @@ object PLog {
     /**
      * 获取格式化的所有日志文本
      */
-    fun getFormattedLogs(): String {
-        if (logQueue.isEmpty()) {
+    fun getFormattedLogs(context: Context): String {
+        val entries = getAllLogs()
+        if (entries.isEmpty()) {
             return "暂无日志记录"
         }
 
         return buildString {
             appendLine("=== MyCamera 日志记录 ===")
             appendLine("导出时间: ${SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault()).format(Date())}")
-            appendLine("日志总数: ${logQueue.size}")
+            appendLine("日志总数: ${entries.size}")
+            appendLine("app.packageName: ${context.packageName}")
+            appendLine("app.version: ${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE})")
+            appendLine("app.flavor: ${BuildConfig.FLAVOR}")
+            appendLine("app.buildType: ${BuildConfig.BUILD_TYPE}")
+            appendLine("app.lastUpdateTimeMs: ${lastUpdateTime(context) ?: "unavailable"}")
+            val appInfo = context.applicationInfo
+            for (apkPath in listOf(appInfo.sourceDir) + appInfo.splitSourceDirs.orEmpty()) {
+                val apk = File(apkPath)
+                appendLine("app.apk.sha256[${apk.name}]: ${sha256(apk) ?: "unavailable"}")
+            }
             appendLine("厂商: ${Build.MANUFACTURER}")
             appendLine("型号: ${Build.MODEL}")
             appendLine("Android 版本: ${Build.VERSION.RELEASE}")
             appendLine("=".repeat(50))
             appendLine()
 
-            getAllLogs().forEach { entry ->
+            entries.forEach { entry ->
                 appendLine(entry.getFormattedLog())
             }
         }
+    }
+
+    @Suppress("DEPRECATION")
+    private fun lastUpdateTime(context: Context): Long? = try {
+        context.packageManager.getPackageInfo(context.packageName, 0).lastUpdateTime
+    } catch (_: PackageManager.NameNotFoundException) {
+        null
+    }
+
+    private fun sha256(file: File): String? = try {
+        val digest = MessageDigest.getInstance("SHA-256")
+        file.inputStream().use { input ->
+            val buffer = ByteArray(64 * 1024)
+            while (true) {
+                val count = input.read(buffer)
+                if (count < 0) break
+                digest.update(buffer, 0, count)
+            }
+        }
+        digest.digest().joinToString("") { (it.toInt() and 0xff).toString(16).padStart(2, '0') }
+    } catch (_: IOException) {
+        null
+    } catch (_: SecurityException) {
+        null
     }
 
     /**

@@ -3428,6 +3428,14 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         updateUserCaptureSettings { setShutterSpeed(value) }
     }
 
+    fun setPhysicalAperture(value: Float) {
+        cameraController.setPhysicalAperture(value)
+    }
+
+    fun setPhysicalApertureAuto(enabled: Boolean) {
+        cameraController.setPhysicalApertureAuto(enabled)
+    }
+
     /**
      * 设置计算光圈 (等效虚化)
      */

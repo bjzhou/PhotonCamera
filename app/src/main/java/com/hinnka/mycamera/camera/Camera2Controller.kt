@@ -306,6 +306,11 @@ class Camera2Controller(private val context: Context) {
     private var cachedCharacteristicsCameraId: String = ""
     private var activeOpenCameraId: String = ""
     private var activeOutputPhysicalCameraId: String? = null
+    private var apertureSelectedCameraId: String = ""
+    private var apertureCameraId: String? = null
+    private var lensAperture = LensApertureCapabilities()
+    private var defaultPreviewAperture: Float? = null
+    private val requestedAperturesByCamera = mutableMapOf<String, Float>()
     private val failedPhysicalOutputProfiles = mutableSetOf<PhysicalOutputFailureKey>()
     // "streamCameraId:format" profiles whose high-resolution-only capture size failed session configuration
     private val failedHighResolutionCaptureProfiles = mutableSetOf<String>()
@@ -347,6 +352,8 @@ class Camera2Controller(private val context: Context) {
     private var availableCaptureRequestKeyNames: Set<String>? = null
     private var availableAeModes: IntArray = intArrayOf()
     private var availableAwbModes: IntArray = intArrayOf()
+    private val supportsManualSensorExposure: Boolean
+        get() = isManualSensorSupported && CaptureRequest.CONTROL_AE_MODE_OFF in availableAeModes
     private val videoTimingDiagnosticsEnabled = BuildConfig.DEBUG &&
         com.hinnka.mycamera.utils.SystemPropertiesUtil.get("debug.photon.video.timing") == "true"
     private var videoCaptureStatsWindowStartMs: Long = 0L
@@ -1300,15 +1307,21 @@ class Camera2Controller(private val context: Context) {
                 } else {
                     canAdjustManualWhiteBalance(whiteBalanceResult)
                 }
-            val aperture = result.get(CaptureResult.LENS_APERTURE)
+            if (session === captureSession && apertureSelectedCameraId == _state.value.currentCameraId) {
+                updatePhysicalApertureFromResult(result)
+            }
             val focusDistance = result.get(CaptureResult.LENS_FOCUS_DISTANCE) ?: 0f
 
             // 关键修复：只在自动曝光模式下更新 ISO 和快门速度
             // 手动模式下保持用户设置不变（因为预览使用的是限制后的曝光时间，不是用户设置的值）
-            _state.value = _state.value.copy(
-                iso = if (isAutoExposure && _state.value.isIsoAuto) actualIso ?: _state.value.iso else _state.value.iso,
-                shutterSpeed = if (isAutoExposure && _state.value.isShutterSpeedAuto) actualExposureTimeNs
-                    ?: _state.value.shutterSpeed else _state.value.shutterSpeed,
+            val currentState = _state.value
+            val readAutoExposure = session === captureSession && isAutoExposure &&
+                currentState.currentCameraId == apertureSelectedCameraId &&
+                usesCameraAutoExposure(currentState)
+            _state.value = currentState.copy(
+                iso = if (readAutoExposure && currentState.isIsoAuto) actualIso ?: currentState.iso else currentState.iso,
+                shutterSpeed = if (readAutoExposure && currentState.isShutterSpeedAuto) actualExposureTimeNs
+                    ?: currentState.shutterSpeed else currentState.shutterSpeed,
                 // In-flight results must not undo a user's WB mode change. A session without
                 // a manual anchor still reports the automatic fallback used by the request.
                 awbMode = if (_state.value.awbMode == CameraMetadata.CONTROL_AWB_MODE_OFF &&
@@ -1321,7 +1334,6 @@ class Camera2Controller(private val context: Context) {
                 supportsCctWhiteBalance = supportsCctWhiteBalance(),
                 awbTemperatureMin = awbRange.lower,
                 awbTemperatureMax = awbRange.upper,
-                physicalAperture = aperture ?: _state.value.physicalAperture,
                 // 手动对焦保留用户目标值，避免镜头移动中的回报值改变后续拍摄和预览请求。
                 focusDistance = if (_state.value.isAutoFocus) focusDistance else _state.value.focusDistance
             )
@@ -1680,7 +1692,7 @@ class Camera2Controller(private val context: Context) {
                     CaptureRequest.CONTROL_CAPTURE_INTENT_PREVIEW
                 )
                 applyBaseCameraSettings(this, isCapture = false)
-                if (_state.value.isAutoExposure) {
+                if (usesCameraAutoExposure(_state.value)) {
                     set(
                         CaptureRequest.CONTROL_AE_MODE,
                         resolveSupportedAeMode(CaptureRequest.CONTROL_AE_MODE_ON)
@@ -1823,7 +1835,7 @@ class Camera2Controller(private val context: Context) {
                     CaptureRequest.CONTROL_CAPTURE_INTENT_PREVIEW
                 )
                 applyBaseCameraSettings(this, isCapture = false)
-                if (_state.value.isAutoExposure) {
+                if (usesCameraAutoExposure(_state.value)) {
                     set(
                         CaptureRequest.CONTROL_AE_MODE,
                         resolveSupportedAeMode(CaptureRequest.CONTROL_AE_MODE_ON)
@@ -1841,7 +1853,7 @@ class Camera2Controller(private val context: Context) {
             val torchRequest = torchRequestBuilder.build()
 
             session.setRepeatingRequest(torchRequest, previewCallback, handler)
-            multiFrameTorchWarmupNeedsAePrecapture = _state.value.isAutoExposure &&
+            multiFrameTorchWarmupNeedsAePrecapture = usesCameraAutoExposure(_state.value) &&
                 torchRequest.get(CaptureRequest.CONTROL_AE_MODE) != CaptureRequest.CONTROL_AE_MODE_OFF &&
                 isAePrecaptureSupported()
             val timeout = Runnable {
@@ -2042,9 +2054,12 @@ class Camera2Controller(private val context: Context) {
 
         PLog.i(TAG, "选择默认摄像头: ${defaultCamera?.cameraId}, 类型: ${defaultCamera?.lensType}")
 
-        _state.value = _state.value.copy(
+        val state = _state.value
+        val selectedId = defaultCamera?.cameraId.orEmpty()
+        val selectedState = if (state.currentCameraId == selectedId) state else state.withoutPhysicalAperture()
+        _state.value = selectedState.copy(
             availableCameras = cameras,
-            currentCameraId = defaultCamera?.cameraId ?: "",
+            currentCameraId = selectedId,
             currentLensType = defaultCamera?.lensType ?: LensType.BACK_MAIN
         )
     }
@@ -2113,6 +2128,11 @@ class Camera2Controller(private val context: Context) {
         cachedCharacteristicsCameraId = ""
         activeOpenCameraId = ""
         activeOutputPhysicalCameraId = null
+        apertureCameraId = null
+        apertureSelectedCameraId = ""
+        lensAperture = LensApertureCapabilities()
+        defaultPreviewAperture = null
+        _state.update { it.withoutPhysicalAperture() }
         cachedSensorOrientation = 0
         cachedLensFacing = CameraCharacteristics.LENS_FACING_BACK
         cachedHardwareLevel = CameraCharacteristics.INFO_SUPPORTED_HARDWARE_LEVEL_LIMITED
@@ -3090,8 +3110,11 @@ class Camera2Controller(private val context: Context) {
             handler.post { calculateAutoMetering(totalWeight, weightedSumLuminance) }
             return
         }
+        if (captureSession == null || stillFlashCaptureState != null || activeMultiFrameTorchWarmupGeneration != 0L) {
+            return
+        }
         val currentState = _state.value
-        if (!currentState.isAutoExposure && (currentState.isIsoAuto || currentState.isShutterSpeedAuto)) {
+        if (!usesCameraAutoExposure(currentState) && (currentState.isIsoAuto || currentState.isShutterSpeedAuto)) {
 
             // --- 1. 计算亮度 ---
             val rawAvgLuminance = if (totalWeight > 0) weightedSumLuminance / totalWeight else 0.0
@@ -3102,11 +3125,12 @@ class Camera2Controller(private val context: Context) {
             // --- 2. 按自动调整的参数选择测光域 ---
             val currentShutter = currentState.shutterSpeed
             val clampedPreviewTime = currentShutter.coerceAtMost(getMaxPreviewExposureTime(currentState))
+            val aperturePriority = currentState.isIsoAuto && currentState.isShutterSpeedAuto
             // 手动快门、自动 ISO：以实际预览亮度为目标。超过预览快门上限后，
             // 不能用拍摄快门放大测光亮度，否则会持续降低 ISO，反而压暗取景器。
             // 手动 ISO、自动快门：仍需换算拍摄亮度，才能在预览曝光不再变化时
             // 求出正确的长曝光快门，而不是一直增加到传感器上限。
-            val exposureRatio = if (currentState.isShutterSpeedAuto) {
+            val exposureRatio = if (currentState.isShutterSpeedAuto && !aperturePriority) {
                 currentShutter.toDouble() / clampedPreviewTime.toDouble()
             } else {
                 1.0
@@ -3139,7 +3163,12 @@ class Camera2Controller(private val context: Context) {
             var newShutter = currentState.shutterSpeed
             var needsUpdate = false
 
-            if (currentState.isIsoAuto) {
+            if (aperturePriority) {
+                val (iso, shutter) = meterAperturePriority(currentState, clampedPreviewTime, correctionFactor)
+                newIso = iso
+                newShutter = shutter
+                needsUpdate = newIso != currentState.iso || newShutter != currentShutter
+            } else if (currentState.isIsoAuto) {
                 // 快门优先模式：快门固定，调 ISO
                 val calculatedIso = (currentState.iso * correctionFactor).toInt()
                 val range = currentState.getIsoRange()
@@ -3166,7 +3195,8 @@ class Camera2Controller(private val context: Context) {
             if (needsUpdate) {
                 PLog.d(
                     TAG,
-                    "SEMI_AUTO_METERING isoAuto=${currentState.isIsoAuto} " +
+                    "SEMI_AUTO_METERING aperture=${currentState.requestedPhysicalAperture} " +
+                        "isoAuto=${currentState.isIsoAuto} shutterAuto=${currentState.isShutterSpeedAuto} " +
                         "previewLuma=$rawAvgLuminance meteredLuma=$meteredLuminance " +
                         "exposureRatio=$exposureRatio evError=$evErrorStops " +
                         "previewShutterNs=$clampedPreviewTime " +
@@ -3176,32 +3206,46 @@ class Camera2Controller(private val context: Context) {
                 // 更新状态
                 _state.value = currentState.copy(iso = newIso, shutterSpeed = newShutter)
 
-                // 关键修复：检查相机和会话是否仍然有效
-                val device = cameraDevice
-                val session = captureSession
-                val builder = previewRequestBuilder
-
-                if (device == null || session == null || builder == null) {
-                    PLog.v(TAG, "calculateAutoMetering: camera not ready, skipping update")
-                    return
-                }
-
-                try {
-                    applyExposureSettings(builder, _state.value, false)
-                    session.setRepeatingRequest(
-                        builder.build(),
-                        previewCallback,
-                        cameraHandler
-                    )
-                } catch (e: CameraAccessException) {
-                    PLog.e(TAG, "Failed to update exposure: ${e.message}")
-                } catch (e: IllegalStateException) {
-                    PLog.w(TAG, "Failed to update exposure - camera closed: ${e.message}")
-                } catch (e: Exception) {
-                    PLog.e(TAG, "Failed to update exposure: ${e.message}")
+                previewRequestBuilder?.let { builder ->
+                    applyExposureSettings(builder, _state.value, isCapture = false)
+                    updatePreview()
                 }
             }
         }
+    }
+
+    private fun meterAperturePriority(
+        state: CameraState,
+        previewShutter: Long,
+        correctionFactor: Double,
+    ): Pair<Int, Long> {
+        val isoRange = state.getIsoRange()
+        val shutterRange = getAperturePriorityShutterRange(state)
+        val targetExposure = state.iso.toDouble() * previewShutter * correctionFactor
+
+        // Split the EV change between the automatic axes, then let the other axis
+        // absorb the remainder when a sensor or frame-rate limit is reached.
+        val balancedShutter = (previewShutter * correctionFactor.pow(0.5)).roundToLong()
+            .coerceIn(shutterRange.lower, shutterRange.upper)
+        val iso = (targetExposure / balancedShutter).roundToInt().coerceIn(isoRange.lower, isoRange.upper)
+        val shutter = (targetExposure / iso).roundToLong().coerceIn(shutterRange.lower, shutterRange.upper)
+        return iso to shutter
+    }
+
+    private fun getAperturePriorityShutterRange(state: CameraState): Range<Long> {
+        val range = state.getManualShutterSpeedRange()
+        val limit = if (state.captureMode == CaptureMode.VIDEO) {
+            1_000_000_000L / state.videoConfig.fps.fps
+        } else {
+            getMaxPreviewExposureTime(state)
+        }
+        return Range(range.lower, limit.coerceIn(range.lower, range.upper))
+    }
+
+    private fun CameraState.withAperturePriorityShutterLimit(): CameraState {
+        if (isApertureAuto || !isIsoAuto || !isShutterSpeedAuto || !supportsManualSensorExposure) return this
+        val shutter = getAperturePriorityShutterRange(this).clamp(shutterSpeed)
+        return if (shutter != shutterSpeed) copy(shutterSpeed = shutter) else this
     }
 
     /** Recreate the consumer when its format or size changes, including EIS+ transitions. */
@@ -3282,6 +3326,14 @@ class Camera2Controller(private val context: Context) {
 
         try {
             previewRequestBuilder = device.createCaptureRequest(templateType).apply {
+                val selectedCameraId = _state.value.currentCameraId
+                val previousLensId = apertureCameraId.takeIf { apertureSelectedCameraId == selectedCameraId }
+                apertureSelectedCameraId = selectedCameraId
+                refreshLensApertureCapabilities(
+                    activeOutputPhysicalCameraId ?: previousLensId ?: activeOpenCameraId,
+                    this,
+                )
+                defaultPreviewAperture = get(CaptureRequest.LENS_APERTURE)
                 addTarget(surface)
                 videoSurface?.takeIf { _state.value.videoRecordingState.shouldAttachCameraInput() }
                     ?.let(::addTarget)
@@ -3956,6 +4008,7 @@ class Camera2Controller(private val context: Context) {
             // 开始预览
             // 关键修复: 不再动态添加 surface，因为已经在创建 builder 时添加了
             previewRequestBuilder?.let { builder ->
+                applyPhysicalApertureSettings(builder, _state.value)
                 session.setRepeatingRequest(builder.build(), previewCallback, cameraHandler)
             }
             if (shouldUseAlgorithmicStabilization()) {
@@ -4137,6 +4190,7 @@ class Camera2Controller(private val context: Context) {
         }
         applyVendorCaptureSettings(builder, isCapture)
         applyCustomVendorCaptureRequestKeys(builder, isCapture)
+        applyPhysicalApertureSettings(builder, currentState)
         if (!isCapture) {
             // Preview NR is a pipeline constraint, including custom request keys and RAW preview.
             applyNoiseReductionSettings(builder, currentState, isCapture = false)
@@ -4152,6 +4206,85 @@ class Camera2Controller(private val context: Context) {
                     "requestDistortion=${builder.get(CaptureRequest.DISTORTION_CORRECTION_MODE)}"
             )
         }
+    }
+
+    private fun refreshLensApertureCapabilities(cameraId: String, builder: CaptureRequest.Builder) {
+        val characteristics = getCameraCharacteristicsOrNull(cameraId, "lens aperture")
+        val logicalCharacteristics = getActiveOpenCameraCharacteristics()
+            ?.takeIf { cameraId != activeOpenCameraId && cameraId in it.physicalCameraIds }
+        val supportsStandardControl = supportsManualSensorExposure &&
+            isCaptureRequestKeyAvailable(CaptureRequest.LENS_APERTURE.name)
+        val capabilities = LensApertureControl.readCapabilities(
+            activeOpenCameraId, characteristics, logicalCharacteristics, builder, supportsStandardControl,
+        )
+        val sameLens = apertureCameraId == cameraId
+        lensAperture = capabilities
+        apertureCameraId = cameraId
+        val control = capabilities.control
+        val apertures = control?.apertures.orEmpty()
+        _state.update {
+            if (it.currentCameraId != apertureSelectedCameraId) return@update it
+            it.copy(
+                physicalAperture = it.physicalAperture.takeIf { sameLens } ?: capabilities.fixedAperture,
+                availableApertures = apertures,
+                requestedPhysicalAperture = requestedAperturesByCamera[cameraId]?.takeIf { it in apertures },
+            ).withAperturePriorityShutterLimit()
+        }
+        if (!sameLens) {
+            PLog.d(TAG, "Aperture capabilities: camera=$cameraId, fixed=${capabilities.fixedAperture}, " +
+                "available=$apertures, requiresManualExposure=${control?.requiresManualExposure}")
+        }
+    }
+
+    private fun updatePhysicalApertureFromResult(result: TotalCaptureResult) {
+        val outputPhysicalId = activeOutputPhysicalCameraId
+        val logicalPhysicalId = result.get(CaptureResult.LOGICAL_MULTI_CAMERA_ACTIVE_PHYSICAL_ID)
+        val physicalId = outputPhysicalId ?: logicalPhysicalId
+        val cameraId = physicalId ?: apertureCameraId ?: activeOpenCameraId
+        val builder = previewRequestBuilder ?: return
+        val lensChanged = cameraId != apertureCameraId
+        val previousControl = lensAperture.control?.takeIf {
+            lensChanged && (!it.requiresManualExposure || !_state.value.isApertureAuto)
+        }
+        if (lensChanged) {
+            refreshLensApertureCapabilities(cameraId, builder)
+        }
+
+        val logicalAperture = result.readPhysicalAperture(cameraId)
+        val actualAperture = if (outputPhysicalId == null && logicalAperture != null) {
+            logicalAperture
+        } else {
+            physicalId?.let { result.physicalCameraResults[it]?.readPhysicalAperture(it) }
+                ?: logicalAperture.takeIf {
+                    logicalPhysicalId == outputPhysicalId ||
+                        (logicalPhysicalId == null && lensAperture.fixedAperture == null)
+                }
+        }
+        val state = _state.value
+        if (actualAperture != null && actualAperture != state.physicalAperture) {
+            _state.update {
+                if (it.currentCameraId == apertureSelectedCameraId) {
+                    it.copy(physicalAperture = actualAperture)
+                } else it
+            }
+        }
+
+        val hasApertureRequest = !state.isApertureAuto || lensAperture.control?.requiresManualExposure == false
+        if (lensChanged && (previousControl != null || hasApertureRequest)) {
+            previousControl?.clearFrom(builder, defaultPreviewAperture)
+            if (previousControl != null) applyCustomVendorCaptureRequestKeys(builder, isCapture = false)
+            updatePreviewExposureAndFlash()
+        }
+    }
+
+    private fun applyPhysicalApertureSettings(builder: CaptureRequest.Builder, state: CameraState) {
+        if (state.currentCameraId != apertureSelectedCameraId) return
+        val control = lensAperture.control ?: return
+        val aperture = state.requestedPhysicalAperture?.takeIf { it in control.apertures }
+        if (control.requiresManualExposure &&
+            builder.get(CaptureRequest.CONTROL_AE_MODE) != CaptureRequest.CONTROL_AE_MODE_OFF
+        ) return
+        control.applyTo(builder, aperture)
     }
 
     private fun forcedVendorSessionParameterValues(state: CameraState): Map<VendorCaptureKey, Int> {
@@ -4603,10 +4736,12 @@ class Camera2Controller(private val context: Context) {
         return isFlashSupported &&
             state.captureMode == CaptureMode.PHOTO &&
             state.flashMode == CameraMetadata.FLASH_MODE_SINGLE &&
-            state.isIsoAuto &&
-            state.isShutterSpeedAuto &&
+            usesCameraAutoExposure(state) &&
             availableAeModes.contains(CaptureRequest.CONTROL_AE_MODE_ON_ALWAYS_FLASH)
     }
+
+    private fun usesCameraAutoExposure(state: CameraState): Boolean =
+        state.isAutoExposure || !supportsManualSensorExposure
 
     private fun applyExposureSettings(
         builder: CaptureRequest.Builder,
@@ -4621,52 +4756,22 @@ class Camera2Controller(private val context: Context) {
         val effectiveUseStillFlashAeMode = useStillFlashAeMode ||
             (!isCapture && shouldUsePreviewStillFlashAeMode(state))
 
-        // 根据曝光模式和闪光灯模式联合决定 AE_MODE
+        val useCameraAe = usesCameraAutoExposure(state)
         val aeMode = when {
-            // 1. 全自动曝光：静态闪光拍摄及其预览会话使用闪光 AE 模式；真正的预闪仍由
-            // CONTROL_AE_PRECAPTURE_TRIGGER 或静态拍摄请求触发
-            state.isIsoAuto && state.isShutterSpeedAuto -> {
-                if (state.captureMode == CaptureMode.VIDEO) {
-                    resolveSupportedAeMode(CaptureRequest.CONTROL_AE_MODE_ON)
-                } else {
-                    when {
-                        state.flashMode == CameraMetadata.FLASH_MODE_SINGLE &&
-                                effectiveUseStillFlashAeMode ->
-                            resolveStillFlashAeMode()
-
-                        else -> resolveSupportedAeMode(CaptureRequest.CONTROL_AE_MODE_ON)
-                    }
-                }
-            }
-            // 2. 手动曝光或半自动曝光：尝试使用 OFF 模式，如果设备不支持则退而求其次使用 ON
-            else -> {
-                if (isManualSensorSupported && availableAeModes.contains(CaptureRequest.CONTROL_AE_MODE_OFF)) {
-                    CaptureRequest.CONTROL_AE_MODE_OFF
-                } else {
-                    resolveSupportedAeMode(CaptureRequest.CONTROL_AE_MODE_ON)
-                }
-            }
+            !useCameraAe -> CaptureRequest.CONTROL_AE_MODE_OFF
+            state.captureMode == CaptureMode.PHOTO && state.flashMode == CameraMetadata.FLASH_MODE_SINGLE &&
+                effectiveUseStillFlashAeMode -> resolveStillFlashAeMode()
+            else -> resolveSupportedAeMode(CaptureRequest.CONTROL_AE_MODE_ON)
         }
 
         builder.set(CaptureRequest.CONTROL_AE_MODE, aeMode)
 
-        // 如果是全自动曝光，设置曝光补偿
-        if (state.isIsoAuto && state.isShutterSpeedAuto) {
+        if (useCameraAe) {
             builder.set(CaptureRequest.CONTROL_AE_EXPOSURE_COMPENSATION, state.exposureCompensation)
         } else {
-            // 手动曝光 / 半自动曝光：手动设置 ISO 和快门
-            // 只有在支持 MANUAL_SENSOR 的设备上才设置，否则保持自动
-            if (isManualSensorSupported) {
-                builder.set(CaptureRequest.SENSOR_SENSITIVITY, state.iso)
-
-                // 预览时限制曝光时间，防止画面卡死；拍摄时使用完整的用户设置
-                val exposureTime = if (isCapture) {
-                    state.shutterSpeed
-                } else {
-                    coercePreviewExposureTime(state)
-                }
-                builder.set(CaptureRequest.SENSOR_EXPOSURE_TIME, exposureTime)
-            }
+            builder.set(CaptureRequest.SENSOR_SENSITIVITY, state.iso)
+            val exposureTime = if (isCapture) state.shutterSpeed else coercePreviewExposureTime(state)
+            builder.set(CaptureRequest.SENSOR_EXPOSURE_TIME, exposureTime)
 
             // 拍摄时设置低帧率范围以支持长曝光
             if (isCapture && state.captureMode == CaptureMode.PHOTO) {
@@ -4737,7 +4842,8 @@ class Camera2Controller(private val context: Context) {
     }
 
     private fun shouldApplyRawMinShutterLimit(state: CameraState): Boolean {
-        return state.captureMode == CaptureMode.PHOTO &&
+        return supportsManualSensorExposure &&
+                state.captureMode == CaptureMode.PHOTO &&
                 state.rawMinShutterSpeedNs > 0L &&
                 state.isIsoAuto &&
                 state.isShutterSpeedAuto &&
@@ -4984,7 +5090,7 @@ class Camera2Controller(private val context: Context) {
 
         when (state.flashMode) {
             CameraMetadata.FLASH_MODE_SINGLE -> {
-                if (!state.isIsoAuto || !state.isShutterSpeedAuto) {
+                if (!usesCameraAutoExposure(state)) {
                     // Manual/semi-manual exposure has no AE precapture convergence.
                     // Fire a single flash only for the still request.
                     builder.set(
@@ -5638,11 +5744,7 @@ class Camera2Controller(private val context: Context) {
 
         targetCamera?.let { cam ->
             PLog.d(TAG, "Switching to lens: $lensType, cameraId: ${cam.cameraId}")
-            _state.value = _state.value.copy(
-                currentCameraId = cam.cameraId,
-                currentLensType = cam.lensType,
-                zoomRatio = 1f
-            )
+            selectCamera(cam)
         } ?: PLog.w(TAG, "Camera with lens type $lensType not found")
     }
 
@@ -5655,15 +5757,90 @@ class Camera2Controller(private val context: Context) {
 
         targetCamera?.let { cam ->
             PLog.d(TAG, "Switching to camera ID: $cameraId")
-            _state.value = _state.value.copy(
-                currentCameraId = cam.cameraId,
-                currentLensType = cam.lensType,
-                zoomRatio = 1f
-            )
+            selectCamera(cam)
         } ?: PLog.w(TAG, "Camera with ID $cameraId not found")
     }
 
+    private fun selectCamera(camera: CameraInfo) {
+        _state.update { state ->
+            val selected = if (state.currentCameraId == camera.cameraId) state else state.withoutPhysicalAperture()
+            selected.copy(currentCameraId = camera.cameraId, currentLensType = camera.lensType, zoomRatio = 1f)
+        }
+    }
+
+    private fun CameraState.withoutPhysicalAperture(): CameraState = copy(
+        physicalAperture = null,
+        availableApertures = emptyList(),
+        requestedPhysicalAperture = null,
+    )
+
 // ==================== 曝光控制 ====================
+
+    fun setPhysicalAperture(aperture: Float) = changePhysicalAperture { aperture }
+
+    fun setPhysicalApertureAuto(enabled: Boolean) = changePhysicalAperture { state ->
+        if (enabled) {
+            null
+        } else {
+            state.requestedPhysicalAperture ?: state.availableApertures.minByOrNull { aperture ->
+                abs(aperture - (state.physicalAperture ?: aperture))
+            }
+        }
+    }
+
+    private fun changePhysicalAperture(select: (CameraState) -> Float?) {
+        val handler = cameraHandler ?: return
+        if (Looper.myLooper() != handler.looper) {
+            handler.post { changePhysicalAperture(select) }
+            return
+        }
+        val state = _state.value
+        if (apertureSelectedCameraId != state.currentCameraId || !state.isApertureAdjustable) return
+        val aperture = select(state)
+        if (aperture == state.requestedPhysicalAperture ||
+            (aperture != null && aperture !in state.availableApertures)
+        ) return
+
+        val previousAperture = state.requestedPhysicalAperture ?: state.physicalAperture
+        val exposureBias = if (!state.isIsoAuto && !state.isShutterSpeedAuto &&
+            aperture != null && previousAperture != null
+        ) {
+            state.exposureBias + (2.0 * ln(previousAperture.toDouble() / aperture) / ln(2.0)).toFloat()
+        } else {
+            state.exposureCompensation * state.getExposureCompensationStep()
+        }
+        rememberPhysicalAperture(aperture)
+        _state.update {
+            if (it.currentCameraId != state.currentCameraId) return@update it
+            it.copy(
+                requestedPhysicalAperture = aperture,
+                exposureBias = exposureBias,
+            ).withAperturePriorityShutterLimit()
+        }
+        PLog.d(TAG, "Aperture selected: camera=$apertureCameraId, requested=$aperture, actual=${state.physicalAperture}")
+        updatePreviewExposureAndFlash()
+    }
+
+    private fun rememberPhysicalAperture(aperture: Float?) {
+        val cameraId = apertureCameraId ?: return
+        if (aperture != null) {
+            requestedAperturesByCamera[cameraId] = aperture
+        } else {
+            requestedAperturesByCamera.remove(cameraId)
+            previewRequestBuilder?.let { builder ->
+                lensAperture.control?.clearFrom(builder, defaultPreviewAperture)
+                applyCustomVendorCaptureRequestKeys(builder, isCapture = false)
+            }
+        }
+    }
+
+    private fun updatePreviewExposureAndFlash() {
+        val builder = previewRequestBuilder ?: return
+        val state = _state.value
+        applyExposureSettings(builder, state, isCapture = false)
+        applyFlashSettings(builder, state, isCapture = false, useStillFlashTrigger = false)
+        updatePreview()
+    }
 
     /** Serialize user changes and their snapshots with the asynchronous focus controls. */
     fun updateUserCaptureSettings(
@@ -5722,10 +5899,8 @@ class Camera2Controller(private val context: Context) {
             (settings.exposureCompensationEv / evStep).roundToInt()
                 .coerceIn(evRange.lower, evRange.upper)
         } else 0
-        val supportsManualExposure = isManualSensorSupported &&
-            availableAeModes.contains(CaptureRequest.CONTROL_AE_MODE_OFF)
-        val isoAuto = settings.isIsoAuto || !supportsManualExposure
-        val shutterAuto = settings.isShutterSpeedAuto || !supportsManualExposure
+        val isoAuto = settings.isIsoAuto || !supportsManualSensorExposure
+        val shutterAuto = settings.isShutterSpeedAuto || !supportsManualSensorExposure
         val isoRange = current.getIsoRange()
         val restoredIso = settings.iso.coerceIn(isoRange.lower, isoRange.upper)
         val restoredShutter = coerceManualShutterSpeed(current, settings.shutterSpeedNs)
@@ -5870,16 +6045,16 @@ class Camera2Controller(private val context: Context) {
         val evStep = currentState.getExposureCompensationStep()
         val sliderBias = currentState.exposureCompensation * evStep
 
+        if (enabled && !currentState.isApertureAuto && apertureSelectedCameraId == currentState.currentCameraId) {
+            rememberPhysicalAperture(null)
+        }
         _state.value = currentState.copy(
             isIsoAuto = enabled,
             isShutterSpeedAuto = enabled,
+            requestedPhysicalAperture = currentState.requestedPhysicalAperture.takeUnless { enabled },
             exposureBias = if (enabled) sliderBias else currentState.exposureBias
         )
-
-        previewRequestBuilder?.apply {
-            applyExposureSettings(this, _state.value, false)
-            updatePreview()
-        }
+        updatePreviewExposureAndFlash()
     }
 
     /**
@@ -5897,7 +6072,7 @@ class Camera2Controller(private val context: Context) {
         _state.value = currentState.copy(
             isIsoAuto = enabled,
             exposureBias = exposureBias
-        )
+        ).withAperturePriorityShutterLimit()
         previewRequestBuilder?.apply {
             applyExposureSettings(this, _state.value, false)
             updatePreview()
@@ -5919,7 +6094,7 @@ class Camera2Controller(private val context: Context) {
         _state.value = currentState.copy(
             isShutterSpeedAuto = enabled,
             exposureBias = exposureBias
-        )
+        ).withAperturePriorityShutterLimit()
         previewRequestBuilder?.apply {
             applyExposureSettings(this, _state.value, false)
             updatePreview()
@@ -6345,9 +6520,9 @@ class Camera2Controller(private val context: Context) {
             return
         }
 
-        // The flash sequence owns repeating requests until the still capture is finished.
+        // Flash preparation owns repeating requests until the sequence is finished.
         // Parameter setters may update the preview builder; apply them when restoring preview.
-        if (stillFlashCaptureState != null) return
+        if (stillFlashCaptureState != null || activeMultiFrameTorchWarmupGeneration != 0L) return
 
         // 检查相机和会话是否仍然有效，避免在相机关闭后的回调中调用 setRepeatingRequest。
         val device = cameraDevice
@@ -6360,6 +6535,7 @@ class Camera2Controller(private val context: Context) {
         }
 
         try {
+            applyPhysicalApertureSettings(builder, _state.value)
             applyFrozenCaptureFocus(builder)
             session.setRepeatingRequest(builder.build(), previewCallback, cameraHandler)
         } catch (e: CameraAccessException) {
@@ -7029,7 +7205,7 @@ class Camera2Controller(private val context: Context) {
     }
 
     fun setVideoFps(fps: VideoFpsPreset) {
-        _state.update { it.copy(videoConfig = it.videoConfig.copy(fps = fps)) }
+        _state.update { it.copy(videoConfig = it.videoConfig.copy(fps = fps)).withAperturePriorityShutterLimit() }
         refreshVideoCapabilities()
         previewRequestBuilder?.apply {
             applyBaseCameraSettings(this, isCapture = false)
@@ -7482,13 +7658,16 @@ class Camera2Controller(private val context: Context) {
         val videoTarget = videoRecorder.cameraInputSurface
         if (includeVideoSurface && videoTarget == null) return false
         return try {
-            val builder = device.createCaptureRequest(CameraDevice.TEMPLATE_RECORD).apply {
+            val builder = device.createCaptureRequest(CameraDevice.TEMPLATE_RECORD)
+            val defaultAperture = builder.get(CaptureRequest.LENS_APERTURE)
+            builder.apply {
                 addTarget(previewTarget)
                 if (includeVideoSurface) videoTarget?.let(::addTarget)
                 applyBaseCameraSettings(this, isCapture = false)
             }
             session.setRepeatingRequest(builder.build(), previewCallback, cameraHandler)
             previewRequestBuilder = builder
+            defaultPreviewAperture = defaultAperture
             true
         } catch (error: Exception) {
             PLog.e(TAG, "Failed to update OES recording target", error)
@@ -7677,8 +7856,7 @@ class Camera2Controller(private val context: Context) {
             isFlashSupported &&
             isAePrecaptureSupported() &&
             currentState.flashMode == CameraMetadata.FLASH_MODE_SINGLE &&
-            currentState.isIsoAuto &&
-            currentState.isShutterSpeedAuto &&
+            usesCameraAutoExposure(currentState) &&
             resolveStillFlashAeMode() != CaptureRequest.CONTROL_AE_MODE_OFF
 
         if (useMultiFrameTorch) {
@@ -7808,7 +7986,8 @@ class Camera2Controller(private val context: Context) {
                         builder = this,
                         isCapture = true,
                         isRawCapture = false,
-                        disableZslForHdrCapture = true
+                        disableZslForHdrCapture = true,
+                        currentState = currentState,
                     )
                     applyHdrBracketExposure(this, currentState, evOffset, manualBaseExposure)
                     setAePrecaptureTriggerIfSupported(
@@ -7869,12 +8048,12 @@ class Camera2Controller(private val context: Context) {
         if (!isManualSensorSupported || !availableAeModes.contains(CaptureRequest.CONTROL_AE_MODE_OFF)) {
             return null
         }
-        val baseIso = if (state.isAutoExposure) {
+        val baseIso = if (usesCameraAutoExposure(state)) {
             baseExposureResult?.get(CaptureResult.SENSOR_SENSITIVITY)
         } else {
             state.iso
         } ?: return null
-        val baseShutter = if (state.isAutoExposure) {
+        val baseShutter = if (usesCameraAutoExposure(state)) {
             baseExposureResult?.get(CaptureResult.SENSOR_EXPOSURE_TIME)
         } else {
             state.shutterSpeed
@@ -8063,7 +8242,7 @@ class Camera2Controller(private val context: Context) {
     ): CaptureRequest {
         return device.createCaptureRequest(CameraDevice.TEMPLATE_STILL_CAPTURE).apply {
             addTarget(reader.surface)
-            applyBaseCameraSettings(this, isCapture = true, isRawCapture = isRawCapture)
+            applyBaseCameraSettings(this, isCapture = true, isRawCapture = isRawCapture, currentState = state)
             setAePrecaptureTriggerIfSupported(
                 this,
                 CaptureRequest.CONTROL_AE_PRECAPTURE_TRIGGER_IDLE,
@@ -8167,7 +8346,7 @@ class Camera2Controller(private val context: Context) {
     ): CaptureRequest? {
         val builder = device.createCaptureRequest(CameraDevice.TEMPLATE_STILL_CAPTURE).apply {
             addTarget(reader.surface)
-            applyBaseCameraSettings(this, isCapture = true, isRawCapture = isRawCapture)
+            applyBaseCameraSettings(this, isCapture = true, isRawCapture = isRawCapture, currentState = state)
             setAePrecaptureTriggerIfSupported(
                 this,
                 CaptureRequest.CONTROL_AE_PRECAPTURE_TRIGGER_IDLE,
@@ -8362,7 +8541,7 @@ class Camera2Controller(private val context: Context) {
                 }
 
                 if (useMultiFrameTorch) {
-                    if (currentState.isAutoExposure) {
+                    if (usesCameraAutoExposure(currentState)) {
                         set(
                             CaptureRequest.CONTROL_AE_MODE,
                             resolveSupportedAeMode(CaptureRequest.CONTROL_AE_MODE_ON)
@@ -8617,17 +8796,17 @@ class Camera2Controller(private val context: Context) {
         val openCameraId = getCurrentOpenCameraId()
         val zoomRatio = captureState.zoomRatio
 
-        // 从 CameraCharacteristics 获取镜头固定信息
-        var aperture: Float? = null
+        var fixedAperture: Float? = null
         var characteristicsForMetadata: CameraCharacteristics? = null
 
         try {
             val characteristics = effectiveCharacteristics ?: getCameraCharacteristicsCached(openCameraId)
             characteristicsForMetadata = characteristics
 
-            // 光圈值（取第一个可用光圈）
-            val apertures = characteristics.get(CameraCharacteristics.LENS_INFO_AVAILABLE_APERTURES)
-            aperture = apertures?.firstOrNull()
+            fixedAperture = characteristics
+                .readMetadataOrNull(CameraCharacteristics.LENS_INFO_AVAILABLE_APERTURES)
+                ?.singleOrNull()
+                ?.takeIf { it.isFinite() && it > 0f }
 
         } catch (e: Exception) {
             PLog.e(TAG, "Failed to get camera characteristics for EXIF", e)
@@ -8640,8 +8819,11 @@ class Camera2Controller(private val context: Context) {
         val whiteBalance = if (awbModeForExif == CameraMetadata.CONTROL_AWB_MODE_AUTO) 0 else 1
         val flashState = result?.get(CaptureResult.FLASH_STATE) ?: captureState.flashMode
 
-        // 如果有实时的光圈/焦距，使用实时值
-        result?.get(CaptureResult.LENS_APERTURE)?.let { aperture = it }
+        val aperture = result?.readPhysicalAperture() ?: when {
+            effectiveCharacteristics == null -> captureState.physicalAperture ?: fixedAperture
+            captureState.isApertureAdjustable -> null
+            else -> fixedAperture
+        }
         val resolvedFocalLength = resolveCaptureFocalLength(
             characteristics = characteristicsForMetadata,
             captureResultFocalLength = result?.get(CaptureResult.LENS_FOCAL_LENGTH),
@@ -9212,7 +9394,7 @@ class Camera2Controller(private val context: Context) {
                 applyBaseCameraSettings(this, isCapture = true, isRawCapture = isRawCapture)
 
                 if (isContinuousBurstTorchActive) {
-                    if (_state.value.isAutoExposure) {
+                    if (usesCameraAutoExposure(_state.value)) {
                         set(
                             CaptureRequest.CONTROL_AE_MODE,
                             resolveSupportedAeMode(CaptureRequest.CONTROL_AE_MODE_ON)

@@ -307,8 +307,10 @@ data class CameraState(
     // 测光模式
     val meteringMode: MeteringMode = MeteringMode.SYSTEM_DEFAULT,
 
+    val physicalAperture: Float? = null,
+    val requestedPhysicalAperture: Float? = null,
+    val availableApertures: List<Float> = emptyList(),
     val isVirtualApertureEnabled: Boolean = false,
-    val physicalAperture: Float = 2.0f, // 物理光圈值
     val virtualAperture: Float = 2.0f,  // 虚拟光圈值 (f-number)
     // 对焦
     val isAutoFocus: Boolean = true,
@@ -410,6 +412,12 @@ data class CameraState(
     val isProfessionalMode: Boolean
         get() = captureMode == CaptureMode.PHOTO && useRaw && isRawSupported
 
+    val isApertureAdjustable: Boolean
+        get() = availableApertures.size > 1
+
+    val isApertureAuto: Boolean
+        get() = requestedPhysicalAperture == null
+
     val meteringReferencePoint: Pair<Float, Float>?
         get() = meteringPoint ?: focusPoint?.takeIf { focusPointSource == FocusPointSource.MANUAL }
 
@@ -422,7 +430,7 @@ data class CameraState(
      * 是否全自动曝光
      */
     val isAutoExposure: Boolean
-        get() = isIsoAuto && isShutterSpeedAuto
+        get() = isIsoAuto && isShutterSpeedAuto && isApertureAuto
 
     val isMultiFrameEnabled: Boolean
         get() = multiFrameOutputScale != null &&
