@@ -640,6 +640,13 @@ class UserPreferences internal constructor(
         customPresetsJson = CameraPreset.listToJson(v)
     }
 
+    internal var presetOrder by json(PRESET_ORDER_KEY, ::readPresetOrder, ::writePresetOrder)
+    internal var builtInPresetEditRevisions by json(
+        BUILT_IN_PRESET_EDIT_REVISIONS_KEY,
+        ::readBuiltInPresetEditRevisions,
+        ::writeBuiltInPresetEditRevisions,
+    )
+
     /** 一次写入某个镜头的全部 DNG 元数据校正，保证它们对应同一个 cameraId。 */
     fun putRawDngMetadataCorrections(cameraId: String, corrections: IszRawDngMetadataCorrections) {
         if (cameraId.isBlank()) return

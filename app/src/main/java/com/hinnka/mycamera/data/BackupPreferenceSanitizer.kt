@@ -17,6 +17,8 @@ internal object BackupPreferenceSanitizer {
         CUSTOM_PRESETS_KEY,
         "active_preset_id",
         "deleted_built_in_ids",
+        PRESET_ORDER_KEY,
+        BUILT_IN_PRESET_EDIT_REVISIONS_KEY,
     )
 
     data class RestoreResult(

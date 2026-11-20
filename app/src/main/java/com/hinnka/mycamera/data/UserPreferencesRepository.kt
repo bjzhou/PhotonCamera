@@ -28,6 +28,7 @@ private val Context.dataStore: DataStore<Preferences> by preferencesDataStore(
         listOf(
             RemovedAiServicePreferencesMigration(),
             BuiltInDeviceConfigurationMigration.create(context),
+            PresetPreferencesMigration(),
         )
     },
 )

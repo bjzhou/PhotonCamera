@@ -106,6 +106,7 @@ fun PresetManagementScreen(
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     var localPresets by remember { mutableStateOf(allPresets) }
+    var presetOrderChanged by remember { mutableStateOf(false) }
     var deletingPreset by remember { mutableStateOf<CameraPreset?>(null) }
     var showRestoreDefaultsDialog by remember { mutableStateOf(false) }
     var isImporting by remember { mutableStateOf(false) }
@@ -172,20 +173,18 @@ fun PresetManagementScreen(
         }
     }
 
-    LaunchedEffect(allPresets) {
-        val localIds = localPresets.map { it.id }
-        val incomingIds = allPresets.map { it.id }
-        if (localIds.toSet() != incomingIds.toSet()) {
+    LaunchedEffect(allPresets, presetOrderChanged) {
+        localPresets = if (presetOrderChanged) {
+            val localIds = localPresets.map { it.id }.toSet()
             val byId = allPresets.associateBy { it.id }
-            localPresets = localIds.mapNotNull { byId[it] } + allPresets.filter { it.id !in localIds }
+            localPresets.mapNotNull { byId[it.id] } + allPresets.filter { it.id !in localIds }
         } else {
-            val byId = allPresets.associateBy { it.id }
-            localPresets = localPresets.mapNotNull { byId[it.id] }
+            allPresets
         }
     }
 
     fun saveOrderAndBack() {
-        viewModel.savePresetOrder(localPresets)
+        if (presetOrderChanged) viewModel.savePresetOrder(localPresets.map { it.id })
         onBack()
     }
 
@@ -198,7 +197,8 @@ fun PresetManagementScreen(
         val toId = to.key as? String ?: return@rememberReorderableLazyListState
         val fromIndex = localPresets.indexOfFirst { it.id == fromId }
         val toIndex = localPresets.indexOfFirst { it.id == toId }
-        if (fromIndex != -1 && toIndex != -1) {
+        if (fromIndex != -1 && toIndex != -1 && fromIndex != toIndex) {
+            presetOrderChanged = true
             localPresets = localPresets.toMutableList().apply {
                 add(toIndex, removeAt(fromIndex))
             }
@@ -354,6 +354,7 @@ fun PresetManagementScreen(
             confirmButton = {
                 TextButton(
                     onClick = {
+                        presetOrderChanged = false
                         viewModel.resetToDefaultPresets()
                         showRestoreDefaultsDialog = false
                     }

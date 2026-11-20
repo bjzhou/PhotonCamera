@@ -31,6 +31,9 @@ import com.hinnka.mycamera.frame.FrameRenderer
 import com.hinnka.mycamera.data.PresetPackageManager
 import com.hinnka.mycamera.data.UserPreferences
 import com.hinnka.mycamera.data.VolumeKeyAction
+import com.hinnka.mycamera.data.builtInPresetRevision
+import com.hinnka.mycamera.data.isBuiltInRecord
+import com.hinnka.mycamera.data.resolveCameraPresets
 import com.hinnka.mycamera.frame.FrameEditorDraft
 import com.hinnka.mycamera.frame.FrameInfo
 import com.hinnka.mycamera.frame.FramePreviewFactory
@@ -685,82 +688,9 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     private val _lutLookSelection = MutableStateFlow(CameraLookSelection("standard"))
     internal val lutLookSelection = _lutLookSelection.asStateFlow()
 
-    // 合并内置预设与用户自定义预设
-    val allPresets: StateFlow<List<com.hinnka.mycamera.model.CameraPreset>> = userPreferencesRepository.userPreferences
-        .map { prefs ->
-            val deletedIds = prefs.deletedBuiltInIds.split(",").filter { it.isNotEmpty() }.toSet()
-            val builtInsById = com.hinnka.mycamera.model.CameraPreset.BUILT_IN_PRESETS.associateBy { it.id }
-            val orderedPresets = prefs.customPresets
-                .filter { it.id !in deletedIds }
-                .map { saved ->
-                    builtInsById[saved.id]?.let { builtin ->
-                        builtin.copy(
-                            name = saved.name,
-                            professionalModeOnly = saved.professionalModeOnly,
-                            lutId = saved.lutId,
-                            colorRecipe = saved.colorRecipe,
-                            effects = saved.effects,
-                            aspectRatio = saved.aspectRatio,
-                            ultraHdrGainMapEnabled = saved.ultraHdrGainMapEnabled,
-                            frameId = saved.frameId,
-                            rawDcpId = saved.rawDcpId,
-                            rawDcpIdsByLens = saved.rawDcpIdsByLens,
-                            rawHncsProfileId = saved.rawHncsProfileId,
-                            rawHncsRenderIntent = saved.rawHncsRenderIntent,
-                            rawHncsFilmCurveMode = saved.rawHncsFilmCurveMode,
-                            rawRenderingEngine = saved.rawRenderingEngine,
-                            rawMaxSharpening = saved.rawMaxSharpening,
-                            rawMaxNoiseReduction = saved.rawMaxNoiseReduction,
-                            rawMaxChromaNoiseReduction = saved.rawMaxChromaNoiseReduction,
-                            rawExposureCompensation = saved.rawExposureCompensation,
-                            rawHighlightsAdjustment = saved.rawHighlightsAdjustment,
-                            rawShadowsAdjustment = saved.rawShadowsAdjustment,
-                            rawBlackPointCorrection = saved.rawBlackPointCorrection,
-                            rawWhitePointCorrection = saved.rawWhitePointCorrection,
-                            rawOppoMasterToneMap = saved.rawOppoMasterToneMap,
-                            rawLumixPhotoStyle = saved.rawLumixPhotoStyle,
-                            rawCanonPictureStyle = saved.rawCanonPictureStyle,
-                            rawCanonExposureCompensationEv = saved.rawCanonExposureCompensationEv,
-                            rawLumixColorMatchingEnabled = saved.rawLumixColorMatchingEnabled,
-                            rawHncsColorMatchingEnabled = saved.rawHncsColorMatchingEnabled,
-                            rawCanonUseR5ColorMatrix = saved.rawCanonUseR5ColorMatrix,
-                            rawLeicaUseM9ColorMatrix = saved.rawLeicaUseM9ColorMatrix,
-                            rawAgxBlackRelativeExposure = saved.rawAgxBlackRelativeExposure,
-                            rawAgxWhiteRelativeExposure = saved.rawAgxWhiteRelativeExposure,
-                            rawAgxToe = saved.rawAgxToe,
-                            rawAgxShoulder = saved.rawAgxShoulder,
-                            rawFilmicBlackRelativeExposure = saved.rawFilmicBlackRelativeExposure,
-                            rawFilmicWhiteRelativeExposure = saved.rawFilmicWhiteRelativeExposure,
-                            rawSpectralFilmStock = saved.rawSpectralFilmStock,
-                            rawSpectralFilmPrint = saved.rawSpectralFilmPrint,
-                            rawFotufilmDocument = saved.rawFotufilmDocument,
-                            rawDROMode = saved.rawDROMode,
-                            rawBaselineLutId = saved.rawBaselineLutId
-                        )
-                    } ?: saved
-                }
-            val orderedIds = orderedPresets.map { it.id }.toSet()
-            val missingBuiltIns = com.hinnka.mycamera.model.CameraPreset.BUILT_IN_PRESETS
-                .filter { it.id !in deletedIds && it.id !in orderedIds }
-            val visibleBuiltInIds = com.hinnka.mycamera.model.CameraPreset.BUILT_IN_PRESETS
-                .filter { it.id !in deletedIds }
-                .map { it.id }
-                .toSet()
-            val hasCompleteSavedBuiltInOrder = visibleBuiltInIds.isNotEmpty() &&
-                visibleBuiltInIds.all { builtInId -> orderedPresets.any { it.id == builtInId } }
-
-            if (hasCompleteSavedBuiltInOrder) {
-                orderedPresets + missingBuiltIns
-            } else {
-                val overridesById = orderedPresets.associateBy { it.id }
-                val builtInsWithOverrides = com.hinnka.mycamera.model.CameraPreset.BUILT_IN_PRESETS
-                    .filter { it.id !in deletedIds }
-                    .map { builtin -> overridesById[builtin.id] ?: builtin }
-                val customs = orderedPresets.filter { it.id !in visibleBuiltInIds }
-                builtInsWithOverrides + customs
-            }
-        }
-        .stateIn(viewModelScope, SharingStarted.Eagerly, com.hinnka.mycamera.model.CameraPreset.BUILT_IN_PRESETS)
+    val allPresets: StateFlow<List<CameraPreset>> = userPreferencesRepository.userPreferences
+        .map(UserPreferences::resolveCameraPresets)
+        .stateIn(viewModelScope, SharingStarted.Eagerly, CameraPreset.BUILT_IN_PRESETS)
 
     private val activePresetMatchState: StateFlow<ActivePresetMatchState?> = combine(
         combine(
@@ -1241,7 +1171,12 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 } else {
                     currentList.add(normalizedPreset)
                 }
-                userPreferencesRepository.update { customPresets = currentList }
+                userPreferencesRepository.update {
+                    customPresets = currentList
+                    builtInPresetRevision(normalizedPreset.id)?.let { revision ->
+                        builtInPresetEditRevisions = builtInPresetEditRevisions.orEmpty() + (normalizedPreset.id to revision)
+                    }
+                }
                 normalizedPreset
             }
             applyPreset(resolvedPreset)
@@ -1304,21 +1239,13 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     fun deletePreset(presetId: String) {
         viewModelScope.launch {
             presetMutationMutex.withLock {
-                val currentList = userPreferencesRepository.userPreferences
-                    .first()
-                    .customPresets
-                    .toMutableList()
-                currentList.removeAll { it.id == presetId }
-                userPreferencesRepository.update { customPresets = currentList }
-
-                // 如果删除的是内置预设，将其加入 deletedBuiltInIds
-                val isBuiltIn = com.hinnka.mycamera.model.CameraPreset.BUILT_IN_PRESETS.any { it.id == presetId }
-                if (isBuiltIn) {
-                    val currentDeleted = userPreferencesRepository.userPreferences.first().deletedBuiltInIds
-                    val deletedList = currentDeleted.split(",").filter { it.isNotEmpty() }.toMutableList()
-                    if (presetId !in deletedList) {
-                        deletedList.add(presetId)
-                        userPreferencesRepository.update { deletedBuiltInIds = deletedList.joinToString(",") }
+                userPreferencesRepository.update {
+                    customPresets = customPresets.filterNot { it.id == presetId }
+                    presetOrder = presetOrder.orEmpty() - presetId
+                    builtInPresetEditRevisions = builtInPresetEditRevisions?.minus(presetId)?.takeIf { it.isNotEmpty() }
+                    if (CameraPreset.BUILT_IN_PRESETS.any { it.id == presetId }) {
+                        val deletedIds = deletedBuiltInIds.split(',').filter { it.isNotEmpty() }.toSet()
+                        deletedBuiltInIds = (deletedIds + presetId).joinToString(",")
                     }
                 }
 
@@ -1340,26 +1267,25 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     fun resetToDefaultPresets() {
         viewModelScope.launch {
             presetMutationMutex.withLock {
-                userPreferencesRepository.update { deletedBuiltInIds = "" }
-                val currentList = userPreferencesRepository.userPreferences
-                    .first()
-                    .customPresets
-                    .toMutableList()
-                currentList.removeAll { it.isBuiltIn || it.id.startsWith("builtin_") }
-                userPreferencesRepository.update { customPresets = currentList }
+                userPreferencesRepository.update {
+                    customPresets = resolveCameraPresets().filterNot { it.isBuiltInRecord }
+                    deletedBuiltInIds = ""
+                    builtInPresetEditRevisions = null
+                    presetOrder = emptyList()
+                }
             }
         }
     }
 
-    fun savePresetOrder(presets: List<com.hinnka.mycamera.model.CameraPreset>) {
+    fun savePresetOrder(presetIds: List<String>) {
         viewModelScope.launch {
             presetMutationMutex.withLock {
-                val latestPresets = userPreferencesRepository.userPreferences.first().customPresets
-                val latestById = latestPresets.associateBy { it.id }
-                val orderedIds = presets.map { it.id }.toSet()
-                val orderedPresets = presets.map { preset -> latestById[preset.id] ?: preset }
-                val concurrentlyAddedPresets = latestPresets.filter { it.id !in orderedIds }
-                userPreferencesRepository.update { customPresets = orderedPresets + concurrentlyAddedPresets }
+                userPreferencesRepository.update {
+                    val currentIds = resolveCameraPresets().map { it.id }
+                    val currentIdSet = currentIds.toSet()
+                    val newOrder = (presetIds.filter { it in currentIdSet } + currentIds).distinct()
+                    if (newOrder != currentIds) presetOrder = newOrder
+                }
             }
         }
     }
