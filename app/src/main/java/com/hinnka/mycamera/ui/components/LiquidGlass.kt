@@ -82,10 +82,10 @@ data class LiquidGlassStyle(
 )
 
 internal val CameraPanelGlassStyle = LiquidGlassStyle(
-    blurRadius = 24.dp,
+    blurRadius = 40.dp,
     refractionAmount = 0.dp,
     saturation = 1f,
-    tint = AppPanelMaterial.Tint.copy(alpha = 0.4f),
+    tint = AppPanelMaterial.Tint.copy(alpha = 0.55f),
     highlightAlpha = 0f,
     fallbackColor = AppPanelMaterial.Tint.copy(alpha = 0.70f),
 )
