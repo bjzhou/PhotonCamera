@@ -58,7 +58,7 @@ import kotlin.math.floor
  * glass node is only re-rendered when its backdrop or geometry changes, not when panel content does.
  *
  * Capability tiers: API 33+ full lens + highlight; API 31-32 vibrancy with a flat rim;
- * API 30 an opaque fallback color without backdrop capture.
+ * API 30 a fallback tint without backdrop capture.
  */
 @Immutable
 data class LiquidGlassStyle(
@@ -148,14 +148,14 @@ fun LiquidGlassSurface(
 
                 val backdropPosition = backdrop.positionInRoot
                 val backdropSize = backdrop.size
-                if (!BACKDROP_SUPPORTED) {
+                if (!BACKDROP_SUPPORTED || !positionInRoot.isSpecified || !backdropPosition.isSpecified ||
+                    backdropSize == IntSize.Zero
+                ) {
                     return@drawWithCache onDrawBehind {
                         clipRect { drawPath(outline, style.fallbackColor) }
                     }
                 }
-                if (!positionInRoot.isSpecified || !backdropPosition.isSpecified ||
-                    backdropSize == IntSize.Zero || width <= 0f || height <= 0f
-                ) {
+                if (width <= 0f || height <= 0f) {
                     return@drawWithCache onDrawBehind {}
                 }
 
@@ -172,7 +172,9 @@ fun LiquidGlassSurface(
                     ceil(captureRect.bottom).toInt() - layerOffset.y,
                 )
                 if (layerSize.width <= 0 || layerSize.height <= 0) {
-                    return@drawWithCache onDrawBehind {}
+                    return@drawWithCache onDrawBehind {
+                        clipRect { drawPath(outline, style.fallbackColor) }
+                    }
                 }
 
                 val glassLayer = obtainGraphicsLayer().apply {
@@ -249,7 +251,9 @@ private fun glassEffect(
     } else {
         vibrancy
     }
-    if (shaders == null || Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) return blur
+    if (refractionAmount == 0f || refractionHeight == 0f || shaders == null ||
+        Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU
+    ) return blur
     return shaders.lensEffect(blur, shapeOffset, shapeWidth, shapeHeight, radius, bottomRadius,
         refractionHeight, refractionAmount)
 }

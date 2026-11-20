@@ -132,6 +132,7 @@ fun ColorRecipePanel(
     onEffectsChange: ((EffectParams) -> Unit)? = null,
     headerControls: (@Composable () -> Unit)? = null,
     containerShape: Shape = RoundedCornerShape(topStart = 16.dp, topEnd = 16.dp),
+    containerColor: Color = Color(0xF2121316),
     onResetAll: (() -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
@@ -385,13 +386,10 @@ fun ColorRecipePanel(
             modifier = Modifier
                 .fillMaxWidth()
                 .clip(containerShape)
-                .background(
-                    if (isCurveDragging) Color.Transparent
-                    else Color(0xF9121316).copy(alpha = 0.95f)
-                )
+                .background(if (isCurveDragging) Color.Transparent else containerColor)
                 .border(
                     0.5.dp,
-                    Color.White.copy(alpha = if (isCurveDragging) 0f else 0.08f),
+                    Color.White.copy(alpha = if (isCurveDragging || containerColor == Color.Transparent) 0f else 0.08f),
                     containerShape
                 )
                 .padding(start = 14.dp, top = 12.dp, end = 14.dp, bottom = 12.dp),
@@ -504,8 +502,6 @@ fun ColorRecipePanel(
                     onTabReset = ::resetTab,
                 )
 
-                Spacer(modifier = Modifier.height(4.dp))
-
                 when (selectedTab) {
                     RecipePanelTab.CURVE -> {
                         CurveEditorPanel(
@@ -523,7 +519,6 @@ fun ColorRecipePanel(
                             selectedSection = selectedColorSection,
                             onSectionSelected = { selectedColorSection = it }
                         )
-                        Spacer(modifier = Modifier.height(4.dp))
                         when (selectedColorSection) {
                             ColorPanelSection.CALIBRATION -> {
                                 ColorRingTabs(
@@ -539,7 +534,6 @@ fun ColorRecipePanel(
                                         }
                                     }
                                 )
-                                Spacer(modifier = Modifier.height(4.dp))
                                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                                     calibrationGroups[selectedCalibrationTabIndex].second.forEach { param ->
                                         RecipeIntegerParamItem(
@@ -564,7 +558,6 @@ fun ColorRecipePanel(
                                     onTabSelected = { selectedLchTabIndex = it },
                                     getColor = { getLchTabColor(it) }
                                 )
-                                Spacer(modifier = Modifier.height(4.dp))
                                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                                     lchGroups[selectedLchTabIndex].second.forEach { param ->
                                         RecipeIntegerParamItem(

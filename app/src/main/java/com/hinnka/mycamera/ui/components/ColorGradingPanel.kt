@@ -7,12 +7,15 @@ import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Text
@@ -38,6 +41,7 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.hinnka.mycamera.R
@@ -152,69 +156,88 @@ fun ColorGradingPanel(
             )
         }
 
-        GradingColorWheel(
-            hue = selected.hue,
-            amount = selected.amount,
-            contentDescription = selectedLabel,
-            onSelectionChange = { hue, amount ->
-                onParamsChange(currentParams.withSelection(selectedRange, hue, amount))
-            },
-            onReset = {
-                onParamsChange(currentParams.withSelection(selectedRange, 0f, 0f))
-            },
-            modifier = Modifier.size(184.dp),
-        )
+        BoxWithConstraints(Modifier.fillMaxWidth()) {
+            val wheelWidth = minOf(maxWidth * 0.44f, 160.dp)
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(16.dp),
+                verticalAlignment = Alignment.Top,
+            ) {
+                Column(
+                    modifier = Modifier.width(wheelWidth),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.spacedBy(7.dp),
+                ) {
+                    GradingColorWheel(
+                        hue = selected.hue,
+                        amount = selected.amount,
+                        contentDescription = selectedLabel,
+                        onSelectionChange = { hue, amount ->
+                            onParamsChange(currentParams.withSelection(selectedRange, hue, amount))
+                        },
+                        onReset = {
+                            onParamsChange(currentParams.withSelection(selectedRange, 0f, 0f))
+                        },
+                        modifier = Modifier.fillMaxWidth().aspectRatio(1f),
+                    )
 
-        Text(
-            text = String.format(
-                java.util.Locale.getDefault(),
-                "%.1f · %.1f",
-                selected.hue.coerceIn(0f, 1f) * 10f,
-                selected.amount.coerceIn(0f, 1f) * 10f,
-            ),
-            color = if (selected.amount > 0.001f) selectedColor else Color.White.copy(alpha = 0.48f),
-            fontSize = 11.sp,
-            fontWeight = FontWeight.SemiBold,
-            fontFamily = FontFamily.Monospace,
-        )
+                    Text(
+                        text = String.format(
+                            java.util.Locale.getDefault(),
+                            "%.1f · %.1f",
+                            selected.hue.coerceIn(0f, 1f) * 10f,
+                            selected.amount.coerceIn(0f, 1f) * 10f,
+                        ),
+                        color = if (selected.amount > 0.001f) selectedColor else Color.White.copy(alpha = 0.48f),
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        fontFamily = FontFamily.Monospace,
+                    )
+                }
+                Column(
+                    modifier = Modifier.weight(1f),
+                    verticalArrangement = Arrangement.spacedBy(7.dp),
+                ) {
+                    GradingSliderControl(
+                        label = stringResource(R.string.recipe_grading_luminance),
+                        value = selected.luminance * 10f,
+                        valueRange = -10f..10f,
+                        defaultValue = 0f,
+                        valueText = formatSignedValue(selected.luminance * 10f),
+                        onValueChange = {
+                            onParamsChange(
+                                currentParams.withLuminance(selectedRange, (it / 10f).coerceIn(-1f, 1f))
+                            )
+                        },
+                    )
 
-        GradingSliderRow(
-            label = stringResource(R.string.recipe_grading_luminance),
-            value = selected.luminance * 10f,
-            valueRange = -10f..10f,
-            defaultValue = 0f,
-            valueText = formatSignedValue(selected.luminance * 10f),
-            onValueChange = {
-                onParamsChange(
-                    currentParams.withLuminance(selectedRange, (it / 10f).coerceIn(-1f, 1f))
-                )
-            },
-        )
-
-        GradingSliderRow(
-            label = stringResource(R.string.recipe_grading_balance),
-            value = currentParams.gradingBalance * 10f,
-            valueRange = -10f..10f,
-            defaultValue = 0f,
-            valueText = formatSignedValue(currentParams.gradingBalance * 10f),
-            onValueChange = {
-                onParamsChange(currentParams.copy(gradingBalance = (it / 10f).coerceIn(-1f, 1f)))
-            },
-        )
-        GradingSliderRow(
-            label = stringResource(R.string.recipe_grading_blending),
-            value = currentParams.gradingBlending * 10f,
-            valueRange = 0f..10f,
-            defaultValue = 5f,
-            valueText = String.format(
-                java.util.Locale.getDefault(),
-                "%.1f",
-                currentParams.gradingBlending.coerceIn(0f, 1f) * 10f,
-            ),
-            onValueChange = {
-                onParamsChange(currentParams.copy(gradingBlending = (it / 10f).coerceIn(0f, 1f)))
-            },
-        )
+                    GradingSliderControl(
+                        label = stringResource(R.string.recipe_grading_balance),
+                        value = currentParams.gradingBalance * 10f,
+                        valueRange = -10f..10f,
+                        defaultValue = 0f,
+                        valueText = formatSignedValue(currentParams.gradingBalance * 10f),
+                        onValueChange = {
+                            onParamsChange(currentParams.copy(gradingBalance = (it / 10f).coerceIn(-1f, 1f)))
+                        },
+                    )
+                    GradingSliderControl(
+                        label = stringResource(R.string.recipe_grading_blending),
+                        value = currentParams.gradingBlending * 10f,
+                        valueRange = 0f..10f,
+                        defaultValue = 5f,
+                        valueText = String.format(
+                            java.util.Locale.getDefault(),
+                            "%.1f",
+                            currentParams.gradingBlending.coerceIn(0f, 1f) * 10f,
+                        ),
+                        onValueChange = {
+                            onParamsChange(currentParams.copy(gradingBlending = (it / 10f).coerceIn(0f, 1f)))
+                        },
+                    )
+                }
+            }
+        }
     }
 }
 
@@ -248,7 +271,8 @@ private fun GradingColorWheel(
                         center.x + cos(markerAngle) * currentAmount * radius,
                         center.y + sin(markerAngle) * currentAmount * radius,
                     )
-                    if ((position - markerCenter).getDistance() <= 24.dp.toPx()) {
+                    val markerHitRadius = minOf(24.dp.toPx(), minOf(size.width, size.height) * (24f / 184f))
+                    if ((position - markerCenter).getDistance() <= markerHitRadius) {
                         return
                     }
                     val dx = position.x - center.x
@@ -283,9 +307,8 @@ private fun GradingColorWheel(
                             sin(angle) * currentAmount * radius,
                         )
                         val pointerSelection = position - center
-                        selectionStart = if (
-                            (pointerSelection - currentSelection).getDistance() <= 24.dp.toPx()
-                        ) {
+                        val markerHitRadius = minOf(24.dp.toPx(), minOf(size.width, size.height) * (24f / 184f))
+                        selectionStart = if ((pointerSelection - currentSelection).getDistance() <= markerHitRadius) {
                             currentSelection
                         } else {
                             pointerSelection
@@ -317,6 +340,7 @@ private fun GradingColorWheel(
     ) {
         val inset = 8.dp.toPx()
         val diameter = minOf(size.width, size.height) - inset * 2f
+        if (diameter <= 0f) return@Canvas
         val center = Offset(size.width / 2f, size.height / 2f)
         val radius = diameter / 2f
         val wheelTopLeft = Offset(center.x - radius, center.y - radius)
@@ -453,7 +477,7 @@ private fun GradingTonePreview(
 }
 
 @Composable
-private fun GradingSliderRow(
+private fun GradingSliderControl(
     label: String,
     value: Float,
     valueRange: ClosedFloatingPointRange<Float>,
@@ -461,21 +485,35 @@ private fun GradingSliderRow(
     valueText: String,
     onValueChange: (Float) -> Unit,
 ) {
-    Row(
+    Column(
         modifier = Modifier
             .fillMaxWidth()
-            .height(36.dp)
             .background(Color.White.copy(alpha = 0.02f), RoundedCornerShape(6.dp))
-            .padding(horizontal = 8.dp),
-        verticalAlignment = Alignment.CenterVertically,
+            .padding(horizontal = 8.dp, vertical = 4.dp),
+        verticalArrangement = Arrangement.spacedBy(2.dp),
     ) {
-        Text(
-            text = label,
-            color = Color.White.copy(alpha = 0.66f),
-            fontSize = 11.sp,
-            modifier = Modifier.size(width = 58.dp, height = 20.dp),
-            maxLines = 1,
-        )
+        Row(
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(
+                text = label,
+                color = Color.White.copy(alpha = 0.66f),
+                fontSize = 11.sp,
+                modifier = Modifier.weight(1f),
+                overflow = TextOverflow.Ellipsis,
+                maxLines = 1,
+            )
+            Text(
+                text = valueText,
+                color = Color.White.copy(alpha = 0.72f),
+                fontSize = 10.sp,
+                fontWeight = FontWeight.Medium,
+                textAlign = TextAlign.End,
+                fontFamily = FontFamily.Monospace,
+                maxLines = 1,
+            )
+        }
         CustomSlider(
             value = value,
             onValueChange = onValueChange,
@@ -485,19 +523,6 @@ private fun GradingSliderRow(
             inactiveTrackColor = Color.White.copy(alpha = 0.14f),
             thumbColor = Color.White,
             thumbRadius = 7.dp,
-            modifier = Modifier
-                .weight(1f)
-                .padding(horizontal = 8.dp),
-        )
-        Text(
-            text = valueText,
-            color = Color.White.copy(alpha = 0.72f),
-            fontSize = 10.sp,
-            fontWeight = FontWeight.Medium,
-            textAlign = TextAlign.End,
-            fontFamily = FontFamily.Monospace,
-            modifier = Modifier.size(width = 42.dp, height = 20.dp),
-            maxLines = 1,
         )
     }
 }

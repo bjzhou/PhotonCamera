@@ -54,27 +54,50 @@ fun CurveEditorPanel(
     onCurveChange: (CurveChannel, FloatArray?) -> Unit,
     imageHistogram: ImageHistogram? = null,
     onDragStateChange: (Boolean) -> Unit = {},
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
 ) {
     var activeChannel by remember { mutableStateOf(CurveChannel.MASTER) }
     var visibleChannels by remember { mutableStateOf(CurveChannel.entries.toSet()) }
 
-    Column(
+    val currentPoints = currentParams.getCurvePoints(activeChannel)
+    val inactiveCurves = visibleChannels
+        .asSequence()
+        .filter { it != activeChannel }
+        .map { channel ->
+            DisplayCurve(
+                points = currentParams.getCurvePoints(channel) ?: identityPoints(),
+                color = channel.color,
+            )
+        }
+        .toList()
+
+    Row(
         modifier = modifier.fillMaxWidth(),
-        verticalArrangement = Arrangement.spacedBy(6.dp),
-        horizontalAlignment = Alignment.CenterHorizontally,
+        horizontalArrangement = Arrangement.Absolute.spacedBy(6.dp, Alignment.CenterHorizontally),
+        verticalAlignment = Alignment.CenterVertically,
     ) {
-        val currentPoints = currentParams.getCurvePoints(activeChannel)
-        val inactiveCurves = visibleChannels
-            .asSequence()
-            .filter { it != activeChannel }
-            .map { channel ->
-                DisplayCurve(
-                    points = currentParams.getCurvePoints(channel) ?: identityPoints(),
-                    color = channel.color,
+        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            CurveChannel.entries.forEach { channel ->
+                CurveChannelButton(
+                    channel = channel,
+                    isVisible = channel in visibleChannels,
+                    isActive = activeChannel == channel,
+                    onClick = {
+                        when {
+                            channel !in visibleChannels -> {
+                                visibleChannels = visibleChannels + channel
+                                activeChannel = channel
+                            }
+                            activeChannel != channel -> activeChannel = channel
+                            visibleChannels.size > 1 -> {
+                                visibleChannels = visibleChannels - channel
+                                activeChannel = visibleChannels.first()
+                            }
+                        }
+                    },
                 )
             }
-            .toList()
+        }
 
         key(activeChannel) {
             CurveCanvas(
@@ -93,60 +116,41 @@ fun CurveEditorPanel(
                     }
                     onCurveChange(activeChannel, arr)
                 },
-                modifier = Modifier.fillMaxWidth(),
+                modifier = Modifier
+                    .widthIn(max = 288.dp)
+                    .fillMaxWidth(),
             )
         }
+    }
+}
 
-        // 参考移动端修图应用，通道放到大画布下方，不再挤占横向编辑空间。
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 24.dp),
-            horizontalArrangement = Arrangement.SpaceEvenly,
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            CurveChannel.entries.forEach { channel ->
-                val isVisible = channel in visibleChannels
-                val isActive = activeChannel == channel
-                Box(
-                    modifier = Modifier
-                        .size(40.dp)
-                        .clip(RoundedCornerShape(8.dp))
-                        .background(
-                            when {
-                                isActive -> channel.color.copy(alpha = 0.28f)
-                                isVisible -> channel.color.copy(alpha = 0.12f)
-                                else -> Color.Transparent
-                            }
-                        )
-                        .clickable {
-                            when {
-                                !isVisible -> {
-                                    visibleChannels = visibleChannels + channel
-                                    activeChannel = channel
-                                }
-                                !isActive -> activeChannel = channel
-                                visibleChannels.size > 1 -> {
-                                    visibleChannels = visibleChannels - channel
-                                    activeChannel = visibleChannels.first()
-                                }
-                            }
-                        },
-                    contentAlignment = Alignment.Center,
-                ) {
-                    Text(
-                        text = channel.label,
-                        color = if (isVisible) {
-                            channel.color
-                        } else {
-                            channel.color.copy(alpha = 0.45f)
-                        },
-                        fontSize = 12.sp,
-                        fontWeight = if (isActive) FontWeight.Bold else FontWeight.Normal,
-                    )
+@Composable
+private fun CurveChannelButton(
+    channel: CurveChannel,
+    isVisible: Boolean,
+    isActive: Boolean,
+    onClick: () -> Unit,
+) {
+    Box(
+        modifier = Modifier
+            .size(40.dp)
+            .clip(RoundedCornerShape(8.dp))
+            .background(
+                when {
+                    isActive -> channel.color.copy(alpha = 0.28f)
+                    isVisible -> channel.color.copy(alpha = 0.12f)
+                    else -> Color.Transparent
                 }
-            }
-        }
+            )
+            .clickable(onClick = onClick),
+        contentAlignment = Alignment.Center,
+    ) {
+        Text(
+            text = channel.label,
+            color = if (isVisible) channel.color else channel.color.copy(alpha = 0.45f),
+            fontSize = 12.sp,
+            fontWeight = if (isActive) FontWeight.Bold else FontWeight.Normal,
+        )
     }
 }
 
@@ -167,7 +171,7 @@ private fun CurveCanvas(
 ) {
     val density = LocalDensity.current
     val hitThresholdPx = with(density) { 30.dp.toPx() }
-    val graphInsetPx = with(density) { 16.dp.toPx() }
+    val graphInsetPx = with(density) { 10.dp.toPx() }
 
     // 内部拖动状态；pointerInput key 使用 state 对象引用（稳定）
     val controlPointsState = remember { mutableStateOf(parsePoints(points)) }
@@ -202,7 +206,7 @@ private fun CurveCanvas(
     var lastTapTime by remember { mutableLongStateOf(0L) }
     var lastTapIndex by remember { mutableIntStateOf(-1) }
 
-    Box(modifier = modifier.padding(vertical = 4.dp)) {
+    Box(modifier = modifier) {
         Canvas(
             modifier = Modifier
                 .fillMaxWidth()

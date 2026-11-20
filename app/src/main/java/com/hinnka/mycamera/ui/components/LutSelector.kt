@@ -198,6 +198,7 @@ fun LutSelector(
     presetThumbnailInput: com.hinnka.mycamera.lut.PresetThumbnailInput? = null,
     onEditPreset: ((String) -> Unit)? = null,
     presetLookActive: Boolean = false,
+    showHorizontalHeader: Boolean = true,
 ) {
     val favoriteText = stringResource(R.string.favorite)
     val uncategorizedText = stringResource(R.string.uncategorized)
@@ -522,112 +523,114 @@ fun LutSelector(
             verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
             headerContent?.invoke()
-            // 顶栏第 1 行：当前项名称（居左）+ 操作按钮（编辑 / 新建）与设置图标（居右）
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .heightIn(min = 28.dp)
-                    .padding(horizontal = 10.dp),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                when (actualMode) {
-                    LutSelectorMode.Style -> {
-                        val currentLut = availableLuts.find { it.id == activeLutId }
-                        val currentName = if (activeLutId == null || activeLutId == "none") {
-                            stringResource(R.string.none)
-                        } else {
-                            currentLut?.getName() ?: ""
-                        }
-                        Text(
-                            text = currentName,
-                            color = Color.White,
-                            fontSize = 13.sp,
-                            fontWeight = FontWeight.Bold,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                            modifier = Modifier.weight(1f).padding(end = 8.dp).basicMarquee(),
-                            style = LocalTextStyle.current.copy(shadow = ViewfinderTextShadow)
-                        )
-
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(6.dp)
-                        ) {
-                            if (editActiveLut != null) {
-                                LutEditButton(onClick = editActiveLut)
+            if (showHorizontalHeader) {
+                // 顶栏第 1 行：当前项名称（居左）+ 操作按钮（编辑 / 新建）与设置图标（居右）
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(min = 28.dp)
+                        .padding(horizontal = 10.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    when (actualMode) {
+                        LutSelectorMode.Style -> {
+                            val currentLut = availableLuts.find { it.id == activeLutId }
+                            val currentName = if (activeLutId == null || activeLutId == "none") {
+                                stringResource(R.string.none)
+                            } else {
+                                currentLut?.getName() ?: ""
                             }
+                            Text(
+                                text = currentName,
+                                color = Color.White,
+                                fontSize = 13.sp,
+                                fontWeight = FontWeight.Bold,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                                modifier = Modifier.weight(1f).padding(end = 8.dp).basicMarquee(),
+                                style = LocalTextStyle.current.copy(shadow = ViewfinderTextShadow)
+                            )
 
-                            if (onManageClick != null) {
-                                var lastClickTime by remember { mutableLongStateOf(0L) }
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(6.dp)
+                            ) {
+                                if (editActiveLut != null) {
+                                    LutEditButton(onClick = editActiveLut)
+                                }
+
+                                if (onManageClick != null) {
+                                    var lastClickTime by remember { mutableLongStateOf(0L) }
+                                    LutPanelIconButton(
+                                        imageVector = Icons.Default.Settings,
+                                        contentDescription = stringResource(R.string.settings_filter_management),
+                                        onClick = {
+                                            val currentTime = System.currentTimeMillis()
+                                            if (currentTime - lastClickTime > 1000) {
+                                                lastClickTime = currentTime
+                                                onManageClick(activeLutId ?: "")
+                                            }
+                                        }
+                                    )
+                                }
+                            }
+                        }
+                        LutSelectorMode.Frame -> {
+                            val currentFrame = availableFrames.find { it.id == currentFrameId }
+                            val currentName = if (currentFrameId == null) stringResource(R.string.none) else (currentFrame?.name ?: "")
+                            Text(
+                                text = currentName,
+                                color = Color.White,
+                                fontSize = 13.sp,
+                                fontWeight = FontWeight.Bold,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                                modifier = Modifier.weight(1f).padding(end = 8.dp).basicMarquee(),
+                                style = LocalTextStyle.current.copy(shadow = ViewfinderTextShadow)
+                            )
+
+                            if (onFrameManagementClick != null) {
                                 LutPanelIconButton(
                                     imageVector = Icons.Default.Settings,
-                                    contentDescription = stringResource(R.string.settings_filter_management),
-                                    onClick = {
-                                        val currentTime = System.currentTimeMillis()
-                                        if (currentTime - lastClickTime > 1000) {
-                                            lastClickTime = currentTime
-                                            onManageClick(activeLutId ?: "")
-                                        }
-                                    }
+                                    contentDescription = stringResource(R.string.settings_frame_management),
+                                    onClick = onFrameManagementClick
                                 )
                             }
                         }
-                    }
-                    LutSelectorMode.Frame -> {
-                        val currentFrame = availableFrames.find { it.id == currentFrameId }
-                        val currentName = if (currentFrameId == null) stringResource(R.string.none) else (currentFrame?.name ?: "")
-                        Text(
-                            text = currentName,
-                            color = Color.White,
-                            fontSize = 13.sp,
-                            fontWeight = FontWeight.Bold,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                            modifier = Modifier.weight(1f).padding(end = 8.dp).basicMarquee(),
-                            style = LocalTextStyle.current.copy(shadow = ViewfinderTextShadow)
-                        )
-
-                        if (onFrameManagementClick != null) {
-                            LutPanelIconButton(
-                                imageVector = Icons.Default.Settings,
-                                contentDescription = stringResource(R.string.settings_frame_management),
-                                onClick = onFrameManagementClick
-                            )
-                        }
-                    }
-                    LutSelectorMode.Presets -> {
-                        val currentPreset = activePreset
-                        val currentName = currentPreset?.let { presetDisplayName(it) }.orEmpty()
-                        Text(
-                            text = if (currentPreset != null && activePresetModified) {
-                                "$currentName*"
-                            } else {
-                                currentName
-                            },
-                            color = Color.White,
-                            fontSize = 13.sp,
-                            fontWeight = FontWeight.Bold,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                            modifier = Modifier.weight(1f).padding(end = 8.dp).basicMarquee(),
-                            style = LocalTextStyle.current.copy(shadow = ViewfinderTextShadow)
-                        )
-
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(6.dp)
-                        ) {
-                            LutPanelPresetActionButton(
-                                text = stringResource(if (activePresetModified) R.string.preset_save_as else R.string.preset_new),
-                                onClick = onCreatePresetClick
+                        LutSelectorMode.Presets -> {
+                            val currentPreset = activePreset
+                            val currentName = currentPreset?.let { presetDisplayName(it) }.orEmpty()
+                            Text(
+                                text = if (currentPreset != null && activePresetModified) {
+                                    "$currentName*"
+                                } else {
+                                    currentName
+                                },
+                                color = Color.White,
+                                fontSize = 13.sp,
+                                fontWeight = FontWeight.Bold,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                                modifier = Modifier.weight(1f).padding(end = 8.dp).basicMarquee(),
+                                style = LocalTextStyle.current.copy(shadow = ViewfinderTextShadow)
                             )
 
-                            LutPanelIconButton(
-                                imageVector = Icons.Default.Settings,
-                                contentDescription = stringResource(R.string.settings_preset_management),
-                                onClick = onPresetManagementClick
-                            )
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(6.dp)
+                            ) {
+                                LutPanelPresetActionButton(
+                                    text = stringResource(if (activePresetModified) R.string.preset_save_as else R.string.preset_new),
+                                    onClick = onCreatePresetClick
+                                )
+
+                                LutPanelIconButton(
+                                    imageVector = Icons.Default.Settings,
+                                    contentDescription = stringResource(R.string.settings_preset_management),
+                                    onClick = onPresetManagementClick
+                                )
+                            }
                         }
                     }
                 }

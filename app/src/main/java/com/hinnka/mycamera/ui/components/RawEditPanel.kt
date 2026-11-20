@@ -52,7 +52,6 @@ import com.hinnka.mycamera.raw.SpectralFilmSelection
 import com.hinnka.mycamera.raw.SpectralFilmUiInfo
 import com.hinnka.mycamera.raw.fotufilm.FotufilmDocument
 import kotlin.math.roundToInt
-import com.hinnka.mycamera.ui.settings.DropdownSettingItem
 import com.hinnka.mycamera.ui.icons.AppIcons
 
 enum class RawEditPanelContentMode {
@@ -150,6 +149,7 @@ fun RawEditPanel(
     contentMode: RawEditPanelContentMode = RawEditPanelContentMode.FULL,
     hncsFilmCurveMode: HncsFilmCurveMode = HncsFilmCurveMode.Standard,
     onHncsFilmCurveModeChange: (HncsFilmCurveMode) -> Unit = {},
+    compactLayout: Boolean = false,
     modifier: Modifier = Modifier
 ) {
     Column(
@@ -207,62 +207,85 @@ fun RawEditPanel(
         )
 
         if (contentMode == RawEditPanelContentMode.FULL) {
-            SliderSettingItem(
-                title = stringResource(R.string.settings_raw_exposure_compensation),
-                value = rawExposureCompensation,
-                valueRange = MeteringSystem.RAW_EXPOSURE_MIN_EV..MeteringSystem.RAW_EXPOSURE_MAX_EV,
-                resetValue = 0f,
-                onResetValue = onRawExposureCompensationReset,
-                onValueChange = {
-                    onAdjustmentStart()
-                    onRawExposureCompensationChange(it)
-                },
-                onValueChangeFinished = onAdjustmentEnd
-            )
-            SliderSettingItem(
-                title = stringResource(R.string.settings_raw_highlights_adjustment),
-                value = rawHighlightsAdjustment,
-                valueRange = -1f..1f,
-                resetValue = 0f,
-                onValueChange = {
-                    onAdjustmentStart()
-                    onRawHighlightsAdjustmentChange(it)
-                },
-                onValueChangeFinished = onAdjustmentEnd
-            )
-            SliderSettingItem(
-                title = stringResource(R.string.settings_raw_shadows_adjustment),
-                value = rawShadowsAdjustment,
-                valueRange = -1f..1f,
-                resetValue = 0f,
-                onValueChange = {
-                    onAdjustmentStart()
-                    onRawShadowsAdjustmentChange(it)
-                },
-                onValueChangeFinished = onAdjustmentEnd
-            )
-            SliderSettingItem(
-                title = stringResource(R.string.settings_raw_blacks_adjustment),
-                value = rawBlackPointCorrection,
-                valueRange = -1f..1f,
-                resetValue = 0f,
-                onValueChange = {
-                    onAdjustmentStart()
-                    onRawBlackPointCorrectionChange(it)
-                },
-                onValueChangeFinished = onAdjustmentEnd
-            )
-            SliderSettingItem(
-                title = stringResource(R.string.settings_raw_whites_adjustment),
-                value = rawWhitePointCorrection,
-                valueRange = -1f..1f,
-                resetValue = 0f,
-                onValueChange = {
-                    onAdjustmentStart()
-                    onRawWhitePointCorrectionChange(it)
-                },
-                onValueChangeFinished = onAdjustmentEnd
-            )
+            var lightAdjustmentsExpanded by remember { mutableStateOf(false) }
+            if (compactLayout) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(min = 48.dp)
+                        .clickable(role = Role.Button) {
+                            lightAdjustmentsExpanded = !lightAdjustmentsExpanded
+                        }
+                        .padding(vertical = 8.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(stringResource(R.string.recipe_tab_light), color = Color.White, fontSize = 16.sp)
+                    Icon(
+                        imageVector = if (lightAdjustmentsExpanded) AppIcons.ExpandLess else AppIcons.ExpandMore,
+                        contentDescription = null,
+                        tint = Color.White.copy(alpha = 0.6f),
+                    )
+                }
+            }
+            if (!compactLayout || lightAdjustmentsExpanded) {
+                SliderSettingItem(
+                    title = stringResource(R.string.settings_raw_exposure_compensation),
+                    value = rawExposureCompensation,
+                    valueRange = MeteringSystem.RAW_EXPOSURE_MIN_EV..MeteringSystem.RAW_EXPOSURE_MAX_EV,
+                    resetValue = 0f,
+                    onResetValue = onRawExposureCompensationReset,
+                    onValueChange = {
+                        onAdjustmentStart()
+                        onRawExposureCompensationChange(it)
+                    },
+                    onValueChangeFinished = onAdjustmentEnd
+                )
+                SliderSettingItem(
+                    title = stringResource(R.string.settings_raw_highlights_adjustment),
+                    value = rawHighlightsAdjustment,
+                    valueRange = -1f..1f,
+                    resetValue = 0f,
+                    onValueChange = {
+                        onAdjustmentStart()
+                        onRawHighlightsAdjustmentChange(it)
+                    },
+                    onValueChangeFinished = onAdjustmentEnd
+                )
+                SliderSettingItem(
+                    title = stringResource(R.string.settings_raw_shadows_adjustment),
+                    value = rawShadowsAdjustment,
+                    valueRange = -1f..1f,
+                    resetValue = 0f,
+                    onValueChange = {
+                        onAdjustmentStart()
+                        onRawShadowsAdjustmentChange(it)
+                    },
+                    onValueChangeFinished = onAdjustmentEnd
+                )
+                SliderSettingItem(
+                    title = stringResource(R.string.settings_raw_blacks_adjustment),
+                    value = rawBlackPointCorrection,
+                    valueRange = -1f..1f,
+                    resetValue = 0f,
+                    onValueChange = {
+                        onAdjustmentStart()
+                        onRawBlackPointCorrectionChange(it)
+                    },
+                    onValueChangeFinished = onAdjustmentEnd
+                )
+                SliderSettingItem(
+                    title = stringResource(R.string.settings_raw_whites_adjustment),
+                    value = rawWhitePointCorrection,
+                    valueRange = -1f..1f,
+                    resetValue = 0f,
+                    onValueChange = {
+                        onAdjustmentStart()
+                        onRawWhitePointCorrectionChange(it)
+                    },
+                    onValueChangeFinished = onAdjustmentEnd
+                )
+            }
             if (showDngMetadataControls) {
                 RawDngMetadataCorrectionSettings(
                     rawBlackLevelMode = rawBlackLevelMode,
@@ -274,7 +297,8 @@ fun RawEditPanel(
                     onRawCustomBlackLevelChange = onRawCustomBlackLevelChange,
                     onRawWhiteLevelModeChange = onRawWhiteLevelModeChange,
                     onRawCustomWhiteLevelChange = onRawCustomWhiteLevelChange,
-                    onRawCfaCorrectionModeChange = onRawCfaCorrectionModeChange
+                    onRawCfaCorrectionModeChange = onRawCfaCorrectionModeChange,
+                    useDropdowns = compactLayout,
                 )
             }
         }
@@ -542,6 +566,7 @@ fun RawDngMetadataCorrectionSettings(
     onRawWhiteLevelModeChange: (String) -> Unit,
     onRawCustomWhiteLevelChange: (Float) -> Unit,
     onRawCfaCorrectionModeChange: (String) -> Unit,
+    useDropdowns: Boolean = false,
     modifier: Modifier = Modifier
 ) {
     Column(modifier = modifier.fillMaxWidth()) {
@@ -558,7 +583,8 @@ fun RawDngMetadataCorrectionSettings(
                 "Custom" to stringResource(R.string.settings_black_level_custom)
             ),
             currentLevel = rawBlackLevelMode,
-            onLevelSelected = onRawBlackLevelModeChange
+            onLevelSelected = onRawBlackLevelModeChange,
+            useDropdown = useDropdowns,
         )
         if (rawBlackLevelMode == "Custom") {
             RawNumberInputSetting(
@@ -579,7 +605,8 @@ fun RawDngMetadataCorrectionSettings(
                 RawWhiteLevelCorrection.MODE_CUSTOM to stringResource(R.string.settings_white_level_custom)
             ),
             currentLevel = rawWhiteLevelMode,
-            onLevelSelected = onRawWhiteLevelModeChange
+            onLevelSelected = onRawWhiteLevelModeChange,
+            useDropdown = useDropdowns,
         )
         if (rawWhiteLevelMode == RawWhiteLevelCorrection.MODE_CUSTOM) {
             RawNumberInputSetting(
@@ -607,7 +634,8 @@ fun RawDngMetadataCorrectionSettings(
                 RawCfaCorrection.MODE_8X8_BGGR to stringResource(R.string.settings_cfa_correction_8x8_bggr)
             ),
             currentLevel = rawCfaCorrectionMode,
-            onLevelSelected = onRawCfaCorrectionModeChange
+            onLevelSelected = onRawCfaCorrectionModeChange,
+            useDropdown = useDropdowns,
         )
     }
 }
@@ -810,8 +838,13 @@ private fun RawChoiceSetting(
     levels: List<Pair<String, String>>,
     currentLevel: String,
     onLevelSelected: (String) -> Unit,
+    useDropdown: Boolean = false,
     modifier: Modifier = Modifier
 ) {
+    if (useDropdown) {
+        RawChoiceDropdown(title, description, levels, currentLevel, onLevelSelected, modifier)
+        return
+    }
     Column(
         modifier = modifier
             .fillMaxWidth()
@@ -853,6 +886,55 @@ private fun RawChoiceSetting(
                         fontSize = 12.sp,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun RawChoiceDropdown(
+    title: String,
+    description: String,
+    levels: List<Pair<String, String>>,
+    currentLevel: String,
+    onLevelSelected: (String) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    var expanded by remember { mutableStateOf(false) }
+    Row(
+        modifier = modifier
+            .fillMaxWidth()
+            .clickable(role = Role.Button) { expanded = true }
+            .padding(vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+            Text(title, color = Color.White, fontSize = 16.sp)
+            Text(description, color = Color.White.copy(alpha = 0.6f), fontSize = 13.sp, lineHeight = 18.sp)
+            Text(
+                text = levels.firstOrNull { (level, _) -> level == currentLevel }?.second ?: currentLevel,
+                color = AccentColor,
+                fontSize = 14.sp,
+            )
+        }
+        Spacer(Modifier.width(16.dp))
+        Box {
+            Icon(AppIcons.ExpandMore, contentDescription = null, tint = Color.White.copy(alpha = 0.6f))
+            DropdownMenu(
+                expanded = expanded,
+                onDismissRequest = { expanded = false },
+                modifier = Modifier.heightIn(max = 320.dp),
+                containerColor = Color(0xFF2C2C2E),
+            ) {
+                levels.forEach { (level, label) ->
+                    DropdownMenuItem(
+                        text = { Text(label, color = if (level == currentLevel) AccentColor else Color.White) },
+                        onClick = {
+                            expanded = false
+                            onLevelSelected(level)
+                        },
                     )
                 }
             }
@@ -2109,13 +2191,11 @@ fun RawBaselineColorCorrectionBottomSheet(
     availableLuts: List<LutInfo>,
     thumbnail: Bitmap?,
     title: String = stringResource(R.string.settings_baseline_raw_title),
-    containerColor: Color? = null,
     onSelectLut: (String?) -> Unit,
     onEditRecipe: ((String) -> Unit)? = null,
     onDismiss: () -> Unit
 ) {
     AppModalBottomSheet(
-        containerColor = containerColor,
         style = AppSheetStyle.Translucent,
         onDismissRequest = onDismiss,
         dragHandle = { BottomSheetDefaults.DragHandle(color = Color.White.copy(alpha = 0.2f)) }
