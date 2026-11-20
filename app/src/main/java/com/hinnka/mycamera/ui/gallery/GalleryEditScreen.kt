@@ -145,11 +145,11 @@ private val EditPanelMaxHeight = 544.dp
 private val EditPanelCornerRadius = 24.dp
 private val EditPanelShape = RoundedCornerShape(topStart = EditPanelCornerRadius, topEnd = EditPanelCornerRadius)
 private val EditPanelGlassStyle = LiquidGlassStyle(
-    blurRadius = 36.dp,
+    blurRadius = 24.dp,
     refractionAmount = 0.dp,
     saturation = 1f,
     tint = AppPanelMaterial.Tint.copy(alpha = 0.15f),
-    highlightAlpha = 0.3f,
+    highlightAlpha = 0f,
     fallbackColor = AppPanelMaterial.Tint.copy(alpha = 0.55f),
 )
 

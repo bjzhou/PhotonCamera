@@ -112,6 +112,8 @@ private val exposureSteps = listOf(
     0.3f, 0.7f, 1.0f, 1.3f, 1.7f, 2.0f
 )
 
+internal val DefaultColorRecipePanelContainerColor = Color(0xF2121316)
+
 /**
  * 色彩配方控制面板
  *
@@ -132,7 +134,7 @@ fun ColorRecipePanel(
     onEffectsChange: ((EffectParams) -> Unit)? = null,
     headerControls: (@Composable () -> Unit)? = null,
     containerShape: Shape = RoundedCornerShape(topStart = 16.dp, topEnd = 16.dp),
-    containerColor: Color = Color(0xF2121316),
+    containerColor: Color = DefaultColorRecipePanelContainerColor,
     onResetAll: (() -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {

@@ -1,21 +1,26 @@
 package com.hinnka.mycamera.ui.camera
 
-import com.hinnka.mycamera.ui.components.AppModalBottomSheet
-import com.hinnka.mycamera.ui.components.AppSheetStyle
-
-import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.hinnka.mycamera.lut.BaselineColorCorrectionTarget
 import com.hinnka.mycamera.model.ColorRecipeParams
 import com.hinnka.mycamera.model.toEffectParams
+import com.hinnka.mycamera.ui.components.AppModalBottomSheet
+import com.hinnka.mycamera.ui.components.AppSheetStyle
 import com.hinnka.mycamera.ui.components.ColorRecipePanel
+import com.hinnka.mycamera.ui.components.CurveChannel
+import com.hinnka.mycamera.ui.components.DefaultColorRecipePanelContainerColor
 import com.hinnka.mycamera.ui.components.ImageHistogram
+import com.hinnka.mycamera.ui.components.LiquidGlassBackdrop
 import com.hinnka.mycamera.viewmodel.LutEditViewModel
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -40,10 +45,10 @@ fun LutEditBottomSheet(
     showEffects: Boolean = false,
     editorTarget: LutEditorTarget = LutEditorTarget.CREATIVE_GLOBAL,
     containerColor: Color = Color.Transparent,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    backdrop: LiquidGlassBackdrop? = null,
 ) {
     val lutEditViewModel: LutEditViewModel = viewModel()
-    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     val coroutineScope = rememberCoroutineScope()
 
     var editingParams by remember { mutableStateOf(ColorRecipeParams.DEFAULT) }
@@ -91,57 +96,64 @@ fun LutEditBottomSheet(
         }
     }
 
-    AppModalBottomSheet(
-        containerColor = containerColor,
-        style = AppSheetStyle.Translucent,
-        onDismissRequest = {
-            flushLutSave()
-            onDismiss()
-        },
-        sheetState = sheetState,
-        modifier = modifier,
-        dragHandle = null,
-    ) {
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .navigationBarsPadding()
+    val dismissEditor: () -> Unit = {
+        flushLutSave()
+        onDismiss()
+    }
+    val editorContent: @Composable (Modifier) -> Unit = { contentModifier ->
+        ColorRecipePanel(
+            currentParams = editingParams,
+            onParamChange = { param, value ->
+                onParamsUpdated(param.setValue(editingParams, value))
+            },
+            onParamsChange = ::onParamsUpdated,
+            onRemarksChange = {
+                onParamsUpdated(editingParams.copy(remarks = it))
+            },
+            onCurveChange = { channel, points ->
+                onParamsUpdated(
+                    when (channel) {
+                        CurveChannel.MASTER -> editingParams.copy(masterCurvePoints = points)
+                        CurveChannel.RED -> editingParams.copy(redCurvePoints = points)
+                        CurveChannel.GREEN -> editingParams.copy(greenCurvePoints = points)
+                        CurveChannel.BLUE -> editingParams.copy(blueCurvePoints = points)
+                    }
+                )
+            },
+            imageHistogram = imageHistogram,
+            showLutIntensity = editorTarget == LutEditorTarget.CREATIVE_GLOBAL && lutId != "none",
+            currentEffects = editingParams.toEffectParams().takeIf { showEffects },
+            onEffectsChange = if (showEffects) {
+                { effects -> onParamsUpdated(effects.applyTo(editingParams)) }
+            } else {
+                null
+            },
+            containerColor = if (backdrop != null) Color.Transparent else DefaultColorRecipePanelContainerColor,
+            modifier = contentModifier
+        )
+    }
+
+    if (backdrop == null) {
+        AppModalBottomSheet(
+            containerColor = containerColor,
+            style = AppSheetStyle.Translucent,
+            onDismissRequest = dismissEditor,
+            sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
+            modifier = modifier,
+            dragHandle = null,
         ) {
-            ColorRecipePanel(
-                currentParams = editingParams,
-                onParamChange = { param, value ->
-                    onParamsUpdated(param.setValue(editingParams, value))
-                },
-                onParamsChange = { newParams ->
-                    onParamsUpdated(newParams)
-                },
-                onRemarksChange = {
-                    onParamsUpdated(editingParams.copy(remarks = it))
-                },
-                onCurveChange = { channel, points ->
-                    onParamsUpdated(
-                        when (channel) {
-                            com.hinnka.mycamera.ui.components.CurveChannel.MASTER ->
-                                editingParams.copy(masterCurvePoints = points)
-                            com.hinnka.mycamera.ui.components.CurveChannel.RED ->
-                                editingParams.copy(redCurvePoints = points)
-                            com.hinnka.mycamera.ui.components.CurveChannel.GREEN ->
-                                editingParams.copy(greenCurvePoints = points)
-                            com.hinnka.mycamera.ui.components.CurveChannel.BLUE ->
-                                editingParams.copy(blueCurvePoints = points)
-                        }
-                    )
-                },
-                imageHistogram = imageHistogram,
-                showLutIntensity = editorTarget == LutEditorTarget.CREATIVE_GLOBAL && lutId != "none",
-                currentEffects = editingParams.toEffectParams().takeIf { showEffects },
-                onEffectsChange = if (showEffects) {
-                    { effects -> onParamsUpdated(effects.applyTo(editingParams)) }
-                } else {
-                    null
-                },
-                modifier = Modifier.fillMaxWidth()
-            )
+            Column(Modifier.fillMaxWidth().navigationBarsPadding()) {
+                editorContent(Modifier.fillMaxWidth())
+            }
+        }
+    } else {
+        CameraPanelBottomSheet(
+            backdrop = backdrop,
+            onDismissRequest = dismissEditor,
+            modifier = modifier,
+        ) {
+            val scrollState = rememberScrollState()
+            editorContent(Modifier.fillMaxWidth().verticalScroll(scrollState, enabled = scrollState.maxValue > 0))
         }
     }
 }

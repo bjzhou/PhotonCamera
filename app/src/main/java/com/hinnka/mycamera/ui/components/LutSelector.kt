@@ -63,6 +63,11 @@ internal fun lutCategoryTitle(category: String): String = when (category) {
 }
 
 private val LutPanelSurface = Color.Black.copy(alpha = 0.15f)
+private val CameraLookPanelCornerRadius = 16.dp
+private val CameraLookPanelShape = RoundedCornerShape(
+    topStart = CameraLookPanelCornerRadius,
+    topEnd = CameraLookPanelCornerRadius
+)
 internal val LutPanelOptionSize = 64.dp
 internal val LutPanelOptionShape = RoundedCornerShape(8.dp)
 internal val LutPanelOptionSurface = Color.Black.copy(alpha = 0.2f)
@@ -199,6 +204,7 @@ fun LutSelector(
     onEditPreset: ((String) -> Unit)? = null,
     presetLookActive: Boolean = false,
     showHorizontalHeader: Boolean = true,
+    cameraBackdrop: LiquidGlassBackdrop? = null,
 ) {
     val favoriteText = stringResource(R.string.favorite)
     val uncategorizedText = stringResource(R.string.uncategorized)
@@ -401,6 +407,16 @@ fun LutSelector(
     }
 
     val activePreset = allPresets.firstOrNull { it.id == activePresetId }
+    val cameraPanelBackground = if (cameraBackdrop != null && (compact || expanded)) {
+        Modifier.liquidGlassBackground(
+            backdrop = cameraBackdrop,
+            cornerRadius = CameraLookPanelCornerRadius,
+            openBottomEdge = true,
+            style = CameraPanelGlassStyle
+        )
+    } else {
+        Modifier.background(CameraLookPanelSurface)
+    }
     val cameraModeRail = @Composable {
         CameraLookModeRail(
             selectedMode = actualMode,
@@ -418,8 +434,8 @@ fun LutSelector(
             Box(
                 modifier = Modifier.fillMaxWidth()
                     .heightIn(min = if (supportsPresets) 84.dp else 64.dp)
-                    .clip(RoundedCornerShape(topStart = 16.dp, topEnd = 16.dp))
-                    .background(CameraLookPanelSurface),
+                    .clip(CameraLookPanelShape)
+                    .then(cameraPanelBackground),
                 contentAlignment = Alignment.Center
             ) {
                 Column(
@@ -500,8 +516,8 @@ fun LutSelector(
             headerContent?.invoke()
             ExpandedCameraLookLayout(
                 modifier = Modifier.fillMaxWidth()
-                    .clip(RoundedCornerShape(topStart = 16.dp, topEnd = 16.dp))
-                    .background(CameraLookPanelSurface),
+                    .clip(CameraLookPanelShape)
+                    .then(cameraPanelBackground),
                 modeRail = cameraModeRail
             ) {
                 Column(

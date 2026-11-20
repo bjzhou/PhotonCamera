@@ -12,7 +12,11 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.drawWithCache
+import androidx.compose.ui.graphics.BlendMode
 import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.CompositingStrategy
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.unit.dp
 import com.hinnka.mycamera.ui.theme.AccentColor
 import kotlinx.coroutines.launch
@@ -77,16 +81,20 @@ internal fun <T> CompactLookCarousel(
             contentPadding = PaddingValues(horizontal = (maxWidth - slot) / 2),
             flingBehavior = PagerDefaults.flingBehavior(pager, pagerSnapDistance = PagerSnapDistance.atMost(5)),
             key = { ids[it] },
-            modifier = Modifier.fillMaxWidth().drawWithCache {
-                val clear = CameraLookPanelSurface.copy(alpha = 0f)
-                val edges = Brush.horizontalGradient(
-                    0f to CameraLookPanelSurface, 0.16f to clear, 0.84f to clear, 1f to CameraLookPanelSurface
-                )
-                onDrawWithContent {
-                    drawContent()
-                    drawRect(edges)
+            modifier = Modifier.fillMaxWidth()
+                .graphicsLayer { compositingStrategy = CompositingStrategy.Offscreen }
+                .drawWithCache {
+                    val mask = Brush.horizontalGradient(
+                        0f to Color.Transparent,
+                        0.16f to Color.Black,
+                        0.84f to Color.Black,
+                        1f to Color.Transparent
+                    )
+                    onDrawWithContent {
+                        drawContent()
+                        drawRect(mask, blendMode = BlendMode.DstIn)
+                    }
                 }
-            }
         ) { index ->
             val centered = pager.currentPage == index && !pager.isScrollInProgress
             Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {

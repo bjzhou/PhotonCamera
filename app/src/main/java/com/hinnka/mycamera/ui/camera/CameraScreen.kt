@@ -191,7 +191,6 @@ private fun Bitmap.recycleIfAlive() {
 private fun PanelDismissPreviewOverlay(
     bounds: Rect?,
     parentBounds: Rect?,
-    dimBackground: Boolean,
     onDismiss: () -> Unit,
     modifier: Modifier = Modifier
 ) {
@@ -214,13 +213,6 @@ private fun PanelDismissPreviewOverlay(
                 )
             }
             .size(width = width, height = height)
-            .then(
-                if (dimBackground) {
-                    Modifier.background(Color.Black.copy(alpha = 0.4f))
-                } else {
-                    Modifier
-                }
-            )
             .pointerInput(Unit) {
                 detectTapGestures {
                     currentOnDismiss()
@@ -350,6 +342,7 @@ fun CameraScreen(
     // Surface may become ready while persisted camera settings are still being restored.
     // Retain the exact instance and open only after initialization has completed.
     var previewSurfaceTexture by remember { mutableStateOf<SurfaceTexture?>(null) }
+    var previewSurfaceView by remember { mutableStateOf<CameraGLSurfaceView?>(null) }
     var isCameraPrepared by remember { mutableStateOf(false) }
 
     LaunchedEffect(isCameraInitialized) {
@@ -368,6 +361,13 @@ fun CameraScreen(
 
     // UI State
     var activePanel by remember { mutableStateOf(ActivePanel.NONE) }
+    fun closeRecipeEditor() {
+        discardTransientLookEdits()
+        activePanel = ActivePanel.FILTERS
+    }
+    LaunchedEffect(activePanel, canEditCurrentLut) {
+        if (activePanel == ActivePanel.EDIT && !canEditCurrentLut) closeRecipeEditor()
+    }
     val filterPanelTransition = updateTransition(
         targetState = activePanel == ActivePanel.FILTERS,
         label = "cameraFilterPanel"
@@ -375,10 +375,17 @@ fun CameraScreen(
     val settingsPanelVisibility = remember { MutableTransitionState(false) }.apply {
         targetState = activePanel == ActivePanel.SETTINGS
     }
-    // Restore controls only after both the panel exit and its size transition have settled.
-    val showNormalControls = activePanel == ActivePanel.NONE &&
-        !filterPanelTransition.currentState && !filterPanelTransition.targetState && !filterPanelTransition.isRunning &&
-        settingsPanelVisibility.isIdle && !settingsPanelVisibility.currentState && !settingsPanelVisibility.targetState
+    // The look browser changes the space below the viewfinder. Quick settings overlay it from above.
+    val filterPanelVisible = filterPanelTransition.currentState ||
+        filterPanelTransition.targetState || filterPanelTransition.isRunning
+    val showShootingControls = (activePanel == ActivePanel.NONE || activePanel == ActivePanel.SETTINGS) &&
+        !filterPanelVisible
+    val glassPanelVisible = activePanel != ActivePanel.NONE || filterPanelVisible ||
+        settingsPanelVisibility.currentState || !settingsPanelVisibility.isIdle
+    val panelBackdrop = rememberCameraPanelBackdrop(
+        surfaceView = previewSurfaceView,
+        enabled = state.isPreviewActive && glassPanelVisible,
+    )
     val meteringModeFeedback = rememberMeteringModeFeedbackState()
     fun updateMeteringMode(mode: MeteringMode) {
         viewModel.setMeteringMode(mode)
@@ -1017,11 +1024,11 @@ fun CameraScreen(
         }
 
         val zoomBar = @Composable {
-            if (!showNormalControls || isXpan) {
+            if (!showShootingControls || isXpan) {
                 SideEffect { zoomBarBounds = null }
             }
             AnimatedVisibility(
-                visible = showNormalControls && !isXpan,
+                visible = showShootingControls && !isXpan,
                 enter = fadeIn(tween(120)),
                 exit = ExitTransition.None
             ) {
@@ -1376,6 +1383,7 @@ fun CameraScreen(
                             },
                             onFirstPreviewFrame = viewModel::onFirstPreviewFrame,
                             onGLSurfaceViewReady = {
+                                previewSurfaceView = it
                                 viewModel.glSurfaceView = it
                             },
                             livePhotoRecorder = viewModel.livePhotoRecorder,
@@ -1714,6 +1722,7 @@ fun CameraScreen(
                 onExpandedChange = { expanded ->
                     if (expanded) filtersExpanded = true else collapseFilters()
                 },
+                cameraBackdrop = panelBackdrop,
                 modifier = Modifier
                     .fillMaxWidth()
                     .pointerInput(Unit) { detectTapGestures { } }
@@ -1786,9 +1795,14 @@ fun CameraScreen(
         }
 
         Box(
+            Modifier
+                .matchParentSize()
+                .liquidGlassBackdropSource(panelBackdrop)
+                .paint(backgroundPainter, contentScale = ContentScale.Crop)
+        )
+        Box(
             modifier = Modifier
                 .fillMaxSize()
-                .paint(backgroundPainter, contentScale = ContentScale.Crop)
                 .navigationBarsPadding(),
         ) {
             // The viewfinder is always the bottom layer. Its selected aspect ratio is fitted
@@ -1816,12 +1830,18 @@ fun CameraScreen(
                 )
             }
 
-            // Keep dismissal behind the controls, including the inline look browser.
-            if (activePanel == ActivePanel.FILTERS) {
+            // Keep dismissal below shooting controls, including the XPAN side bars for settings.
+            if (activePanel == ActivePanel.FILTERS || activePanel == ActivePanel.SETTINGS ||
+                activePanel == ActivePanel.PRESETS
+            ) {
+                val dismissBounds = if (isXpan && activePanel != ActivePanel.SETTINGS) {
+                    viewfinderAreaBounds ?: previewBounds
+                } else {
+                    previewBounds
+                }
                 PanelDismissPreviewOverlay(
-                    bounds = if (isXpan) viewfinderAreaBounds ?: previewBounds else previewBounds,
+                    bounds = dismissBounds,
                     parentBounds = cameraScreenBounds,
-                    dimBackground = false,
                     onDismiss = { activePanel = ActivePanel.NONE }
                 )
             }
@@ -1865,7 +1885,7 @@ fun CameraScreen(
                 },
                 parameterBar = {
                     AnimatedVisibility(
-                        visible = showNormalControls && !isXpan,
+                        visible = showShootingControls && !isXpan,
                         enter = fadeIn(tween(120)),
                         exit = ExitTransition.None
                     ) {
@@ -1877,24 +1897,10 @@ fun CameraScreen(
                 }
             )
         }
-        val panelDismissBounds = if (isXpan) {
-            viewfinderAreaBounds ?: previewBounds
-        } else {
-            previewBounds
-        }
-
-        if (activePanel != ActivePanel.NONE && activePanel != ActivePanel.FILTERS) {
-            PanelDismissPreviewOverlay(
-                bounds = panelDismissBounds,
-                parentBounds = cameraScreenBounds,
-                dimBackground = activePanel == ActivePanel.SETTINGS,
-                onDismiss = { activePanel = ActivePanel.NONE }
-            )
-        }
-
         // TopSheet for settings
         CameraTopSheet(
             visible = activePanel == ActivePanel.SETTINGS,
+            backdrop = panelBackdrop,
             visibilityState = settingsPanelVisibility,
             captureMode = state.captureMode,
             aspectRatio = state.aspectRatio,
@@ -1998,10 +2004,8 @@ fun CameraScreen(
                     initialParams = previewRecipeParams,
                     onParamsPreviewChange = { previewRecipeParamsOverride = it },
                     showEffects = true,
-                    onDismiss = {
-                        previewRecipeParamsOverride = null
-                        activePanel = ActivePanel.FILTERS
-                    }
+                    backdrop = panelBackdrop,
+                    onDismiss = ::closeRecipeEditor,
                 )
             }
         }

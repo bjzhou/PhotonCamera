@@ -59,9 +59,11 @@ import com.hinnka.mycamera.raw.HncsFilmCurveMode
 import com.hinnka.mycamera.raw.RawRenderingEngine
 import com.hinnka.mycamera.raw.RawToneMappingParameters
 import com.hinnka.mycamera.raw.SpectralFilmSelection
-import com.hinnka.mycamera.ui.components.AppModalBottomSheet
+import com.hinnka.mycamera.ui.components.CameraPanelGlassStyle
+import com.hinnka.mycamera.ui.components.LiquidGlassBackdrop
 import com.hinnka.mycamera.ui.components.RawDcpLensOption
 import com.hinnka.mycamera.ui.components.RawRenderingEngineSettingsPanel
+import com.hinnka.mycamera.ui.components.liquidGlassBackground
 import com.hinnka.mycamera.video.*
 import com.hinnka.mycamera.video.VideoCodec
 import com.hinnka.mycamera.ui.icons.AppIcons
@@ -92,6 +94,7 @@ private object QuickSettingDropdownScrollConnection : NestedScrollConnection {
 @Composable
 fun CameraTopSheet(
     visible: Boolean,
+    backdrop: LiquidGlassBackdrop,
     captureMode: CaptureMode,
     aspectRatio: AspectRatio,
     topSheetAspectRatios: List<AspectRatio>,
@@ -167,7 +170,10 @@ fun CameraTopSheet(
 
     LaunchedEffect(visible, captureMode) {
         showContentManagementOptions = false
-        if (!visible) expandedMenu = null
+        if (!visible) {
+            expandedMenu = null
+            showRenderingEngineSheet = false
+        }
     }
 
     BackHandler(enabled = visible && expandedMenu != null) { expandedMenu = null }
@@ -180,8 +186,9 @@ fun CameraTopSheet(
 
     AnimatedVisibility(
         visibleState = panelVisibility,
-        enter = slideInVertically(initialOffsetY = { -it }) + fadeIn(),
-        exit = slideOutVertically(targetOffsetY = { -it }) + fadeOut(),
+        // Reveal the sheet at its final coordinates so the glass samples a stationary area.
+        enter = expandVertically(expandFrom = Alignment.Top),
+        exit = shrinkVertically(shrinkTowards = Alignment.Top),
         modifier = modifier
     ) {
         val panelScrollState = rememberScrollState()
@@ -194,7 +201,11 @@ fun CameraTopSheet(
                 .fillMaxWidth()
                 .aspectRatio(1f)
                 .clip(RoundedCornerShape(bottomStart = 24.dp, bottomEnd = 24.dp))
-                .background(Color.Black.copy(alpha = 0.88f))
+                .liquidGlassBackground(
+                    backdrop = backdrop,
+                    openTopEdge = true,
+                    style = CameraPanelGlassStyle,
+                )
                 // Keep the screen's top inset fixed, but measure content and side padding
                 // in the rotated viewport so landscape controls stay inside the sheet.
                 .padding(top = contentTopPadding)
@@ -417,8 +428,9 @@ fun CameraTopSheet(
         }
     }
 
-    if (showRenderingEngineSheet) {
-        AppModalBottomSheet(
+    if (visible && showRenderingEngineSheet) {
+        CameraPanelBottomSheet(
+            backdrop = backdrop,
             onDismissRequest = { showRenderingEngineSheet = false },
             dragHandle = { BottomSheetDefaults.DragHandle(color = Color.White.copy(alpha = 0.2f)) }
         ) {
