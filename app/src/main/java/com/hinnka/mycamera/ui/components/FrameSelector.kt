@@ -9,8 +9,10 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -32,9 +34,17 @@ fun FrameSelector(
     currentFrameId: String?,
     onFrameSelected: (String?) -> Unit,
     modifier: Modifier = Modifier,
-    expanded: Boolean = false
+    expanded: Boolean = false,
+    onManageFrames: (() -> Unit)? = null
 ) {
-    val options = listOf<FrameInfo?>(null) + availableFrames
+    val haptic = LocalHapticFeedback.current
+    val options = remember(availableFrames) { listOf<FrameInfo?>(null) + availableFrames }
+    val onLongClickAction: (() -> Unit)? = onManageFrames?.let { manage ->
+        {
+            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+            manage()
+        }
+    }
     LookOptionList(
         options = options,
         key = { it?.let { frame -> "frame:${frame.id}" } ?: "frame:none" },
@@ -47,6 +57,7 @@ fun FrameSelector(
             name = frame?.name ?: stringResource(R.string.none),
             selected = currentFrameId == frame?.id,
             onClick = { onFrameSelected(frame?.id) },
+            onLongClick = onLongClickAction,
             modifier = if (expanded) Modifier.fillMaxWidth() else Modifier
         ) {
             if (frame == null) {

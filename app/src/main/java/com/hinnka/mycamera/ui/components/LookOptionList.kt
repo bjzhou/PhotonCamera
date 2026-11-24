@@ -16,6 +16,11 @@ import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.lazy.grid.rememberLazyGridState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.SideEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.platform.LocalDensity
@@ -58,17 +63,18 @@ internal fun <T> LookOptionList(
     contentKey: Any? = null,
     content: @Composable (T) -> Unit
 ) {
-    val listState = rememberLazyListState()
-    val gridState = rememberLazyGridState()
-    LaunchedEffect(expanded, contentKey, selectedIndex) {
-        if (expanded) {
-            gridState.scrollToItem(selectedIndex.coerceAtLeast(0) / LookOptionColumns * LookOptionColumns)
-        } else {
-            listState.scrollToItem((selectedIndex - 1).coerceAtLeast(0))
-        }
-    }
     BoxWithConstraints(modifier.fillMaxWidth()) {
         if (expanded) {
+            val selectedRowStart = selectedIndex.coerceAtLeast(0) / LookOptionColumns * LookOptionColumns
+            val gridState = rememberLazyGridState(initialFirstVisibleItemIndex = selectedRowStart)
+            val scrollRequest = contentKey to selectedIndex
+            var appliedRequest by remember { mutableStateOf(scrollRequest) }
+            SideEffect {
+                if (appliedRequest != scrollRequest) {
+                    gridState.requestScrollToItem(selectedRowStart)
+                    appliedRequest = scrollRequest
+                }
+            }
             val itemWidth = minOf(lookOptionCellWidth(maxWidth, LocalDensity.current), LookOptionExpandedSize)
             val cellHeight = itemWidth + itemFooterHeight
             LazyVerticalGrid(
@@ -89,6 +95,10 @@ internal fun <T> LookOptionList(
                 }
             }
         } else {
+            val listState = rememberLazyListState()
+            LaunchedEffect(contentKey, selectedIndex) {
+                listState.scrollToItem((selectedIndex - 1).coerceAtLeast(0))
+            }
             LazyRow(
                 state = listState,
                 modifier = Modifier.fillMaxWidth(),

@@ -11,6 +11,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.Icon
 import androidx.compose.material3.LocalTextStyle
@@ -21,7 +22,7 @@ import com.hinnka.mycamera.ui.camera.ViewfinderTextShadow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
@@ -33,6 +34,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
+import coil.compose.AsyncImagePainter
 import coil.request.ImageRequest
 import coil.size.Size
 import coil.transform.Transformation
@@ -52,8 +54,8 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import com.hinnka.mycamera.ui.icons.AppIcons
 
-/** Camera browsing is opt-in; editors and external camera integrations keep their horizontal layout. */
-enum class LutSelectorPresentation { Horizontal, Compact, Expanded }
+/** Camera browsing uses Expanded; editors and external camera integrations keep Horizontal. */
+enum class LutSelectorPresentation { Horizontal, Expanded }
 
 @Composable
 internal fun lutCategoryTitle(category: String): String = when (category) {
@@ -199,12 +201,14 @@ fun LutSelector(
     headerContent: (@Composable () -> Unit)? = null,
     modifier: Modifier = Modifier,
     presentation: LutSelectorPresentation = LutSelectorPresentation.Horizontal,
-    onExpandedChange: (Boolean) -> Unit = {},
     presetThumbnailInput: com.hinnka.mycamera.lut.PresetThumbnailInput? = null,
     onEditPreset: ((String) -> Unit)? = null,
     presetLookActive: Boolean = false,
     showHorizontalHeader: Boolean = true,
     cameraBackdrop: LiquidGlassBackdrop? = null,
+    showExpandedOptions: Boolean = true,
+    cameraBackdropBottomLeft: Offset? = null,
+    scrollCaption: Boolean = true,
 ) {
     val favoriteText = stringResource(R.string.favorite)
     val uncategorizedText = stringResource(R.string.uncategorized)
@@ -223,11 +227,21 @@ fun LutSelector(
     val supportsFrames = onFrameSelected != null
     val supportsPresets = presetModeEnabled
     val expanded = presentation == LutSelectorPresentation.Expanded
-    val compact = presentation == LutSelectorPresentation.Compact
     val actualMode = when (selectedMode) {
         LutSelectorMode.Style -> LutSelectorMode.Style
-        LutSelectorMode.Frame -> if (supportsFrames && !compact) LutSelectorMode.Frame else LutSelectorMode.Style
+        LutSelectorMode.Frame -> if (supportsFrames) LutSelectorMode.Frame else LutSelectorMode.Style
         LutSelectorMode.Presets -> if (supportsPresets) LutSelectorMode.Presets else LutSelectorMode.Style
+    }
+
+    var lastLutManageClickTime by remember { mutableLongStateOf(0L) }
+    val manageLut: ((String) -> Unit)? = onManageClick?.let { manage ->
+        { lutId ->
+            val now = System.currentTimeMillis()
+            if (now - lastLutManageClickTime > 1000) {
+                lastLutManageClickTime = now
+                manage(lutId)
+            }
+        }
     }
 
     val selectedLut = remember(availableLuts, activeLutId) { availableLuts.find { it.id == activeLutId } }
@@ -242,8 +256,8 @@ fun LutSelector(
     val lutOptions = remember(selectedCategory, availableLuts, favoriteText, uncategorizedText) {
         availableLuts.inLutCategory(selectedCategory, uncategorizedText, favoriteText)
     }
-    LaunchedEffect(activeLutId, availableLuts, compact) {
-        if (!compact && selectedLut != null && selectedLut !in lutOptions) {
+    LaunchedEffect(activeLutId, availableLuts) {
+        if (selectedLut != null && selectedLut !in lutOptions) {
             browsedCategory = null
         }
     }
@@ -259,7 +273,6 @@ fun LutSelector(
                 itemFooterHeight = lutFooterHeight,
                 contentKey = selectedCategory
             ) { lut ->
-                var lastManageClickTime by remember { mutableLongStateOf(0L) }
                 LutItem(
                     id = lut.id,
                     name = lut.getName(),
@@ -275,17 +288,9 @@ fun LutSelector(
                         }
                     },
                     onEditClick = editActiveLut.takeIf {
-                        presentation != LutSelectorPresentation.Horizontal && activeLutId == lut.id
+                        expanded && activeLutId == lut.id
                     },
-                    onManageClick = onManageClick?.let { manage ->
-                        {
-                            val now = System.currentTimeMillis()
-                            if (now - lastManageClickTime > 1000) {
-                                lastManageClickTime = now
-                                manage(lut.id)
-                            }
-                        }
-                    },
+                    onManageClick = manageLut?.let { manage -> { manage(lut.id) } },
                     modifier = if (expanded) Modifier.fillMaxWidth() else Modifier
                 )
             }
@@ -293,7 +298,8 @@ fun LutSelector(
                 availableFrames = availableFrames,
                 currentFrameId = currentFrameId,
                 onFrameSelected = requireNotNull(onFrameSelected),
-                expanded = expanded
+                expanded = expanded,
+                onManageFrames = onFrameManagementClick
             )
             LutSelectorMode.Presets -> PresetsPanel(
                 activePresetId = activePresetId,
@@ -304,7 +310,6 @@ fun LutSelector(
                 thumbnail = thumbnail,
                 thumbnailInput = presetThumbnailInput,
                 expanded = expanded,
-                compact = compact,
                 onEditPreset = onEditPreset
             )
         }
@@ -344,61 +349,81 @@ fun LutSelector(
             }
         }
     }
-    val browserContent = @Composable {
-        if (actualMode == LutSelectorMode.Style) {
-            val tabIndex = categoryTabs.indexOf(selectedCategory).coerceAtLeast(0)
-            val tabListState = rememberLazyListState(initialFirstVisibleItemIndex = if (expanded) tabIndex else 0)
-            if (expanded) {
-                LaunchedEffect(selectedCategory, tabIndex, activeLutId) {
-                    val layout = tabListState.layoutInfo
-                    val fullyVisible = layout.visibleItemsInfo.any {
-                        it.key == selectedCategory && it.offset >= layout.viewportStartOffset &&
-                            it.offset + it.size <= layout.viewportEndOffset
-                    }
-                    if (!fullyVisible) tabListState.scrollToItem(tabIndex)
+    val styleCategoryRow: @Composable (Modifier, PaddingValues) -> Unit = { rowModifier, contentPadding ->
+        val tabIndex = categoryTabs.indexOf(selectedCategory).coerceAtLeast(0)
+        val tabListState = rememberLazyListState(initialFirstVisibleItemIndex = if (expanded) tabIndex else 0)
+        if (expanded) {
+            LaunchedEffect(selectedCategory, tabIndex, activeLutId) {
+                val layout = tabListState.layoutInfo
+                val fullyVisible = layout.visibleItemsInfo.any {
+                    it.key == selectedCategory && it.offset >= layout.viewportStartOffset &&
+                        it.offset + it.size <= layout.viewportEndOffset
                 }
+                if (!fullyVisible) tabListState.scrollToItem(tabIndex)
             }
-            // 分类使用白色文字保证取景画面上的可读性，选中项以金色区分。
-            LazyRow(
-                modifier = Modifier.fillMaxWidth(),
-                state = tabListState,
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                contentPadding = PaddingValues(horizontal = 8.dp)
-            ) {
-                items(categoryTabs, key = { it }) { category ->
-                    val isSelected = selectedCategory == category
+        }
+        // 分类使用白色文字保证取景画面上的可读性，选中项以金色与底部短线区分。
+        LazyRow(
+            modifier = rowModifier,
+            state = tabListState,
+            horizontalArrangement = Arrangement.spacedBy(if (expanded) 4.dp else 8.dp),
+            contentPadding = contentPadding
+        ) {
+            items(categoryTabs, key = { it }) { category ->
+                val isSelected = selectedCategory == category
+                Column(
+                    modifier = Modifier
+                        .clickable(
+                            interactionSource = remember { MutableInteractionSource() },
+                            indication = null
+                        ) {
+                            browsedCategory = category
+                        }
+                        .padding(horizontal = 8.dp, vertical = 3.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.spacedBy(2.dp)
+                ) {
                     Text(
                         text = lutCategoryTitle(category),
-                        color = if (isSelected) AccentColor else Color.White,
+                        color = if (isSelected) AccentColor else Color.White.copy(alpha = if (expanded) 0.78f else 1f),
                         fontSize = 11.sp,
                         fontWeight = if (isSelected) FontWeight.SemiBold else FontWeight.Medium,
-                        style = LocalTextStyle.current.copy(shadow = ViewfinderTextShadow),
-                        modifier = Modifier
-                            .clickable(
-                                interactionSource = remember { MutableInteractionSource() },
-                                indication = null
-                            ) {
-                                browsedCategory = category
-                            }
-                            .padding(horizontal = 9.dp, vertical = 3.dp)
+                        maxLines = 1,
+                        softWrap = false,
+                        style = LocalTextStyle.current.copy(shadow = ViewfinderTextShadow)
                     )
+                    if (expanded) {
+                        Box(
+                            modifier = Modifier
+                                .width(12.dp)
+                                .height(2.dp)
+                                .clip(CircleShape)
+                                .background(if (isSelected) AccentColor else Color.Transparent)
+                        )
+                    }
                 }
             }
         }
-        if (expanded && actualMode == LutSelectorMode.Style && lutOptions.isEmpty()) {
+    }
+
+    val optionsOrEmptyContent = @Composable {
+        val emptyStyleList = actualMode == LutSelectorMode.Style && lutOptions.isEmpty()
+        if (expanded && (!showExpandedOptions || emptyStyleList)) {
             BoxWithConstraints(Modifier.fillMaxWidth()) {
                 Box(
                     modifier = Modifier.fillMaxWidth().height(lookOptionGridHeight(maxWidth, lutFooterHeight)),
                     contentAlignment = Alignment.Center
                 ) {
-                    Text(
-                        text = stringResource(
-                            if (selectedCategory == favoriteText) R.string.favorite_empty_title
-                            else R.string.category_empty_title
-                        ),
-                        color = Color.White.copy(alpha = 0.6f),
-                        fontSize = 13.sp
-                    )
+                    if (showExpandedOptions) {
+                        Text(
+                            text = stringResource(
+                                if (selectedCategory == favoriteText) R.string.favorite_empty_title
+                                else R.string.category_empty_title
+                            ),
+                            color = Color.White.copy(alpha = 0.6f),
+                            fontSize = 13.sp
+                        )
+                    }
                 }
             }
         } else {
@@ -406,128 +431,139 @@ fun LutSelector(
         }
     }
 
+    val browserContent = @Composable {
+        if (actualMode == LutSelectorMode.Style) {
+            styleCategoryRow(Modifier.fillMaxWidth(), PaddingValues(horizontal = 8.dp))
+        }
+        optionsOrEmptyContent()
+    }
+
     val activePreset = allPresets.firstOrNull { it.id == activePresetId }
-    val cameraPanelBackground = if (cameraBackdrop != null && (compact || expanded)) {
+    val currentFrame = availableFrames.find { it.id == currentFrameId }
+    val noneText = stringResource(R.string.none)
+    val editText = stringResource(R.string.edit)
+    val filterManageText = stringResource(R.string.settings_filter_management)
+    val presetManageText = stringResource(R.string.settings_preset_management)
+    val frameManageText = stringResource(R.string.settings_frame_management)
+    val presetCreateText = stringResource(
+        if (activePresetModified) R.string.preset_save_as else R.string.preset_new
+    )
+    val currentPresetCaption = activePreset?.let {
+        val name = presetDisplayName(it)
+        if (activePresetModified) "$name*" else name
+    }.orEmpty()
+    val currentFrameCaption = if (currentFrameId == null) noneText else (currentFrame?.name ?: noneText)
+    val headerActions: List<CameraLookHeaderIconAction> = when (actualMode) {
+        LutSelectorMode.Style -> buildList {
+            editActiveLut?.let { edit ->
+                add(
+                    CameraLookHeaderIconAction(
+                        icon = AppIcons.Tune,
+                        contentDescription = editText,
+                        emphasized = true,
+                        onClick = edit
+                    )
+                )
+            }
+            manageLut?.let { manage ->
+                add(
+                    CameraLookHeaderIconAction(
+                        icon = Icons.Default.Settings,
+                        contentDescription = filterManageText,
+                        onClick = { manage(activeLutId ?: "") }
+                    )
+                )
+            }
+        }
+        LutSelectorMode.Presets -> buildList {
+            add(
+                CameraLookHeaderIconAction(
+                    icon = Icons.Default.Add,
+                    contentDescription = presetCreateText,
+                    emphasized = activePresetModified,
+                    onClick = onCreatePresetClick
+                )
+            )
+            val presetId = activePreset?.id
+            if (presetId != null && onEditPreset != null) {
+                add(
+                    CameraLookHeaderIconAction(
+                        icon = Icons.Default.Edit,
+                        contentDescription = editText,
+                        emphasized = !activePresetModified,
+                        onClick = { onEditPreset(presetId) }
+                    )
+                )
+            }
+            add(
+                CameraLookHeaderIconAction(
+                    icon = Icons.Default.Settings,
+                    contentDescription = presetManageText,
+                    onClick = onPresetManagementClick
+                )
+            )
+        }
+        LutSelectorMode.Frame -> buildList {
+            onFrameManagementClick?.let { manage ->
+                add(
+                    CameraLookHeaderIconAction(
+                        icon = Icons.Default.Settings,
+                        contentDescription = frameManageText,
+                        onClick = manage
+                    )
+                )
+            }
+        }
+    }
+    val cameraPanelBackground = if (cameraBackdrop != null && expanded) {
         Modifier.liquidGlassBackground(
             backdrop = cameraBackdrop,
             cornerRadius = CameraLookPanelCornerRadius,
             openBottomEdge = true,
-            style = CameraPanelGlassStyle
+            style = CameraPanelGlassStyle,
+            sampleBottomLeftInRoot = cameraBackdropBottomLeft
         )
     } else {
         Modifier.background(CameraLookPanelSurface)
-    }
-    val cameraModeRail = @Composable {
-        CameraLookModeRail(
-            selectedMode = actualMode,
-            supportsPresets = supportsPresets,
-            supportsFrames = supportsFrames,
-            presetModified = activePresetModified,
-            expanded = expanded,
-            onModeSelected = onModeSelected
-        )
-    }
-
-    if (compact) {
-        Column(modifier = modifier.fillMaxWidth()) {
-            headerContent?.invoke()
-            Box(
-                modifier = Modifier.fillMaxWidth()
-                    .heightIn(min = if (supportsPresets) 84.dp else 64.dp)
-                    .clip(CameraLookPanelShape)
-                    .then(cameraPanelBackground),
-                contentAlignment = Alignment.Center
-            ) {
-                Column(
-                    modifier = Modifier.fillMaxWidth()
-                        .padding(horizontal = CameraLookModeRailWidth + 4.dp, vertical = 8.dp),
-                    verticalArrangement = Arrangement.spacedBy(6.dp),
-                    horizontalAlignment = Alignment.CenterHorizontally
-                ) {
-                    if (actualMode == LutSelectorMode.Style) {
-                        val compactLuts = remember(availableLuts) {
-                            availableLuts.sortedWith(
-                                compareBy<LutInfo> { it.id != "none" }.thenByDescending { it.isFavorite }
-                            )
-                        }
-                        CompactLookCarousel(
-                            options = compactLuts,
-                            key = { it.id },
-                            selectedId = activeLutId ?: "none",
-                            onSelected = { onLutSelected(it.id) }
-                        ) { lut, selected, click, cardModifier ->
-                            LutItem(
-                                id = lut.id, name = lut.getName(), previewBitmap = thumbnail,
-                                isSelected = selected, isVip = lut.isVip, thumbnailOnly = true,
-                                onClick = if (selected && presetLookActive) {
-                                    { onLutSelected(lut.id) }
-                                } else click,
-                                onEditClick = editActiveLut,
-                                onManageClick = onManageClick?.let { manage -> { manage(lut.id) } },
-                                modifier = cardModifier
-                            )
-                        }
-                    } else {
-                        optionContent()
-                    }
-                    val caption = when (actualMode) {
-                        LutSelectorMode.Style -> availableLuts.firstOrNull { it.id == (activeLutId ?: "none") }?.getName()
-                        LutSelectorMode.Presets -> activePreset?.let {
-                            val name = presetDisplayName(it)
-                            if (activePresetModified) "$name*" else name
-                        }
-                        LutSelectorMode.Frame -> null
-                    }
-                    if (caption != null) {
-                        Text(
-                            caption,
-                            modifier = Modifier.fillMaxWidth()
-                                .basicMarquee(iterations = Int.MAX_VALUE),
-                            color = Color.White, fontSize = 12.sp, lineHeight = 15.sp,
-                            fontWeight = FontWeight.Medium, maxLines = 1, textAlign = TextAlign.Center
-                        )
-                    }
-                }
-                Row(
-                    modifier = Modifier.matchParentSize(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    cameraModeRail()
-                    Column(
-                        modifier = Modifier.width(CameraLookModeRailWidth)
-                            .clip(RoundedCornerShape(12.dp))
-                            .clickable { onExpandedChange(true) }
-                            .padding(vertical = 8.dp),
-                        verticalArrangement = Arrangement.spacedBy(2.dp),
-                        horizontalAlignment = Alignment.CenterHorizontally
-                    ) {
-                        Icon(AppIcons.ExpandLess, stringResource(R.string.camera_looks_more), tint = Color.White)
-                        Text(stringResource(R.string.camera_looks_more), color = Color.White, fontSize = 10.sp)
-                    }
-                }
-            }
-        }
-        return
     }
 
     if (expanded) {
         Column(modifier = modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(4.dp)) {
             headerContent?.invoke()
-            ExpandedCameraLookLayout(
-                modifier = Modifier.fillMaxWidth()
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
                     .clip(CameraLookPanelShape)
-                    .then(cameraPanelBackground),
-                modeRail = cameraModeRail
+                    .then(cameraPanelBackground)
+                    .padding(bottom = 4.dp),
+                verticalArrangement = Arrangement.spacedBy(4.dp)
             ) {
-                Column(
-                    modifier = Modifier.fillMaxWidth()
-                        .padding(top = 4.dp),
-                    verticalArrangement = Arrangement.spacedBy(4.dp)
-                ) {
-                    browserContent()
-
+                CameraLookHeaderBar(
+                    selectedMode = actualMode,
+                    supportsPresets = supportsPresets,
+                    supportsFrames = supportsFrames,
+                    presetModified = activePresetModified,
+                    onModeSelected = onModeSelected,
+                    actions = headerActions
+                )
+                when (actualMode) {
+                    LutSelectorMode.Style -> CameraLookSubBar(
+                        leading = {
+                            styleCategoryRow(Modifier.fillMaxWidth(), PaddingValues(horizontal = 0.dp))
+                        }
+                    )
+                    LutSelectorMode.Presets -> CameraLookSubBar(
+                        leading = {
+                            CameraLookSubBarTitle(title = currentPresetCaption, scrollTitle = scrollCaption)
+                        }
+                    )
+                    LutSelectorMode.Frame -> CameraLookSubBar(
+                        leading = {
+                            CameraLookSubBarTitle(title = currentFrameCaption, scrollTitle = scrollCaption)
+                        }
+                    )
                 }
+                optionsOrEmptyContent()
             }
         }
         return
@@ -719,19 +755,20 @@ internal fun LutItem(
     onManageClick: (() -> Unit)? = null,
     onEditClick: (() -> Unit)? = null,
     recipeTarget: BaselineColorCorrectionTarget? = null,
-    thumbnailOnly: Boolean = false,
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
     val isNone = id == "none"
+    val previewReady = remember(id, previewBitmap) { mutableStateOf(false) }
     LookThumbnailItem(
         name = name,
         selected = isSelected,
         onClick = onClick,
         onLongClick = onManageClick,
         onEditClick = onEditClick,
+        editIcon = AppIcons.Tune,
         isVip = isVip,
-        thumbnailOnly = thumbnailOnly,
+        thumbnailVisible = if (isNone) null else previewReady,
         modifier = modifier
     ) {
         if (!isNone && previewBitmap != null) {
@@ -764,7 +801,7 @@ internal fun LutItem(
             val imageRequest = remember(previewBitmap, transformation) {
                 ImageRequest.Builder(context)
                     .data(previewBitmap)
-                    .crossfade(true)
+                    .crossfade(false)
                     .transformations(transformation)
                     .build()
             }
@@ -773,14 +810,11 @@ internal fun LutItem(
                 model = imageRequest,
                 contentDescription = name,
                 contentScale = ContentScale.Crop,
+                onState = { previewReady.value = it is AsyncImagePainter.State.Success },
                 modifier = Modifier.fillMaxSize()
             )
         } else if (isNone) {
             Icon(AppIcons.Block, null, tint = Color.White.copy(alpha = 0.7f), modifier = Modifier.size(24.dp))
-        } else {
-            Box(Modifier.fillMaxSize().background(Brush.linearGradient(listOf(
-                Color(0xFF4A148C), Color(0xFF00897B), Color(0xFFFF6F00)
-            ))))
         }
     }
 }

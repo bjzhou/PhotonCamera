@@ -54,6 +54,7 @@ import androidx.compose.ui.composed
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.paint
 import androidx.compose.ui.draw.scale
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
@@ -70,8 +71,10 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.boundsInRoot
 import androidx.compose.ui.layout.layout
 import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.positionInRoot
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.selected
@@ -91,6 +94,7 @@ import com.hinnka.mycamera.ui.theme.AccentColor
 import com.hinnka.mycamera.ui.theme.accentContentColor
 import com.hinnka.mycamera.MyCameraApplication
 import com.hinnka.mycamera.R
+import com.hinnka.mycamera.lut.PresetThumbnailInput
 import com.hinnka.mycamera.camera.AspectRatio
 import com.hinnka.mycamera.camera.CameraState
 import com.hinnka.mycamera.camera.FocusPointSource
@@ -305,6 +309,7 @@ fun CameraScreen(
     var pendingCaptureAnimationBitmap by remember { mutableStateOf<Bitmap?>(null) }
     var captureAnimationJob by remember { mutableStateOf<Job?>(null) }
     var cameraScreenBounds by remember { mutableStateOf<Rect?>(null) }
+    var lutBackdropBottomLeft by remember { mutableStateOf(Offset.Unspecified) }
     var previewBounds by remember { mutableStateOf<Rect?>(null) }
     var viewfinderAreaBounds by remember { mutableStateOf<Rect?>(null) }
     var zoomBarBounds by remember { mutableStateOf<Rect?>(null) }
@@ -373,12 +378,18 @@ fun CameraScreen(
         targetState = activePanel == ActivePanel.FILTERS,
         label = "cameraFilterPanel"
     )
+    val filterPanelExpansion = filterPanelTransition.animateFloat(
+        transitionSpec = { tween(220) }, label = "lookPanelPlacement"
+    ) { if (it) 1f else 0f }
+    val capturePlacement = remember(filterPanelExpansion) { CameraCapturePlacement(filterPanelExpansion) }
     val settingsPanelVisibility = remember { MutableTransitionState(false) }.apply {
         targetState = activePanel == ActivePanel.SETTINGS
     }
     // The look browser changes the space below the viewfinder. Quick settings overlay it from above.
     val filterPanelVisible = filterPanelTransition.currentState ||
         filterPanelTransition.targetState || filterPanelTransition.isRunning
+    val filterPanelExpanded = filterPanelTransition.currentState &&
+        filterPanelTransition.targetState && !filterPanelTransition.isRunning
     val showShootingControls = (activePanel == ActivePanel.NONE || activePanel == ActivePanel.SETTINGS) &&
         !filterPanelVisible
     val glassPanelVisible = activePanel != ActivePanel.NONE || filterPanelVisible ||
@@ -392,16 +403,8 @@ fun CameraScreen(
         viewModel.setMeteringMode(mode)
         meteringModeFeedback.show(mode)
     }
-    var filtersExpanded by remember { mutableStateOf(false) }
-    fun collapseFilters() {
-        filtersExpanded = false
-        if (lutSelectorMode == LutSelectorMode.Frame) {
-            viewModel.setLutSelectorMode(LutSelectorMode.Style)
-        }
-    }
     BackHandler(enabled = activePanel == ActivePanel.FILTERS || activePanel == ActivePanel.SETTINGS) {
-        if (activePanel == ActivePanel.FILTERS && filtersExpanded) collapseFilters()
-        else activePanel = ActivePanel.NONE
+        activePanel = ActivePanel.NONE
     }
     var selectedParameter by remember { mutableStateOf(CameraParameter.EXPOSURE_COMPENSATION) }
     var showParameterRuler by remember(state.captureMode, state.useRaw) { mutableStateOf(false) }
@@ -427,9 +430,12 @@ fun CameraScreen(
         }
     )
 
-    // 当打开滤镜面板时，生成预览图
-    LaunchedEffect(activePanel, state.currentCameraId, state.previewFirstFrameTimestampNs, state.captureMode, state.useRaw) {
-        if (activePanel == ActivePanel.FILTERS) {
+    LaunchedEffect(activePanel) {
+        if (activePanel == ActivePanel.FILTERS) viewModel.clearLookThumbnails()
+    }
+    // Read back the thumbnail source once the options can consume it.
+    LaunchedEffect(filterPanelExpanded, state.currentCameraId, state.previewFirstFrameTimestampNs, state.captureMode, state.useRaw) {
+        if (filterPanelExpanded) {
             if (state.previewFirstFrameTimestampNs != null) viewModel.generateThumbnail()
             else viewModel.clearLookThumbnails()
         }
@@ -1663,20 +1669,28 @@ fun CameraScreen(
             }
         }
 
-        val filterSelector: @Composable () -> Unit = {
+        val filterSelector: @Composable (Boolean) -> Unit = { showOptions ->
             val allPresets by viewModel.allPresets.collectAsState()
             val selectablePresets = remember(allPresets, state.isProfessionalMode) {
                 allPresets.filter { it.isAvailableInMode(state.isProfessionalMode) }
             }
             val defaultPresetName = stringResource(R.string.preset_new_preset_default)
             val isVideoLog = isVideoMode && state.videoConfig.logProfile.isEnabled
+            // Retain the previews already displayed by the panel. New captures from a closed
+            // camera screen must not start thumbnail rendering for the retained cards.
+            var displayedThumbnails by remember(state.currentCameraId, state.captureMode, state.useRaw) {
+                mutableStateOf<Pair<Bitmap?, PresetThumbnailInput?>>(null to null)
+            }
+            val thumbnails = if (filterPanelExpanded) {
+                viewModel.previewThumbnail to viewModel.presetThumbnailInput
+            } else displayedThumbnails
+            if (filterPanelExpanded) SideEffect { displayedThumbnails = thumbnails }
 
-            // The same selector stays composed while switching between strip and grid.
             LutSelector(
                 availableLuts = viewModel.selectableLutList,
                 currentLutId = currentLutId,
-                thumbnail = viewModel.previewThumbnail,
-                presetThumbnailInput = viewModel.presetThumbnailInput,
+                thumbnail = thumbnails.first,
+                presetThumbnailInput = thumbnails.second,
                 onLutSelected = {
                     discardTransientLookEdits()
                     viewModel.setLut(it)
@@ -1734,11 +1748,11 @@ fun CameraScreen(
                         )
                     }
                 } else null,
-                presentation = if (filtersExpanded) LutSelectorPresentation.Expanded else LutSelectorPresentation.Compact,
-                onExpandedChange = { expanded ->
-                    if (expanded) filtersExpanded = true else collapseFilters()
-                },
+                presentation = LutSelectorPresentation.Expanded,
+                showExpandedOptions = showOptions,
+                scrollCaption = filterPanelVisible,
                 cameraBackdrop = panelBackdrop,
+                cameraBackdropBottomLeft = lutBackdropBottomLeft,
                 modifier = Modifier
                     .fillMaxWidth()
                     .pointerInput(Unit) { detectTapGestures { } }
@@ -1760,13 +1774,13 @@ fun CameraScreen(
                     if (activePanel == ActivePanel.FILTERS) {
                         activePanel = ActivePanel.NONE
                     } else {
-                        collapseFilters()
                         showParameterRuler = false
                         activePanel = ActivePanel.FILTERS
                     }
                 },
                 isFilterPanelOpen = activePanel == ActivePanel.FILTERS,
                 filterPanelTransition = filterPanelTransition,
+                capturePlacement = capturePlacement,
                 filterSelector = filterSelector,
                 onCaptureModeSelected = ::setShootingModeWithPreviewTransition,
                 modeSwitchEnabled = !previewTransitionActive && !lensSwitchTransition.isActive,
@@ -1866,7 +1880,13 @@ fun CameraScreen(
 
             CameraBottomControlsLayout(
                 viewfinderBottom = viewfinderTop + cardHeight,
-                modifier = Modifier.fillMaxSize(),
+                capturePlacement = capturePlacement,
+                modifier = Modifier.fillMaxSize().onGloballyPositioned { coordinates ->
+                    val bottomPadding = with(density) { CameraControlsLayoutDefaults.BottomPadding.roundToPx() }
+                    // The expanded panel ends at the bottom of the controls, above their padding.
+                    lutBackdropBottomLeft = coordinates.positionInRoot() +
+                        Offset(0f, (coordinates.size.height - bottomPadding).toFloat())
+                },
                 zoomBar = {
                     // Panel visibility changes the zoom content, not the space used to
                     // position the parameter row beneath it. XPAN has no horizontal bar.
@@ -2145,7 +2165,8 @@ private fun Controls(
     onFilterClick: () -> Unit,
     isFilterPanelOpen: Boolean,
     filterPanelTransition: Transition<Boolean>,
-    filterSelector: @Composable () -> Unit,
+    capturePlacement: CameraCapturePlacement,
+    filterSelector: @Composable (Boolean) -> Unit,
     onCaptureModeSelected: (CameraShootingMode) -> Unit,
     modeSwitchEnabled: Boolean,
     onCaptureTap: () -> Unit,
@@ -2158,16 +2179,31 @@ private fun Controls(
     val captureButtonImagePath by preferenceValue { it.captureButtonImagePath }
     val captureProcessingState by viewModel.captureProcessingState.collectAsState()
     val capturedThumbnail by viewModel.capturedThumbnail.collectAsState()
+    val mountPanel = filterPanelTransition.targetState
+    val showOptions = filterPanelTransition.currentState
+    var panelMounted by remember { mutableStateOf(false) }
+    var optionsLoaded by remember { mutableStateOf(false) }
+    if ((mountPanel && !panelMounted) || (showOptions && !optionsLoaded)) {
+        SideEffect {
+            if (mountPanel) panelMounted = true
+            if (showOptions) optionsLoaded = true
+        }
+    }
+    val focusManager = LocalFocusManager.current
+    var modeHasFocus by remember { mutableStateOf(false) }
+    var panelHasFocus by remember { mutableStateOf(false) }
+    LaunchedEffect(mountPanel, showOptions) {
+        if (if (mountPanel) modeHasFocus else panelHasFocus) focusManager.clearFocus(force = true)
+    }
 
     Box(
         modifier = modifier,
         contentAlignment = Alignment.Center
     ) {
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(bottom = CameraControlsLayoutDefaults.BottomPadding),
-            horizontalAlignment = Alignment.CenterHorizontally
+        CameraCaptureControlsLayout(
+            transition = filterPanelTransition,
+            placement = capturePlacement,
+            modifier = Modifier.fillMaxWidth(),
         ) {
             BoxWithConstraints(
                 modifier = Modifier.fillMaxWidth(),
@@ -2304,37 +2340,31 @@ private fun Controls(
                 }
             }
 
-            filterPanelTransition.AnimatedContent(
-                modifier = Modifier.fillMaxWidth(),
-                contentAlignment = Alignment.TopCenter,
-                transitionSpec = {
-                    (fadeIn(tween(100, delayMillis = 100)) togetherWith fadeOut(tween(100)))
-                        .using(SizeTransform { _, _ -> tween(220) })
-                }
-            ) { panelOpen ->
-                Column(
-                    modifier = Modifier.fillMaxWidth()
-                        // In-panel strip/grid changes keep their own size animation.
-                        .then(if (panelOpen) Modifier.animateContentSize(tween(220)) else Modifier),
-                    horizontalAlignment = Alignment.CenterHorizontally
-                ) {
-                    if (panelOpen) {
+            Column(
+                modifier = Modifier.fillMaxWidth()
+                    .onFocusChanged { modeHasFocus = it.hasFocus }.focusGroup(),
+                horizontalAlignment = Alignment.CenterHorizontally
+            ) {
+                Spacer(Modifier.height(CameraControlsLayoutDefaults.ModeSwitcherSpacing))
+                CaptureModeSwitcher(
+                    shootingMode = when {
+                        state.captureMode == CaptureMode.VIDEO -> CameraShootingMode.VIDEO
+                        state.isProfessionalMode -> CameraShootingMode.PROFESSIONAL
+                        else -> CameraShootingMode.PHOTO
+                    },
+                    professionalModeEnabled = state.isRawSupported,
+                    enabled = modeSwitchEnabled &&
+                        !state.videoRecordingState.isRecording &&
+                        !state.videoRecordingState.isProcessing,
+                    onModeSelected = onCaptureModeSelected
+                )
+            }
+
+            Box(Modifier.fillMaxWidth().onFocusChanged { panelHasFocus = it.hasFocus }.focusGroup()) {
+                if (panelMounted || mountPanel) {
+                    Column(Modifier.fillMaxWidth().animateContentSize(tween(220))) {
                         Spacer(Modifier.height(6.dp))
-                        filterSelector()
-                    } else {
-                        Spacer(Modifier.height(CameraControlsLayoutDefaults.ModeSwitcherSpacing))
-                        CaptureModeSwitcher(
-                            shootingMode = when {
-                                state.captureMode == CaptureMode.VIDEO -> CameraShootingMode.VIDEO
-                                state.isProfessionalMode -> CameraShootingMode.PROFESSIONAL
-                                else -> CameraShootingMode.PHOTO
-                            },
-                            professionalModeEnabled = state.isRawSupported,
-                            enabled = modeSwitchEnabled &&
-                                !state.videoRecordingState.isRecording &&
-                                !state.videoRecordingState.isProcessing,
-                            onModeSelected = onCaptureModeSelected
-                        )
+                        filterSelector(optionsLoaded || showOptions)
                     }
                 }
             }

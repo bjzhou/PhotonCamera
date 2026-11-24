@@ -158,7 +158,7 @@ fun LiquidGlassSurface(
     )
 }
 
-/** Draws glass within the existing layout bounds. An open edge continues past the clip. */
+/** Draws glass within the existing layout bounds. [sampleBottomLeftInRoot] anchors backdrop sampling independently of placement. */
 @Composable
 internal fun Modifier.liquidGlassBackground(
     backdrop: LiquidGlassBackdrop,
@@ -166,6 +166,7 @@ internal fun Modifier.liquidGlassBackground(
     openBottomEdge: Boolean = false,
     openTopEdge: Boolean = false,
     style: LiquidGlassStyle = LiquidGlassStyle(),
+    sampleBottomLeftInRoot: Offset? = null,
 ): Modifier {
     var positionInRoot by remember { mutableStateOf(Offset.Unspecified) }
     val shaders = remember { if (LENS_SUPPORTED) GlassShaders() else null }
@@ -179,8 +180,10 @@ internal fun Modifier.liquidGlassBackground(
     } else {
         null
     }
-    return this
-        .onGloballyPositioned { positionInRoot = it.positionInRoot() }
+    val positioned = if (sampleBottomLeftInRoot == null) {
+        onGloballyPositioned { positionInRoot = it.positionInRoot() }
+    } else this
+    return positioned
         // Like Surface: the panel never lets touches fall through to the content underneath.
         .pointerInput(Unit) {}
         .drawWithCache {
@@ -210,7 +213,11 @@ internal fun Modifier.liquidGlassBackground(
 
             val backdropPosition = backdrop.positionInRoot
             val backdropSize = backdrop.size
-            val surfacePosition = positionInRoot
+            val surfacePosition = when {
+                sampleBottomLeftInRoot == null -> positionInRoot
+                sampleBottomLeftInRoot.isSpecified -> sampleBottomLeftInRoot - Offset(0f, height)
+                else -> Offset.Unspecified
+            }
             if (!BACKDROP_SUPPORTED || !surfacePosition.isSpecified || !backdropPosition.isSpecified ||
                 backdropSize == IntSize.Zero
             ) {

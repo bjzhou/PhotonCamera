@@ -2,6 +2,8 @@ package com.hinnka.mycamera.ui.components
 
 import android.graphics.Bitmap
 import androidx.compose.foundation.layout.*
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material3.Icon
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
@@ -33,7 +35,6 @@ fun PresetsPanel(
     onManagePresets: () -> Unit,
     modifier: Modifier = Modifier,
     expanded: Boolean = false,
-    compact: Boolean = false,
     thumbnail: Bitmap? = null,
     thumbnailInput: PresetThumbnailInput? = null,
     onEditPreset: ((String) -> Unit)? = null
@@ -46,7 +47,15 @@ fun PresetsPanel(
         haptic.performHapticFeedback(HapticFeedbackType.LongPress)
         onPresetSelected(preset)
     }
-    val item: @Composable (CameraPreset, Boolean, () -> Unit, Modifier) -> Unit = { preset, selected, click, cardModifier ->
+    LookOptionList(
+        options = allPresets,
+        key = { it.id },
+        selectedIndex = allPresets.indexOfFirst { it.id == activePresetId },
+        expanded = expanded,
+        itemFooterHeight = lookThumbnailFooterHeight(),
+        modifier = modifier
+    ) { preset ->
+        val selected = activePresetId == preset.id
         val name = presetDisplayName(preset)
         val request = remember(source, preset) {
             source?.let { snapshot ->
@@ -70,14 +79,14 @@ fun PresetsPanel(
         LookThumbnailItem(
             name = if (selected && activePresetModified) "$name*" else name,
             selected = selected,
-            onClick = click,
+            onClick = { select(preset) },
             onEditClick = onEditPreset?.let { edit -> { edit(preset.id) } },
-            thumbnailOnly = compact,
+            editIcon = Icons.Default.Edit,
             onLongClick = {
                 haptic.performHapticFeedback(HapticFeedbackType.LongPress)
                 onManagePresets()
             },
-            modifier = cardModifier
+            modifier = if (expanded) Modifier.fillMaxWidth() else Modifier
         ) {
             SubcomposeAsyncImage(
                 model = request,
@@ -87,29 +96,6 @@ fun PresetsPanel(
                 loading = { PresetThumbnailPlaceholder() },
                 error = { PresetThumbnailPlaceholder() }
             )
-        }
-    }
-    if (compact) {
-        CompactLookCarousel(
-            options = allPresets,
-            key = { it.id },
-            selectedId = activePresetId,
-            onSelected = select,
-            // Applying a preset can reconfigure the camera. Only apply the one the user lands on.
-            selectOnSettle = true,
-            modifier = modifier,
-            content = item
-        )
-    } else {
-        LookOptionList(
-            options = allPresets,
-            key = { it.id },
-            selectedIndex = allPresets.indexOfFirst { it.id == activePresetId },
-            expanded = expanded,
-            itemFooterHeight = lookThumbnailFooterHeight(),
-            modifier = modifier
-        ) { preset ->
-            item(preset, activePresetId == preset.id, { select(preset) }, if (expanded) Modifier.fillMaxWidth() else Modifier)
         }
     }
 }
