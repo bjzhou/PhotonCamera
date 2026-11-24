@@ -73,17 +73,17 @@ internal object PreviewMeteringMapper {
             sensorOrientationDegrees = sensorOrientationDegrees,
         )
 
-        val uiX = normalizedX.coerceIn(0f, 1f)
+        val rawUiX = normalizedX.coerceIn(0f, 1f)
+        // Camera2 前置预览在显示坐标系下做水平镜像，因此必须先在 UI 空间镜像再按传感器方向旋转。
+        val uiX = if (isFrontFacing) 1f - rawUiX else rawUiX
         val uiY = normalizedY.coerceIn(0f, 1f)
-        val (rotatedX, rotatedY) = when (Math.floorMod(sensorOrientationDegrees, 360)) {
+        val (sensorX, sensorY) = when (Math.floorMod(sensorOrientationDegrees, 360)) {
             0 -> uiX to uiY
             90 -> uiY to (1f - uiX)
             180 -> (1f - uiX) to (1f - uiY)
             270 -> (1f - uiY) to uiX
             else -> uiX to uiY
         }
-        val sensorX = if (isFrontFacing) 1f - rotatedX else rotatedX
-        val sensorY = rotatedY
 
         return PreviewMeteringMapping(
             centerX = mapNormalizedCoordinate(
