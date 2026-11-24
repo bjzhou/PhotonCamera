@@ -35,8 +35,8 @@ fun LevelIndicatorOverlay(
 ) {
     val context = LocalContext.current
 
-    var targetRotation by remember { mutableFloatStateOf(0f) }
-    var sensorReading by remember { mutableStateOf<LevelIndicatorReading?>(null) }
+    var targetRotation by remember(context) { mutableFloatStateOf(0f) }
+    var sensorReading by remember(context) { mutableStateOf<LevelIndicatorReading?>(null) }
     val isLevel = sensorReading?.isLevel == true
 
     val animatedBubbleOffset by animateOffsetAsState(
@@ -60,19 +60,24 @@ fun LevelIndicatorOverlay(
 
     DisposableEffect(context) {
         val sensorManager = context.getSystemService(Context.SENSOR_SERVICE) as SensorManager
-        val gravitySensor = sensorManager.getDefaultSensor(Sensor.TYPE_GRAVITY)
+        val gravityEstimator = AccelerometerGravityEstimator()
         var invalidSensorReadingLogged = false
         var previousMode = LevelIndicatorMode.HORIZON
 
         val listener = object : SensorEventListener {
-            override fun onSensorChanged(event: SensorEvent?) {
-                val reading = event?.values?.let {
-                    calculateLevelIndicatorReading(it, previousMode)
+            override fun onSensorChanged(event: SensorEvent) {
+                val fromAccelerometer = event.sensor.type == Sensor.TYPE_ACCELEROMETER
+                val gravity = if (fromAccelerometer) {
+                    gravityEstimator.update(event.values, event.timestamp)
+                } else {
+                    event.values
                 }
+                val reading = gravity?.let { calculateLevelIndicatorReading(it, previousMode) }
                 if (reading == null) {
                     if (!invalidSensorReadingLogged) {
                         invalidSensorReadingLogged = true
-                        PLog.w(TAG, "Ignored invalid gravity sensor reading: ${event.describeLevelSensorValues()}")
+                        val source = if (fromAccelerometer) "accelerometer" else "gravity sensor"
+                        PLog.w(TAG, "Ignored invalid $source reading: ${event.describeLevelSensorValues()}")
                     }
                     sensorReading = null
                     return
@@ -91,9 +96,17 @@ fun LevelIndicatorOverlay(
             override fun onAccuracyChanged(sensor: Sensor?, accuracy: Int) {}
         }
 
-        gravitySensor?.let {
-            sensorManager.registerListener(listener, it, SensorManager.SENSOR_DELAY_UI)
-        } ?: PLog.w(TAG, "Gravity sensor unavailable; level indicator is disabled")
+        val gravitySensor = sensorManager.getDefaultSensor(Sensor.TYPE_GRAVITY)
+        if (gravitySensor == null || !sensorManager.registerListener(listener, gravitySensor, SensorManager.SENSOR_DELAY_UI)) {
+            val reason = if (gravitySensor == null) "Gravity sensor unavailable" else "Gravity sensor registration failed"
+            val accelerometer = sensorManager.getDefaultSensor(Sensor.TYPE_ACCELEROMETER)
+            when {
+                accelerometer == null -> PLog.w(TAG, "$reason; accelerometer unavailable; level indicator is disabled")
+                sensorManager.registerListener(listener, accelerometer, SensorManager.SENSOR_DELAY_UI) ->
+                    PLog.i(TAG, "$reason; using accelerometer for level indicator")
+                else -> PLog.w(TAG, "$reason; accelerometer registration failed; level indicator is disabled")
+            }
+        }
         onDispose { sensorManager.unregisterListener(listener) }
     }
 
@@ -187,10 +200,10 @@ fun LevelIndicatorOverlay(
     }
 }
 
-private fun SensorEvent?.describeLevelSensorValues(): String {
-    val x = this?.values?.getOrNull(0)
-    val y = this?.values?.getOrNull(1)
-    val z = this?.values?.getOrNull(2)
+private fun SensorEvent.describeLevelSensorValues(): String {
+    val x = values.getOrNull(0)
+    val y = values.getOrNull(1)
+    val z = values.getOrNull(2)
     return "x=$x, y=$y, z=$z"
 }
 
