@@ -1921,6 +1921,7 @@ object GalleryManager {
         superResolutionScale: Float,
         includeCropRegionInOutputSize: Boolean = true,
         photoId: String? = null,
+        outputDimensionsFinal: Boolean = false,
     ) = withContext(Dispatchers.IO) {
         try {
             val photoId = photoId ?: UUID.randomUUID().toString()
@@ -1929,50 +1930,49 @@ object GalleryManager {
             val videoFile = File(photoDir, VIDEO_FILE)
             val thumbnailFile = File(photoDir, THUMBNAIL_FILE)
 
-            var cropRegion = resolveCaptureCropRegion(
-                captureResult = captureResult,
-                imageWidth = metadata.width,
-                imageHeight = metadata.height
-            )
-            if (includeCropRegionInOutputSize) {
-                PLog.i(
-                    TAG,
-                    "RAW_CROP_TRACE stage=PREPARE_RESULT image=${metadata.width}x${metadata.height} " +
-                        "scalerCrop=${captureResult?.get(CaptureResult.SCALER_CROP_REGION)} " +
-                        "zoomRatio=${captureResult?.get(CaptureResult.CONTROL_ZOOM_RATIO)} " +
-                        "distortionMode=${captureResult?.get(CaptureResult.DISTORTION_CORRECTION_MODE)} " +
-                        "legacyDerivedCrop=$cropRegion"
+            val metadataWithInfo = if (outputDimensionsFinal) {
+                metadata.copy(cropRegion = null)
+            } else {
+                var cropRegion = resolveCaptureCropRegion(
+                    captureResult = captureResult,
+                    imageWidth = metadata.width,
+                    imageHeight = metadata.height
                 )
-            }
-            if (superResolutionScale > 1.0f && cropRegion != null) {
-                cropRegion = Rect(
-                    (cropRegion.left * superResolutionScale).roundToInt(),
-                    (cropRegion.top * superResolutionScale).roundToInt(),
-                    (cropRegion.right * superResolutionScale).roundToInt(),
-                    (cropRegion.bottom * superResolutionScale).roundToInt()
-                )
-            }
-            if (cropRegion != null && !includeCropRegionInOutputSize) {
-                PLog.d(TAG, "Ignoring capture crop region for output sizing: $cropRegion")
-            }
-            val effectiveCropRegion = cropRegion?.takeIf { includeCropRegionInOutputSize }
-
-            val dimensions =
-                BitmapUtils.calculateProcessedRect(
+                if (includeCropRegionInOutputSize) {
+                    PLog.i(
+                        TAG,
+                        "RAW_CROP_TRACE stage=PREPARE_RESULT image=${metadata.width}x${metadata.height} " +
+                            "scalerCrop=${captureResult?.get(CaptureResult.SCALER_CROP_REGION)} " +
+                            "zoomRatio=${captureResult?.get(CaptureResult.CONTROL_ZOOM_RATIO)} " +
+                            "distortionMode=${captureResult?.get(CaptureResult.DISTORTION_CORRECTION_MODE)} " +
+                            "legacyDerivedCrop=$cropRegion"
+                    )
+                }
+                if (superResolutionScale > 1.0f && cropRegion != null) {
+                    cropRegion = Rect(
+                        (cropRegion.left * superResolutionScale).roundToInt(),
+                        (cropRegion.top * superResolutionScale).roundToInt(),
+                        (cropRegion.right * superResolutionScale).roundToInt(),
+                        (cropRegion.bottom * superResolutionScale).roundToInt()
+                    )
+                }
+                if (cropRegion != null && !includeCropRegionInOutputSize) {
+                    PLog.d(TAG, "Ignoring capture crop region for output sizing: $cropRegion")
+                }
+                val effectiveCropRegion = cropRegion?.takeIf { includeCropRegionInOutputSize }
+                val dimensions = BitmapUtils.calculateProcessedRect(
                     metadata.width,
                     metadata.height,
                     metadata.ratio,
                     effectiveCropRegion,
                     metadata.rotation
                 )
-            val finalWidth = dimensions.width()
-            val finalHeight = dimensions.height()
-            // 保存元数据
-            val metadataWithInfo = metadata.copy(
-                width = finalWidth,
-                height = finalHeight,
-                cropRegion = effectiveCropRegion,
-            )
+                metadata.copy(
+                    width = dimensions.width(),
+                    height = dimensions.height(),
+                    cropRegion = effectiveCropRegion,
+                )
+            }
             saveMetadata(context, photoId, metadataWithInfo)
 
             // The preview bitmap is the UI placeholder shown while the final image is being

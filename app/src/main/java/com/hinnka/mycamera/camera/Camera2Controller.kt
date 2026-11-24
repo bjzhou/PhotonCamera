@@ -60,6 +60,7 @@ import com.hinnka.mycamera.video.VIDEO_AUDIO_INPUT_AUTO
 import com.hinnka.mycamera.video.VideoBitratePreset
 import com.hinnka.mycamera.video.VideoCapabilitiesResolver
 import com.hinnka.mycamera.video.VideoFpsPreset
+import com.hinnka.mycamera.video.VideoFrameSnapshot
 import com.hinnka.mycamera.video.VideoEncoderColorRequest
 import com.hinnka.mycamera.video.VideoLogProfile
 import com.hinnka.mycamera.video.VideoLogLutMode
@@ -7602,6 +7603,9 @@ class Camera2Controller(private val context: Context) {
             else -> VideoStabilizationMode.OFF
         }
     }
+
+    internal fun captureVideoFrame(onCaptured: (VideoFrameSnapshot) -> Unit): Boolean =
+        videoRecorder.requestFrameSnapshot(onCaptured)
 
     fun pauseVideoRecording() {
         if (!_state.value.videoRecordingState.isRecording || _state.value.videoRecordingState.isPaused) return

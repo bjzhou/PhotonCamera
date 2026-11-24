@@ -7,6 +7,7 @@ import android.content.Context
 import android.content.Intent
 import android.graphics.Bitmap
 import android.graphics.ImageFormat
+import android.graphics.Matrix
 import android.graphics.SurfaceTexture
 import android.hardware.camera2.CameraCharacteristics
 import android.hardware.camera2.CameraDevice
@@ -3231,20 +3232,47 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             cameraController.setLocation(null, null)
         }
 
+        val look = currentLutLook.value
+        val captureState = state.value
+        if (currentState.videoRecordingState.isPaused) {
+            val glView = glSurfaceView ?: return
+            val frameId = currentFrameId
+            val mirror = cameraController.getLensFacing() == CameraCharacteristics.LENS_FACING_FRONT &&
+                userPreferencesRepository.current.mirrorFrontCamera
+            glView.captureRenderedPreviewFrame { bitmap ->
+                contentRepository.recordLutCapture(look.id)
+                viewModelScope.launch {
+                    saveVideoSnapshot(bitmap, look, frameId, mirror, captureState)
+                }.invokeOnCompletion { bitmap.recycle() }
+            }
+        } else {
+            val accepted = cameraController.captureVideoFrame { snapshot ->
+                viewModelScope.launch(Dispatchers.IO) {
+                    val transform = Matrix().apply {
+                        setScale(1f, -1f)
+                        postRotate(snapshot.orientationDegrees.toFloat())
+                    }
+                    val source = snapshot.bitmap
+                    val bitmap = Bitmap.createBitmap(source, 0, 0, source.width, source.height, transform, false)
+                    if (bitmap !== source) source.recycle()
+                    try {
+                        saveVideoSnapshot(bitmap, CameraLutLook.None, null, snapshot.isMirrored, captureState)
+                    } finally {
+                        if (bitmap !== source) bitmap.recycle()
+                    }
+                }.invokeOnCompletion {
+                    if (!snapshot.bitmap.isRecycled) snapshot.bitmap.recycle()
+                }
+            }
+            if (!accepted) return
+        }
+
         if (isShutterSoundEnabled) {
             shutterSoundPlayer.play()
         }
         if (isVibrationEnabled) {
             vibrationHelper.vibrate()
         }
-
-        val look = currentLutLook.value
-        glSurfaceView?.capturePreviewFrame { bitmap ->
-            contentRepository.recordLutCapture(look.id)
-            viewModelScope.launch {
-                saveVideoSnapshot(bitmap, look)
-            }
-        } ?: PLog.w(TAG, "captureVideoFrame skipped: glSurfaceView unavailable")
     }
 
     /**
@@ -5339,57 +5367,47 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         }
     }
 
-    private suspend fun saveVideoSnapshot(bitmap: Bitmap, look: CameraLutLook) {
-        savePreviewBitmapCapture(
-            bitmap = bitmap,
-            metadataCaptureMode = "video_snapshot",
-            ratio = mapVideoAspectRatioToPhotoAspectRatio(state.value.videoConfig.aspectRatio),
-            look = look
-        )
-    }
-
-    private suspend fun savePreviewBitmapCapture(
+    private suspend fun saveVideoSnapshot(
         bitmap: Bitmap,
-        metadataCaptureMode: String,
-        ratio: AspectRatio?,
         look: CameraLutLook,
+        frameId: String?,
+        shouldMirror: Boolean,
+        captureState: CameraState,
     ) {
         try {
             val context = getApplication<Application>()
-            val currentState = state.value
             val shouldAutoSave = userPreferencesRepository.latest().autoSaveAfterCapture
             val sharpeningValue = 0f
             val noiseReductionValue = 0f
             val chromaNoiseReductionValue = 0f
             val photoQualityValue = userPreferencesRepository.latest().photoQuality
             val userPrefs = userPreferencesRepository.userPreferences.firstOrNull()
-            val shouldMirror = cameraController.getLensFacing() == CameraCharacteristics.LENS_FACING_FRONT &&
-                    userPreferencesRepository.latest().mirrorFrontCamera
-            val currentCameraId = cameraController.getCurrentCameraId()
+            val currentCameraId = captureState.currentCameraId
             val effectiveRawAutoExposure = resolveEffectiveRawAutoExposure()
             val spectralFilmSettings = resolveRawSpectralFilmSettings(userPrefs)
             val captureInfo = cameraController.rebuildCaptureInfo(
                 result = null,
                 imageWidth = bitmap.width,
                 imageHeight = bitmap.height,
-                latitude = currentState.latitude,
-                longitude = currentState.longitude
+                latitude = captureState.latitude,
+                longitude = captureState.longitude,
+                captureState = captureState,
             )
-            val computationalAperture = if (currentState.isVirtualApertureEnabled) {
-                currentState.virtualAperture
+            val computationalAperture = if (captureState.isVirtualApertureEnabled) {
+                captureState.virtualAperture
             } else {
                 null
             }
 
             val metadata = MediaMetadata(
                 lutId = look.id,
-                frameId = currentFrameId,
+                frameId = frameId,
                 colorRecipeParams = look.recipe,
                 photoColorRecipeEdits = look.photoColorRecipeEdits(),
                 sharpening = sharpeningValue,
                 noiseReduction = noiseReductionValue,
                 chromaNoiseReduction = chromaNoiseReductionValue,
-                captureNoiseReductionLevel = currentState.nrLevel,
+                captureNoiseReductionLevel = captureState.nrLevel,
                 rawDcpId = userPrefs?.rawDcpIdForLens(currentCameraId),
                 rawHncsProfileId = userPrefs?.rawHncsProfileId,
                 rawHncsRenderIntent = userPrefs?.rawHncsRenderIntent
@@ -5420,7 +5438,6 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 fotufilmDocument = resolveRawFotufilmDocument(userPrefs)?.toJson(),
                 width = bitmap.width,
                 height = bitmap.height,
-                ratio = ratio,
                 rotation = 0,
                 deviceModel = DeviceUtil.model,
                 brand = captureInfo.make,
@@ -5433,14 +5450,14 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 focalLength = captureInfo.formatFocalLength(),
                 focalLength35mm = captureInfo.formatFocalLength35mm(),
                 aperture = captureInfo.formatAperture(),
-                exposureBias = currentState.exposureBias,
+                exposureBias = captureState.exposureBias,
                 droMode = userPreferencesRepository.current.droMode,
                 isMirrored = shouldMirror,
                 colorSpace = captureInfo.colorSpace,
                 computationalAperture = computationalAperture,
-                focusPointX = currentState.focusPoint?.first,
-                focusPointY = currentState.focusPoint?.second,
-                captureMode = metadataCaptureMode
+                focusPointX = captureState.focusPoint?.first,
+                focusPointY = captureState.focusPoint?.second,
+                captureMode = "video_snapshot"
             )
 
             val photoId = GalleryManager.preparePhoto(
@@ -5450,10 +5467,10 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 bitmap,
                 false,
                 1.0f,
-                includeCropRegionInOutputSize = false
+                outputDimensionsFinal = true
             )
             if (photoId == null) {
-                PLog.e(TAG, "Failed to prepare preview bitmap capture: $metadataCaptureMode")
+                PLog.e(TAG, "Failed to prepare video snapshot")
                 return
             }
 
@@ -5470,17 +5487,12 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                     photoQualityValue
                 )
             }
-            PLog.d(TAG, "Preview bitmap capture saved: $photoId, mode=$metadataCaptureMode")
+            PLog.d(TAG, "Video snapshot saved: $photoId, ${bitmap.width}x${bitmap.height}")
             _imageSavedEvent.emit(photoId)
+        } catch (e: CancellationException) {
+            throw e
         } catch (e: Exception) {
-            PLog.e(TAG, "Failed to save preview bitmap capture: $metadataCaptureMode", e)
-        }
-    }
-
-    private fun mapVideoAspectRatioToPhotoAspectRatio(aspectRatio: VideoAspectRatio): AspectRatio? {
-        return when (aspectRatio) {
-            VideoAspectRatio.RATIO_16_9 -> AspectRatio.RATIO_16_9
-            else -> null
+            PLog.e(TAG, "Failed to save video snapshot", e)
         }
     }
 

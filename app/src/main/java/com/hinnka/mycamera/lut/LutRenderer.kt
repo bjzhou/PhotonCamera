@@ -2843,6 +2843,18 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
         )
     }
 
+    fun captureRenderedPreviewFrame(onCaptured: (Bitmap) -> Unit) {
+        if (viewportWidth <= 0 || viewportHeight <= 0) return
+        pendingPreviewCaptureRequests.addLast(
+            PreviewCaptureRequest(
+                width = viewportWidth,
+                height = viewportHeight,
+                source = PreviewCaptureSource.FinalDisplay,
+                onCaptured = onCaptured,
+            )
+        )
+    }
+
     private fun capturePendingPreviewFrames(
         finalDisplayTextureId: Int?,
         finalDisplayWidth: Int,

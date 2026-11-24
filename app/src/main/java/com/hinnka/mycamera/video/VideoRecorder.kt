@@ -4,6 +4,7 @@ import com.hinnka.mycamera.lut.SharedEisRgbFrameChannel
 import android.Manifest
 import android.content.Context
 import android.content.pm.PackageManager
+import android.graphics.Bitmap
 import android.hardware.camera2.CameraCharacteristics
 import android.media.AudioFormat
 import android.media.AudioManager
@@ -42,6 +43,12 @@ import kotlinx.coroutines.withContext
 import java.nio.ByteBuffer
 import java.util.ArrayDeque
 import java.util.concurrent.Executors
+
+internal data class VideoFrameSnapshot(
+    val bitmap: Bitmap,
+    val orientationDegrees: Int,
+    val isMirrored: Boolean,
+)
 
 class VideoRecorder(
     private val context: Context,
@@ -167,6 +174,7 @@ class VideoRecorder(
     private var lastMuxedAudioPresentationTimeUs = Long.MIN_VALUE
     private var pendingRealtimeFrameCount = 0
     private val pendingYuvFrames = ArrayDeque<StabilizationImageReader.AcquiredImage>()
+    private var pendingSnapshot: ((VideoFrameSnapshot) -> Unit)? = null
     private var renderLoopRunning = false
     private var statsWindowStartMs: Long = 0L
     private var statsIncomingFrames: Int = 0
@@ -344,6 +352,7 @@ class VideoRecorder(
             activePauseStartTimeUs = nowUs
         }
         isPaused = true
+        synchronized(realtimeFrameLock) { pendingSnapshot = null }
         renderer?.pauseStabilization()
         PLog.d(TAG, "Video recording paused")
     }
@@ -364,6 +373,15 @@ class VideoRecorder(
     }
 
     fun isRecording(): Boolean = isRecording && !stopRequested
+
+    internal fun requestFrameSnapshot(onCaptured: (VideoFrameSnapshot) -> Unit): Boolean =
+        synchronized(realtimeFrameLock) {
+            if (!isRecording || isPaused || stopRequested || pendingSnapshot != null) {
+                return@synchronized false
+            }
+            pendingSnapshot = onCaptured
+            true
+        }
 
     fun setPreferredAudioInputId(audioInputId: String) {
         preferredAudioInputId = audioInputId.ifBlank { VIDEO_AUDIO_INPUT_AUTO }
@@ -912,10 +930,30 @@ class VideoRecorder(
                     continue
                 }
                 val renderStartMs = SystemClock.elapsedRealtime()
+                val snapshotRequest = synchronized(realtimeFrameLock) { pendingSnapshot }
+                val snapshotCallback: ((Bitmap?) -> Unit)? = snapshotRequest?.let { request ->
+                    { bitmap ->
+                        synchronized(realtimeFrameLock) {
+                            if (pendingSnapshot === request) {
+                                pendingSnapshot = null
+                            }
+                        }
+                        if (bitmap != null) {
+                            request(
+                                VideoFrameSnapshot(
+                                    bitmap,
+                                    requestedOrientationHintDegrees,
+                                    requestedFlipEncodedFrame,
+                                )
+                            )
+                        }
+                    }
+                }
                 val presentationTimeNs = yuvFrame.use { frame ->
                     videoRenderer.renderLatestFrame(
                         mapPresentationTimeNs = ::mapCameraTimestampToBoottimeNs,
                         yuvImage = frame?.image,
+                        onSnapshot = snapshotCallback,
                     )
                 } ?: continue
                 establishTimelineOrigin(presentationTimeNs / 1_000L)
@@ -1436,6 +1474,7 @@ class VideoRecorder(
             pendingYuvFrames.forEach { it.close() }
             pendingYuvFrames.clear()
             pendingRealtimeFrameCount = 0
+            pendingSnapshot = null
             renderLoopRunning = false
         }
     }

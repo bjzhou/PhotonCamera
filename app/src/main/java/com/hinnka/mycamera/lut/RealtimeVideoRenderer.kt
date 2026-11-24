@@ -1,6 +1,7 @@
 package com.hinnka.mycamera.lut
 
 import android.content.Context
+import android.graphics.Bitmap
 import android.media.Image
 import android.graphics.SurfaceTexture
 import android.opengl.GLES11Ext
@@ -229,17 +230,19 @@ class RealtimeVideoRenderer(
      * 消费一帧 OES、共享 YUV 或防抖输出并写入编码器。必须在录像 GL 线程调用。
      *
      * [mapPresentationTimeNs] 将相机时间轴映射到编码器使用的公共时间轴。
+     * [onSnapshot] 接收同一帧在交换缓冲区前读出的像素，行序与 GL 一致。
      *
      * @return 写入编码器的帧时间戳（纳秒）；没有有效帧时返回 null。
      */
     fun renderLatestFrame(
         mapPresentationTimeNs: (cameraTimestampNs: Long) -> Long,
         yuvImage: Image? = null,
+        onSnapshot: ((Bitmap?) -> Unit)? = null,
     ): Long? {
         if (!initialized || !makeCurrent()) return null
         timing?.beginFrame()
         try {
-            return renderCurrentFrame(mapPresentationTimeNs, yuvImage)
+            return renderCurrentFrame(mapPresentationTimeNs, yuvImage, onSnapshot)
         } finally {
             timing?.endFrame()
         }
@@ -248,6 +251,7 @@ class RealtimeVideoRenderer(
     private fun renderCurrentFrame(
         mapPresentationTimeNs: (Long) -> Long,
         yuvImage: Image?,
+        onSnapshot: ((Bitmap?) -> Unit)?,
     ): Long? {
         var sourceTextureSource = PreviewColorTextureSource.TEXTURE_2D
         var sourceTextureTarget = GLES30.GL_TEXTURE_2D
@@ -345,15 +349,78 @@ class RealtimeVideoRenderer(
 
         }
 
-        timing.cpu("encoder.submit") {
-            EGLExt.eglPresentationTimeANDROID(eglDisplay, encoderEglSurface, presentationTimeNs)
-            if (!EGL14.eglSwapBuffers(eglDisplay, encoderEglSurface)) {
-                throw IllegalStateException(
-                    "Realtime video eglSwapBuffers failed: 0x${Integer.toHexString(EGL14.eglGetError())}"
-                )
+        val snapshotPbo = if (onSnapshot != null) beginSnapshotReadback() else 0
+        try {
+            timing.cpu("encoder.submit") {
+                EGLExt.eglPresentationTimeANDROID(eglDisplay, encoderEglSurface, presentationTimeNs)
+                if (!EGL14.eglSwapBuffers(eglDisplay, encoderEglSurface)) {
+                    throw IllegalStateException(
+                        "Realtime video eglSwapBuffers failed: 0x${Integer.toHexString(EGL14.eglGetError())}"
+                    )
+                }
             }
+            onSnapshot?.invoke(if (snapshotPbo != 0) finishSnapshotReadback(snapshotPbo) else null)
+        } finally {
+            if (snapshotPbo != 0) GLES30.glDeleteBuffers(1, intArrayOf(snapshotPbo), 0)
         }
         return presentationTimeNs
+    }
+
+    private fun beginSnapshotReadback(): Int {
+        val buffers = IntArray(1)
+        val width = encoderOutputSize.width
+        val height = encoderOutputSize.height
+        GLES30.glGenBuffers(1, buffers, 0)
+        val buffer = buffers[0]
+        if (buffer == 0) {
+            PLog.e(TAG, "Cannot allocate video snapshot PBO: glError=${GLES30.glGetError()}")
+            return 0
+        }
+        var submitted = false
+        try {
+            GLES30.glBindFramebuffer(GLES30.GL_READ_FRAMEBUFFER, 0)
+            GLES30.glReadBuffer(GLES30.GL_BACK)
+            GLES30.glBindBuffer(GLES30.GL_PIXEL_PACK_BUFFER, buffer)
+            GLES30.glBufferData(GLES30.GL_PIXEL_PACK_BUFFER, width * height * 4, null, GLES30.GL_STREAM_READ)
+            val allocationError = GLES30.glGetError()
+            check(allocationError == GLES30.GL_NO_ERROR) { "PBO allocation glError=$allocationError" }
+            GLES30.glReadPixels(0, 0, width, height, GLES30.GL_RGBA, GLES30.GL_UNSIGNED_BYTE, 0)
+            val readError = GLES30.glGetError()
+            check(readError == GLES30.GL_NO_ERROR) { "glReadPixels glError=$readError" }
+            submitted = true
+            return buffer
+        } catch (error: Exception) {
+            PLog.e(TAG, "Video snapshot readback failed: ${width}x$height", error)
+            return 0
+        } finally {
+            GLES30.glBindBuffer(GLES30.GL_PIXEL_PACK_BUFFER, 0)
+            if (!submitted) GLES30.glDeleteBuffers(1, buffers, 0)
+        }
+    }
+
+    private fun finishSnapshotReadback(buffer: Int): Bitmap? {
+        val width = encoderOutputSize.width
+        val height = encoderOutputSize.height
+        var bitmap: Bitmap? = null
+        GLES30.glBindBuffer(GLES30.GL_PIXEL_PACK_BUFFER, buffer)
+        try {
+            val pixels = GLES30.glMapBufferRange(
+                GLES30.GL_PIXEL_PACK_BUFFER, 0, width * height * 4, GLES30.GL_MAP_READ_BIT,
+            ) as? ByteBuffer ?: error("Cannot map video snapshot: glError=${GLES30.glGetError()}")
+            try {
+                bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
+                bitmap.copyPixelsFromBuffer(pixels)
+            } finally {
+                check(GLES30.glUnmapBuffer(GLES30.GL_PIXEL_PACK_BUFFER)) { "Video snapshot pixel data is invalid" }
+            }
+            return bitmap
+        } catch (error: Exception) {
+            bitmap?.recycle()
+            PLog.e(TAG, "Failed to copy video snapshot", error)
+            return null
+        } finally {
+            GLES30.glBindBuffer(GLES30.GL_PIXEL_PACK_BUFFER, 0)
+        }
     }
 
     /** 与预览一致的顺序：色彩 -> 柔光 -> Halation -> Bloom -> 颗粒，最后写入编码器 Surface。 */

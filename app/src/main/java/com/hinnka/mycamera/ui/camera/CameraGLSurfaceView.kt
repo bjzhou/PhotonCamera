@@ -350,6 +350,13 @@ class CameraGLSurfaceView @JvmOverloads constructor(
         }
     }
 
+    fun captureRenderedPreviewFrame(callback: (Bitmap) -> Unit) {
+        queueEvent {
+            renderer.captureRenderedPreviewFrame { bitmap -> post { callback(bitmap) } }
+            requestRender()
+        }
+    }
+
     fun captureNextPreviewFrame(maxLongEdge: Int, callback: (Bitmap) -> Unit) {
         capturePreviewFrameInternal(
             maxLongEdge = maxLongEdge,
