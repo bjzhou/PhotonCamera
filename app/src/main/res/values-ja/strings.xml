@@ -78,6 +78,8 @@
     <string name="none">なし</string>
     <string name="show_app_branding">アプリのブランディングを表示</string>
     <string name="import_photo">インポート</string>
+    <string name="import_from_photo_library">フォトライブラリ</string>
+    <string name="import_from_files">ファイル</string>
     <string name="watermark_adjustment">透かしの微調整</string>
     <string name="logo">ロゴ</string>
     <string name="text_content">テキスト内容</string>

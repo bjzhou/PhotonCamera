@@ -168,6 +168,8 @@
     <string name="none">None</string>
     <string name="show_app_branding">Show App Branding</string>
     <string name="import_photo">Import</string>
+    <string name="import_from_photo_library">Photo Library</string>
+    <string name="import_from_files">Files</string>
     <string name="watermark_adjustment">Watermark Adjustment</string>
     <string name="logo">LOGO</string>
     <string name="text_content">Text Content</string>

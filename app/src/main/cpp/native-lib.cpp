@@ -1986,7 +1986,11 @@ static bool computeLibRawCameraToXyzD50(const LibRaw &rawProcessor,
           rawProcessor.imgdata.color.cam_xyz[row][col];
     }
   }
-  if (!hasMatrixSignal(cameraToSrgb) || !hasMatrixSignal(xyzToCamera)) {
+  // LibRaw's Nikon sRAW decoder outputs white-balanced linear sRGB.
+  const bool nikonSraw =
+      (rawProcessor.imgdata.color.as_shot_wb_applied & LIBRAW_ASWB_NIKON_SRAW) != 0;
+  if (!hasMatrixSignal(cameraToSrgb) ||
+      (!nikonSraw && !hasMatrixSignal(xyzToCamera))) {
     return false;
   }
 
@@ -1998,7 +2002,9 @@ static bool computeLibRawCameraToXyzD50(const LibRaw &rawProcessor,
   const float blue = wb[2] > 0.0f && std::isfinite(wb[2]) ? wb[2] : 1.0f;
   const Matrix3x3 wbMatrix =
       diagonalMatrix3x3({red, (greenEven + greenOdd) * 0.5f, blue});
-  if (outWhiteXy) {
+  if (outWhiteXy && nikonSraw) {
+    *outWhiteXy = {0.3127f, 0.3290f};
+  } else if (outWhiteXy) {
     const float green = std::max((greenEven + greenOdd) * 0.5f, 1e-6f);
     const std::array<float, 3> cameraNeutral = {
         green / std::max(red, 1e-6f),
@@ -3085,7 +3091,7 @@ static void exif_callback(void *datap, int tag, int type, int len,
 }
 
 /**
- * 使用 LibRaw 处理 DNG 文件
+ * 使用 LibRaw 读取 RAW 文件
  */
 JNIEXPORT jobject JNICALL
 Java_com_hinnka_mycamera_raw_RawDemosaicProcessor_processDngNative(
@@ -3118,7 +3124,6 @@ Java_com_hinnka_mycamera_raw_RawDemosaicProcessor_processDngNative(
     env->ReleaseStringUTFChars(filePath, path);
     return nullptr;
   }
-
   ret = RawProcessor.unpack();
   if (ret != LIBRAW_SUCCESS) {
     LOGE("processDngNative: Failed to unpack %s, ret=%d", path, ret);
@@ -3397,6 +3402,8 @@ Java_com_hinnka_mycamera_raw_RawDemosaicProcessor_processDngNative(
 
   float selectedWb[4] = {1.0f, 1.0f, 1.0f, 1.0f};
   float cameraWb[4] = {0.0f, 0.0f, 0.0f, 0.0f};
+  const bool nikonSraw = useLinearRawRgb &&
+      (RawProcessor.imgdata.color.as_shot_wb_applied & LIBRAW_ASWB_NIKON_SRAW) != 0;
   bool hasCameraWb = true;
   for (int i = 0; i < 4; i++) {
     const float val = RawProcessor.imgdata.color.cam_mul[i];
@@ -3413,7 +3420,10 @@ Java_com_hinnka_mycamera_raw_RawDemosaicProcessor_processDngNative(
     selectedWb[3] = selectedWb[1];
   }
   const char *selectedWbSource = hasCameraWb ? "cam_mul" : "unity";
-  if (!hasCameraWb &&
+  if (nikonSraw) {
+    std::fill_n(selectedWb, 4, 1.0f);
+    selectedWbSource = "already applied";
+  } else if (!hasCameraWb &&
       computeWbFromDngAsShotWhiteXY(RawProcessor, dngRawTagInfo,
                                     colorCalibrationMode, selectedWb)) {
     selectedWbSource = "AsShotWhiteXY";
@@ -3499,9 +3509,20 @@ Java_com_hinnka_mycamera_raw_RawDemosaicProcessor_processDngNative(
       }
     }
   } else {
+    const int rowPixels = rawPitch > 0 ? rawPitch / sizeof(unsigned short) : rawWidth;
+    if (width <= 0 || height <= 0 || left + width > rowPixels ||
+        top + height > RawProcessor.imgdata.sizes.raw_height) {
+      LOGE("processDngNative: invalid Bayer geometry: active=%dx%d margin=%d,%d pitch=%d rawHeight=%d",
+           width, height, left, top, rawPitch, RawProcessor.imgdata.sizes.raw_height);
+      free(outData);
+      env->ReleaseStringUTFChars(filePath, path);
+      return nullptr;
+    }
     unsigned short *src = RawProcessor.imgdata.rawdata.raw_image;
     for (int y = 0; y < height; y++) {
-      memcpy(dst + y * width, src + (y + top) * rawWidth + left, width * 2);
+      memcpy(dst + static_cast<size_t>(y) * width,
+             src + static_cast<size_t>(y + top) * rowPixels + left,
+             static_cast<size_t>(width) * sizeof(unsigned short));
     }
   }
   jobject rawDataBuffer = env->NewDirectByteBuffer(outData, outputSize);
@@ -3520,9 +3541,11 @@ Java_com_hinnka_mycamera_raw_RawDemosaicProcessor_processDngNative(
 
   jfloatArray preMulArray = env->NewFloatArray(4);
   float preMul[4] = {1.0f, 1.0f, 1.0f, 1.0f};
-  for (int i = 0; i < 4; i++) {
-    const float val = RawProcessor.imgdata.color.pre_mul[i];
-    preMul[i] = val > 0.0f ? val : 1.0f;
+  if (!nikonSraw) {
+    for (int i = 0; i < 4; i++) {
+      const float val = RawProcessor.imgdata.color.pre_mul[i];
+      preMul[i] = val > 0.0f ? val : 1.0f;
+    }
   }
   env->SetFloatArrayRegion(preMulArray, 0, 4, preMul);
 
@@ -3829,7 +3852,9 @@ Java_com_hinnka_mycamera_raw_RawDemosaicProcessor_processDngNative(
   jfloat whiteLevel = dngStage2Applied
                           ? 65535.0f
                           : (jfloat)RawProcessor.imgdata.color.dng_levels.dng_whitelevel[0];
-  if (whiteLevel <= 0 && useLinearRawRgb)
+  if (nikonSraw)
+    whiteLevel = static_cast<jfloat>(RawProcessor.imgdata.color.maximum);
+  else if (whiteLevel <= 0 && useLinearRawRgb)
     whiteLevel = 65535.0f;
   else if (whiteLevel <= 0)
     whiteLevel = (jfloat)RawProcessor.imgdata.color.maximum;
@@ -3867,8 +3892,29 @@ Java_com_hinnka_mycamera_raw_RawDemosaicProcessor_processDngNative(
   // LOGI("aa: %d, %d, %d, %d", aa[0], aa[1], aa[2], aa[3]);
 
   int defaultCrop[4] = {0, 0, 0, 0};
-  const bool hasDefaultCrop = computeValidDngDefaultCrop(
+  bool hasDefaultCrop = computeValidDngDefaultCrop(
       dngRawTagInfo, left, top, width, height, defaultCrop);
+  if (!hasDefaultCrop && !isDngInput &&
+      RawProcessor.imgdata.idata.maker_index == LIBRAW_CAMERAMAKER_Nikon) {
+    const auto &crops = RawProcessor.imgdata.sizes.raw_inset_crops;
+    // The second inset, when present, includes the camera's selected aspect ratio.
+    for (int index : {1, 0}) {
+      const auto &crop = crops[index];
+      const int cropLeft = crop.cleft - left;
+      const int cropTop = crop.ctop - top;
+      const int cropRight = cropLeft + crop.cwidth;
+      const int cropBottom = cropTop + crop.cheight;
+      if (crop.cwidth > 0 && crop.cheight > 0 && cropLeft >= 0 && cropTop >= 0 &&
+          cropRight <= width && cropBottom <= height) {
+        defaultCrop[0] = cropLeft;
+        defaultCrop[1] = cropTop;
+        defaultCrop[2] = cropRight;
+        defaultCrop[3] = cropBottom;
+        hasDefaultCrop = true;
+        break;
+      }
+    }
+  }
   LOGI("RAW_CROP_TRACE stage=NATIVE_DNG_READ activeTag=%d active=%d,%d,%d,%d "
        "originTag=%d origin=%f,%f sizeTag=%d size=%f,%f "
        "valid=%d localCrop=%d,%d,%d,%d buffer=%d,%d,%d,%d",

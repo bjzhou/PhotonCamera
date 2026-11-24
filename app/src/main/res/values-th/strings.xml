@@ -140,6 +140,8 @@
     <string name="none">ไม่มี</string>
     <string name="show_app_branding">แสดงแบรนด์แอป</string>
     <string name="import_photo">นำเข้า</string>
+    <string name="import_from_photo_library">คลังรูปภาพ</string>
+    <string name="import_from_files">ไฟล์</string>
     <string name="watermark_adjustment">การปรับลายน้ำ</string>
     <string name="logo">โลโก้</string>
     <string name="text_content">เนื้อหาข้อความ</string>

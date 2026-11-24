@@ -22,6 +22,7 @@ import com.hinnka.mycamera.camera.CaptureInfo
 import com.hinnka.mycamera.camera.HdrBracketConfig
 import com.hinnka.mycamera.camera.MultiFrameConfig
 import com.hinnka.mycamera.data.ContentRepository
+import com.hinnka.mycamera.data.CustomImportManager
 import com.hinnka.mycamera.gallery.db.GalleryMediaStore
 import com.hinnka.mycamera.hdr.GainmapResult
 import com.hinnka.mycamera.hdr.GainmapSourceSet
@@ -5499,21 +5500,6 @@ object GalleryManager {
 
 
     /**
-     * 从 URI 获取文件名
-     */
-    private fun getFileName(context: Context, uri: Uri): String? {
-        return try {
-            context.contentResolver.query(uri, null, null, null, null)?.use { cursor ->
-                val nameIndex = cursor.getColumnIndex(android.provider.OpenableColumns.DISPLAY_NAME)
-                cursor.moveToFirst()
-                cursor.getString(nameIndex)
-            }
-        } catch (e: Exception) {
-            null
-        }
-    }
-
-    /**
      * 从系统相册导入照片
      */
     suspend fun importPhoto(
@@ -5527,6 +5513,19 @@ object GalleryManager {
     ): String? {
         return withContext(Dispatchers.IO) {
             try {
+                val mimeType = context.contentResolver.getType(uri)?.substringBefore(';')?.trim()?.lowercase(Locale.ROOT)
+                val fileName = CustomImportManager.resolveDisplayFileName(context, uri)
+                val isRaw = GalleryRawSource.isImportable(fileName, mimeType)
+                val metadata = MediaMetadata.fromUri(context, uri).copy(
+                    lutId = lutId,
+                    computationalAperture = computationalAperture,
+                    sourceUri = uri.toString()
+                )
+                if (mimeType == "application/octet-stream" && !isRaw && metadata.mimeType?.startsWith("image/") != true) {
+                    PLog.w(TAG, "Unsupported imported media: $uri")
+                    return@withContext null
+                }
+
                 val photoId = photoId ?: UUID.randomUUID().toString()
                 val photoDir = getPhotoDir(context, photoId, true)
                 val photoFile = File(photoDir, PHOTO_FILE)
@@ -5543,16 +5542,6 @@ object GalleryManager {
                     dngFile.renameTo(bakPhotoFile)
                 }
 
-                // 2. 读取元数据以获取旋转信息
-                val metadata = MediaMetadata.fromUri(context, uri).copy(
-                    lutId = lutId,
-                    computationalAperture = computationalAperture,
-                    sourceUri = uri.toString()
-                )
-
-                // 1. 检测是否为 RAW 或视频文件
-                val mimeType = context.contentResolver.getType(uri)
-                val fileName = getFileName(context, uri) ?: ""
                 val isVideo = mimeType?.startsWith("video/") == true
 
                 if (isVideo) {
@@ -5587,16 +5576,8 @@ object GalleryManager {
                     return@withContext photoId
                 }
 
-                val isDng = mimeType?.contains("dng", ignoreCase = true) == true ||
-                    fileName.endsWith(".dng", ignoreCase = true)
-                val isRaw = mimeType?.contains("raw", ignoreCase = true) == true ||
-                        isDng ||
-                        fileName.endsWith(".rw2", ignoreCase = true) ||
-                        fileName.endsWith(".arw", ignoreCase = true) ||
-                        fileName.endsWith(".3fr", ignoreCase = true) ||
-                        fileName.endsWith(".cr3", ignoreCase = true)
-
                 if (isRaw) {
+                    val isDng = GalleryRawSource.isDng(fileName, mimeType)
                     // --- RAW 处理逻辑 ---
                     // 1. 复制 RAW 文件
                     context.contentResolver.openInputStream(uri)?.use { input ->

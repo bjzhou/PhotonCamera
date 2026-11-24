@@ -22,6 +22,7 @@ import androidx.lifecycle.viewModelScope
 import com.hinnka.mycamera.data.ContentRepository
 import com.hinnka.mycamera.frame.FrameInfo
 import com.hinnka.mycamera.gallery.GalleryManager
+import com.hinnka.mycamera.gallery.GalleryRawSource
 import com.hinnka.mycamera.gallery.GalleryEditLook
 import com.hinnka.mycamera.gallery.ProcessingPhoto
 import com.hinnka.mycamera.gallery.MediaData
@@ -1424,18 +1425,8 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
         )
     }
 
-    private fun MediaData.isRawLikeMedia(): Boolean {
-        if (!isImage) return false
-        val lowerMime = mimeType.orEmpty().lowercase(Locale.US)
-        val lowerName = displayName.lowercase(Locale.US)
-        return lowerMime.contains("dng") ||
-            lowerMime.contains("raw") ||
-            lowerName.endsWith(".dng") ||
-            lowerName.endsWith(".rw2") ||
-            lowerName.endsWith(".arw") ||
-            lowerName.endsWith(".3fr") ||
-            lowerName.endsWith(".cr3")
-    }
+    private fun MediaData.isRawLikeMedia(): Boolean =
+        isImage && GalleryRawSource.isImportable(displayName, mimeType)
 
     private fun restoreCropEditState(photo: MediaData?, metadata: MediaMetadata?) {
         if (metadata == null) {
@@ -4766,9 +4757,13 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                 }
 
                 if (importedIds.isNotEmpty()) {
-                    loadPhotos()
-                    onImportFinished(importedIds)
+                    if (importedIds.size == 1 && selectedTab != GalleryTab.PHOTON) {
+                        selectTab(GalleryTab.PHOTON)
+                    } else {
+                        loadPhotos()
+                    }
                 }
+                onImportFinished(importedIds)
                 PLog.d(TAG, "Imported ${importedIds.size} of ${uris.size} photos")
             } catch (e: Exception) {
                 PLog.e(TAG, "Failed to import photos", e)

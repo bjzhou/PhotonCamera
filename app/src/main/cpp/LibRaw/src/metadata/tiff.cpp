@@ -2263,16 +2263,17 @@ void LibRaw::apply_tiff()
                      16ULL; // bytes per row
       }
       else if ((!strncmp(model, "NIKON Z 9", 9) || !strncmp(model, "NIKON Z 8", 9) || !strcmp(model, "NIKON Z f")
-		  || !strcmp(model, "NIKON Z6_3")) &&
+		  || !strcmp(model, "NIKON Z6_3") || !strcmp(model, "NIKON Z5_2")) &&
                tiff_ifd[raw].offset)
       {
           INT64 pos = ftell(ifp);
           unsigned char cmp[] = {0xff, 0x10, 0xff, 0x50 }; // JpegXS SOC + Cap
-          unsigned char buf[4];
-          fseek(ifp, INT64(tiff_ifd[raw].offset), SEEK_SET);
-          fread(buf, 1, 4, ifp);
+          unsigned char buf[sizeof(cmp)];
+          const auto bytes_read = fseek(ifp, INT64(tiff_ifd[raw].offset), SEEK_SET) == 0
+              ? fread(buf, 1, sizeof(buf), ifp)
+              : 0;
           fseek(ifp, pos, SEEK_SET);
-          if(!memcmp(buf,cmp,4))
+          if (bytes_read == sizeof(buf) && !memcmp(buf, cmp, sizeof(buf)))
             load_raw = &LibRaw::nikon_he_load_raw;
           else
             load_raw = &LibRaw::nikon_load_raw;

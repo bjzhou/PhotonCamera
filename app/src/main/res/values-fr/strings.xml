@@ -66,6 +66,8 @@
     <string name="none">Aucun</string>
     <string name="show_app_branding">Afficher la marque de l\'application</string>
     <string name="import_photo">Importer</string>
+    <string name="import_from_photo_library">Photothèque</string>
+    <string name="import_from_files">Fichiers</string>
     <string name="watermark_adjustment">Ajustement du filigrane</string>
     <string name="logo">LOGO</string>
     <string name="text_content">Contenu textuel</string>

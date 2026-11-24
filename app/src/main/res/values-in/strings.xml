@@ -66,6 +66,8 @@
     <string name="none">Tidak ada</string>
     <string name="show_app_branding">Tampilkan Branding Aplikasi</string>
     <string name="import_photo">Impor</string>
+    <string name="import_from_photo_library">Galeri Foto</string>
+    <string name="import_from_files">File</string>
     <string name="watermark_adjustment">Penyesuaian Tanda Air</string>
     <string name="logo">LOGO</string>
     <string name="text_content">Konten Teks</string>

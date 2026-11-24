@@ -67,6 +67,8 @@
     <string name="none">Nenhuma</string>
     <string name="show_app_branding">Mostrar Marca do App</string>
     <string name="import_photo">Importar</string>
+    <string name="import_from_photo_library">Fototeca</string>
+    <string name="import_from_files">Arquivos</string>
     <string name="watermark_adjustment">Ajuste da Marca d\'água</string>
     <string name="logo">LOGO</string>
     <string name="text_content">Conteúdo do Texto</string>

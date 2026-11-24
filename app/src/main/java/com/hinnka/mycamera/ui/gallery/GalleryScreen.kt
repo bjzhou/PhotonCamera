@@ -66,6 +66,7 @@ import androidx.recyclerview.widget.StaggeredGridLayoutManager
 import com.hinnka.mycamera.R
 import com.hinnka.mycamera.gallery.MediaData
 import com.hinnka.mycamera.gallery.GalleryManager
+import com.hinnka.mycamera.gallery.GalleryRawSource
 import com.hinnka.mycamera.gallery.ProcessingPhoto
 import com.hinnka.mycamera.ui.components.ProcessingPhotoShimmerView
 import coil.load
@@ -159,6 +160,10 @@ fun GalleryScreen(
         }
         val videoUris = uniqueUris.map { selection.pairedVideoUris[it] }
         viewModel.importPhotos(uniqueUris, videoUris) { importedIds ->
+            val failedCount = uniqueUris.size - importedIds.size
+            if (failedCount > 0) {
+                Toast.makeText(context, context.getString(R.string.import_failed, failedCount), Toast.LENGTH_SHORT).show()
+            }
             if (importedIds.size == 1) {
                 val newPhotoId = importedIds.first()
                 viewModel.setCurrentPhotoById(newPhotoId)
@@ -168,7 +173,7 @@ fun GalleryScreen(
         }
     }
 
-    val launcher = rememberLauncherForActivityResult(
+    val photoPickerLauncher = rememberLauncherForActivityResult(
         contract = PickMultipleVisualMediaWithLivePhoto()
     ) { selection ->
         PLog.d(
@@ -177,6 +182,11 @@ fun GalleryScreen(
         )
         importSelectedMedia(selection)
     }
+
+    val filePickerLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { uris ->
+        importSelectedMedia(SelectedVisualMedia(uris))
+    }
+    var showImportSources by remember { mutableStateOf(false) }
 
     val permissionLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.RequestMultiplePermissions()
@@ -325,14 +335,34 @@ fun GalleryScreen(
                                     tint = if (isAestheticScoreVisible) AccentColor else Color.White
                                 )
                             }
-                            IconButton(onClick = {
-                                launcher.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageAndVideo))
-                            }) {
-                                Icon(
-                                    imageVector = AppIcons.AddPhotoAlternate,
-                                    contentDescription = stringResource(R.string.import_photo),
-                                    tint = Color.White
-                                )
+                            Box {
+                                IconButton(onClick = { showImportSources = true }) {
+                                    Icon(
+                                        imageVector = AppIcons.AddPhotoAlternate,
+                                        contentDescription = stringResource(R.string.import_photo),
+                                        tint = Color.White
+                                    )
+                                }
+                                DropdownMenu(expanded = showImportSources, onDismissRequest = { showImportSources = false }) {
+                                    DropdownMenuItem(
+                                        text = { Text(stringResource(R.string.import_from_photo_library)) },
+                                        onClick = {
+                                            showImportSources = false
+                                            photoPickerLauncher.launch(
+                                                PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageAndVideo)
+                                            )
+                                        }
+                                    )
+                                    DropdownMenuItem(
+                                        text = { Text(stringResource(R.string.import_from_files)) },
+                                        onClick = {
+                                            showImportSources = false
+                                            filePickerLauncher.launch(
+                                                arrayOf("image/*", "video/*", "application/octet-stream")
+                                            )
+                                        }
+                                    )
+                                }
                             }
                         }
                     },
@@ -1652,18 +1682,11 @@ private fun Bitmap.galleryBitmapAspectRatio(): Float {
 
 private fun MediaData.isSystemRawImage(): Boolean {
     if (!isImage) return false
-    if (mimeType?.let { type ->
-            type.contains("raw", ignoreCase = true) ||
-                    type.contains("dng", ignoreCase = true)
-        } == true
-    ) {
-        return true
-    }
-
+    if (GalleryRawSource.isImportable(displayName, mimeType)) return true
     return displayName.substringAfterLast('.', missingDelimiterValue = "")
         .lowercase()
         .let { extension ->
-            extension in setOf("dng", "arw", "cr2", "cr3", "nef", "nrw", "orf", "pef", "raf", "rw2", "srw")
+            extension in setOf("cr2", "nrw", "orf", "pef", "raf", "srw")
         }
 }
 

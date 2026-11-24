@@ -67,6 +67,8 @@
     <string name="none">없음</string>
     <string name="show_app_branding">앱 브랜딩 표시</string>
     <string name="import_photo">가져오기</string>
+    <string name="import_from_photo_library">사진 보관함</string>
+    <string name="import_from_files">파일</string>
     <string name="watermark_adjustment">워터마크 조정</string>
     <string name="logo">로고</string>
     <string name="text_content">텍스트 내용</string>

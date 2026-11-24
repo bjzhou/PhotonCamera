@@ -154,6 +154,8 @@
     <string name="none">無</string>
     <string name="show_app_branding">顯示 App 品牌</string>
     <string name="import_photo">匯入</string>
+    <string name="import_from_photo_library">相簿</string>
+    <string name="import_from_files">檔案</string>
     <string name="watermark_adjustment">水印調整</string>
     <string name="logo">LOGO</string>
     <string name="text_content">文字內容</string>

@@ -155,6 +155,8 @@
     <string name="none">无</string>
     <string name="show_app_branding">显示 App 品牌</string>
     <string name="import_photo">导入</string>
+    <string name="import_from_photo_library">相册</string>
+    <string name="import_from_files">文件</string>
     <string name="watermark_adjustment">水印调整</string>
     <string name="logo">LOGO</string>
     <string name="text_content">文字内容</string>
