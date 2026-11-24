@@ -2510,6 +2510,7 @@ object GalleryManager {
             val embeddedRenderPlan = renderMetadata?.let { preparedMetadata ->
                 SuperResolutionDngWriter.resolveEmbeddedRenderPlan(
                     characteristics = characteristics,
+                    captureResult = resolvedCaptureResult,
                     metadata = preparedMetadata,
                     imageLayout = SuperResolutionDngWriter.ImageLayout.CFA,
                     // Mirror the profile which saveRawBufferToDng will serialize. Passing null
@@ -3860,6 +3861,7 @@ object GalleryManager {
                 val embeddedRenderPlan = renderMetadata?.let { preparedMetadata ->
                     SuperResolutionDngWriter.resolveEmbeddedRenderPlan(
                         characteristics = characteristics,
+                        captureResult = captureResult,
                         metadata = preparedMetadata,
                         imageLayout = imageLayout,
                         // Use the final prepared profile for the pre-persistence render as well as

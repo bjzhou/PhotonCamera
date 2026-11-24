@@ -13,6 +13,9 @@ internal fun CameraCharacteristics.associateMetadataCameraId(cameraId: String) {
     synchronized(metadataCameraIds) { metadataCameraIds[this] = cameraId }
 }
 
+internal fun CameraCharacteristics.associatedMetadataCameraId(): String? =
+    synchronized(metadataCameraIds) { metadataCameraIds[this] }
+
 /** Decode a device-supplied field. A malformed value is unavailable, never repaired or cached. */
 internal fun <T> CameraCharacteristics.readMetadataOrNull(
     key: CameraCharacteristics.Key<T>,
@@ -20,7 +23,7 @@ internal fun <T> CameraCharacteristics.readMetadataOrNull(
 ): T? = decodeCameraMetadata(
     read = { get(key) },
     onMalformed = {
-        val sourceCameraId = cameraId ?: synchronized(metadataCameraIds) { metadataCameraIds[this] }
+        val sourceCameraId = cameraId ?: associatedMetadataCameraId()
         MetadataDecodeLog.report("characteristics", key.name, sourceCameraId, null, it)
     },
 )

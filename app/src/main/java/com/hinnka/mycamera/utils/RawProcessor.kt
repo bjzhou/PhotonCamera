@@ -16,6 +16,7 @@ import com.hinnka.mycamera.raw.DngBaselineExposure
 import com.hinnka.mycamera.raw.DngSdkColorSpec
 import com.hinnka.mycamera.raw.DngProfileToneCurve
 import com.hinnka.mycamera.raw.RawCfaCorrection
+import com.hinnka.mycamera.raw.RawColorCalibrationPolicy
 import com.hinnka.mycamera.raw.RawDefaultCropOverride
 import com.hinnka.mycamera.raw.RawDngProfilePreparation
 import com.hinnka.mycamera.raw.RawDngProfilePreparationOptions
@@ -229,7 +230,8 @@ object RawProcessor {
         userExposureBias: Float? = null,
         captureExposureCompensationEv: Float = 0f,
     ): RawMetadata {
-        val dngWhiteBalance = resolveDngWriterWhiteBalance(captureResult)
+        val calibration = RawColorCalibrationPolicy.fromCapture(characteristics, captureResult)
+        val dngWhiteBalance = resolveDngWriterWhiteBalance(captureResult, calibration.asShotNeutral)
         val metadata = RawMetadata.create(
             width = width,
             height = height,
@@ -247,7 +249,7 @@ object RawProcessor {
         // may differ from SensorNeutralColorPoint; none of their derived color state
         // may survive into either the capture-profile pass or the first HNCS render.
         val sourceProfile = SuperResolutionDngWriter.buildEmbeddedProfile(
-            characteristics = characteristics,
+            calibration = calibration,
             imageLayout = SuperResolutionDngWriter.ImageLayout.CFA,
         )
         return requireNotNull(
@@ -257,8 +259,11 @@ object RawProcessor {
         ) { "Unable to resolve the serialized DNG source color calibration" }
     }
 
-    private fun resolveDngWriterWhiteBalance(captureResult: CaptureResult): FloatArray {
-        val neutral = SuperResolutionDngWriter.resolveAsShotNeutral(captureResult)
+    private fun resolveDngWriterWhiteBalance(
+        captureResult: CaptureResult,
+        synthesizedNeutral: FloatArray?,
+    ): FloatArray {
+        val neutral = SuperResolutionDngWriter.resolveAsShotNeutral(captureResult, synthesizedNeutral)
         val green = neutral[1]
         return floatArrayOf(
             (green / neutral[0]).toFloat(),
@@ -742,6 +747,7 @@ object RawProcessor {
         }
         val embeddedDngColorPlan = SuperResolutionDngWriter.resolveEmbeddedRenderPlan(
             characteristics = characteristics,
+            captureResult = captureResult,
             metadata = statsMetadata,
             imageLayout = imageLayout,
             profileGainTableMap = null,

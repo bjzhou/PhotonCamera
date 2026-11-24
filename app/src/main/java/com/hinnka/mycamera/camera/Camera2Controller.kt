@@ -445,6 +445,8 @@ class Camera2Controller(private val context: Context) {
         var delivered = false
         var livePhotoStartTimestampUs: Long? = null
         var animationCaptureResult: TotalCaptureResult? = null
+        var inspectRawIspCcm = false
+        var previewColorResult: TotalCaptureResult? = null
         var timeout: Runnable? = null
         val timestamps = mutableSetOf<Long>()
         val startedFrameNumbers = mutableSetOf<Long>()
@@ -796,6 +798,11 @@ class Camera2Controller(private val context: Context) {
         check(requests.size == shot.expectedFrames) {
             "Capture ${shot.id} reserved ${shot.expectedFrames} frames but built ${requests.size} requests"
         }
+        shot.inspectRawIspCcm = !shot.continuousBurst && isRawCaptureReader(shot.reader) &&
+            RawColorCalibrationPolicy.mode == RawColorCalibrationMode.AUTO
+        if (shot.inspectRawIspCcm && session === captureSession && _state.value.previewFirstFrameTimestampNs != null) {
+            shot.previewColorResult = latestEnginePreviewResult
+        }
         shot.livePhotoStartTimestampUs = livePhotoVideoStartTimestampUs
         val captureSurface = shot.reader.surface
         // Sum the actual request plan so HDR frames with different exposures contribute
@@ -1052,57 +1059,55 @@ class Camera2Controller(private val context: Context) {
             }
     }
 
-    private fun logRawColorMatrices(
-        characteristics: CameraCharacteristics,
-        result: CaptureResult,
+    private fun logRawIspCcmComparison(
+        shot: PhotoCaptureContext,
+        still: CaptureResult,
+        stillCameraId: String?,
+        stillActivePhysicalId: String?,
     ) {
-        val matrices = listOf(
-            "ColorMatrix1" to characteristics.get(
-                CameraCharacteristics.SENSOR_COLOR_TRANSFORM1
-            ),
-            "ColorMatrix2" to characteristics.get(
-                CameraCharacteristics.SENSOR_COLOR_TRANSFORM2
-            ),
-            "ForwardMatrix1" to characteristics.get(
-                CameraCharacteristics.SENSOR_FORWARD_MATRIX1
-            ),
-            "ForwardMatrix2" to characteristics.get(
-                CameraCharacteristics.SENSOR_FORWARD_MATRIX2
-            ),
-        )
-        val illuminant1 = characteristics.get(
-            CameraCharacteristics.SENSOR_REFERENCE_ILLUMINANT1
-        )
-        val illuminant2 = characteristics.get(
-            CameraCharacteristics.SENSOR_REFERENCE_ILLUMINANT2
-        )
+        shot.inspectRawIspCcm = false
+        val preview = shot.previewColorResult
+        shot.previewColorResult = null
+        val stillCcm = still.readMetadataOrNull(CaptureResult.COLOR_CORRECTION_TRANSFORM, stillCameraId)
+            ?.let(::extractMatrix3x3)
+        if (stillCcm != null && stillCcm.indices.any { index ->
+                val identity = if (index % 4 == 0) 1f else 0f
+                abs(stillCcm[index] - identity) >= 0.001f
+            }
+        ) return
+
+        val previewActivePhysicalId = preview?.readMetadataOrNull(CaptureResult.LOGICAL_MULTI_CAMERA_ACTIVE_PHYSICAL_ID)
+        val previewFrame = if (preview != null) {
+            val physicalResults = preview.physicalCameraResults
+            stillCameraId?.let(physicalResults::get)
+                ?: previewActivePhysicalId?.let(physicalResults::get)
+                ?: preview
+        } else null
+        val previewCcm = previewFrame?.readMetadataOrNull(CaptureResult.COLOR_CORRECTION_TRANSFORM)
+            ?.let(::extractMatrix3x3)
+
+        fun describe(frame: CaptureResult, ccm: FloatArray?): String {
+            val cameraId = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) frame.cameraId else null
+            val request = frame.request
+            val gains = frame.readMetadataOrNull(CaptureResult.COLOR_CORRECTION_GAINS, cameraId)
+                ?.let { listOf(it.red, it.greenEven, it.greenOdd, it.blue) }
+            val timestamp = frame.readMetadataOrNull(CaptureResult.SENSOR_TIMESTAMP, cameraId)
+            return "frame=${frame.frameNumber} camera=$cameraId ts=$timestamp " +
+                "ccmRequest=${request.get(CaptureRequest.COLOR_CORRECTION_MODE)} " +
+                "ccmResult=${frame.readMetadataOrNull(CaptureResult.COLOR_CORRECTION_MODE, cameraId)} " +
+                "awbRequest=${request.get(CaptureRequest.CONTROL_AWB_MODE)} " +
+                "awbLock=${request.get(CaptureRequest.CONTROL_AWB_LOCK)} " +
+                "awbState=${frame.readMetadataOrNull(CaptureResult.CONTROL_AWB_STATE, cameraId)} " +
+                "gains=$gains ccm=${ccm?.contentToString()}"
+        }
 
         PLog.i(
             TAG,
-            buildString {
-                appendLine(
-                    "RAW color matrices: frame=${result.frameNumber}, " +
-                        "timestamp=${result.get(CaptureResult.SENSOR_TIMESTAMP)}, " +
-                        "referenceIlluminant1=$illuminant1, referenceIlluminant2=$illuminant2"
-                )
-                matrices.forEachIndexed { index, (name, matrix) ->
-                    append(name)
-                    append(" = ")
-                    append(formatColorSpaceTransform(matrix))
-                    if (index != matrices.lastIndex) appendLine()
-                }
-            }
+            "RAW_ISP_CCM_COMPARISON captureId=${shot.id} selected=${shot.state.currentCameraId} " +
+                "rawCamera=$stillCameraId stillActivePhysical=$stillActivePhysicalId " +
+                "previewActivePhysical=$previewActivePhysicalId " +
+                "still={${describe(still, stillCcm)}} preview={${previewFrame?.let { describe(it, previewCcm) }}}",
         )
-    }
-
-    private fun formatColorSpaceTransform(transform: ColorSpaceTransform?): String {
-        if (transform == null) return "null"
-        return (0 until 3).joinToString(prefix = "[", postfix = "]", separator = ", ") { row ->
-            (0 until 3).joinToString(prefix = "[", postfix = "]", separator = ", ") { col ->
-                val value = transform.getElement(col, row)
-                "${value.numerator}/${value.denominator} (${value.toDouble()})"
-            }
-        }
     }
 
     // 快门音效播放回调
@@ -9151,14 +9156,6 @@ class Camera2Controller(private val context: Context) {
                 }
             }
 
-//            if (
-//                image.format == ImageFormat.RAW_SENSOR &&
-//                effectiveCharacteristics != null &&
-//                effectiveResult != null
-//            ) {
-//                logRawColorMatrices(effectiveCharacteristics, effectiveResult)
-//            }
-
             // 构建 CaptureInfo
             val captureInfo = rebuildCaptureInfo(
                 result = effectiveResult ?: result,
@@ -9221,6 +9218,18 @@ class Camera2Controller(private val context: Context) {
                 )
             } else {
                 null
+            }
+            if (shot.inspectRawIspCcm && frameResult != null) {
+                val role = frameMetadata?.multiFrameCaptureRole ?: (frameResult.request.tag as? MultiFrameCaptureRole)
+                if (role == null || role == MultiFrameCaptureRole.BASE) {
+                    try {
+                        logRawIspCcmComparison(
+                            shot, frameResult, effectiveCharacteristics?.associatedMetadataCameraId(), reportedPhysicalCameraId,
+                        )
+                    } catch (error: RuntimeException) {
+                        PLog.w(TAG, "Unable to compare RAW and preview CCM for capture ${shot.id}", error)
+                    }
+                }
             }
 
             if (shot.continuousBurst) {

@@ -273,6 +273,28 @@ internal object DngSdkColorSpec {
         return cameraToPcsForWhite(prepared, whiteXy)
     }
 
+    /** Build a single-illuminant DNG calibration for this capture's ISP color transform. */
+    fun deriveIspColorMatrices(
+        cameraToLinearSrgb: FloatArray,
+        neutral: FloatArray,
+        sceneWhiteXy: FloatArray?,
+    ): Pair<FloatArray, FloatArray>? {
+        val pcsToSrgb = computeXyzD50ToGamut(ColorSpace.SRGB) ?: return null
+        val srgbToPcs = invertMatrix3x3(pcsToSrgb) ?: return null
+        // Android already applies the gains before its CCM. DNG applies them via AsShotNeutral.
+        val forward = normalizeForwardMatrix(multiplyMatrix3x3(srgbToPcs, cameraToLinearSrgb))
+        val pcsToWhiteBalancedCamera = invertMatrix3x3(forward) ?: return null
+        val white = sceneWhiteXy?.takeIf {
+            it.size == 2 && it.all { value -> value.isFinite() && value > 0f } && it.sum() < 1f
+        } ?: ColorSpace.SRGB.whitePoint
+        val sceneToPcs = mapWhiteMatrix(white, floatArrayOf(D50_X, D50_Y))
+        // Reconstruct XYZ-to-camera so it maps the scene white to the same raw neutral.
+        val color = multiplyMatrix3x3(
+            diagonalMatrix(neutral), multiplyMatrix3x3(pcsToWhiteBalancedCamera, sceneToPcs),
+        )
+        return normalizeColorMatrix(color) to forward
+    }
+
     fun whiteXyForProfile(profile: DcpProfile, metadata: RawMetadata): FloatArray? {
         if (profile.isForwardOnly()) {
             // FM maps neutral to D50 after WB: it cannot recover the scene illuminant.
@@ -593,7 +615,7 @@ internal object DngSdkColorSpec {
         )
     }
 
-    private fun cameraNeutralFromWb(whiteBalanceGains: FloatArray): FloatArray {
+    fun cameraNeutralFromWb(whiteBalanceGains: FloatArray): FloatArray {
         val red = whiteBalanceGains.getOrElse(0) { 1f }.coerceAtLeast(EPSILON)
         val greenEven = whiteBalanceGains.getOrElse(1) { 1f }.coerceAtLeast(EPSILON)
         val greenOdd = whiteBalanceGains.getOrElse(2) { greenEven }.coerceAtLeast(EPSILON)

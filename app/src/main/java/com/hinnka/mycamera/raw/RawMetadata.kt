@@ -92,12 +92,7 @@ data class RawMetadata(
      */
     val colorCorrectionMatrix: FloatArray,
 
-    /**
-     * Camera2 static lens calibration or calibration embedded in an imported RAW.
-     * LibRaw's built-in camera matrices are never used for this field. Kept separate from
-     * [colorCorrectionMatrix], which is resolved for the current frame/WB.
-     * CM retains XYZ -> camera direction; FM retains WB reference camera -> XYZ D50.
-     */
+    /** DNG source calibration from the camera, the capture's ISP CCM, or the imported RAW. */
     val cameraCalibration: RawCameraCalibration? = null,
 
     /** Per-frame Camera2 COLOR_CORRECTION_GAINS in canonical [R, Gr, Gb, B] order. */
@@ -444,12 +439,10 @@ data class RawMetadata(
                 floatArrayOf(1f, 1f, 1f, 1f)
             }
 
-            // 5. 获取色彩校正矩阵
-            // 优先使用 ForwardMatrix/ColorMatrix 计算 CCM
-            val colorCorrectionMatrix = computeCCMFromCharacteristics(characteristics, wbGains, colorSpace)
-            // Keep the same selected source calibration for rendering, source identity
-            // and DNG writing. A per-frame CCM is never used as fixed calibration.
-            val cameraCalibration = RawColorCalibrationPolicy.fromCharacteristics(characteristics).toRawCalibration()
+            // 5. 同一次拍摄的色彩和白点计算使用同一套校准矩阵。
+            val cameraCalibration = RawColorCalibrationPolicy.fromCapture(characteristics, captureResult)
+                .toRawCalibration()
+            val colorCorrectionMatrix = computeCCM(cameraCalibration, whiteBalanceGains, colorSpace)
             val camera2ColorCorrectionGains = wbGains
                 ?.let { gains ->
                     floatArrayOf(gains.red, gains.greenEven, gains.greenOdd, gains.blue)
@@ -461,15 +454,15 @@ data class RawMetadata(
                 }
                 ?.copyOf(4)
             val camera2ColorCorrectionTransform = captureResult
-                .get(CaptureResult.COLOR_CORRECTION_TRANSFORM)
+                .readMetadataOrNull(CaptureResult.COLOR_CORRECTION_TRANSFORM)
                 ?.let(::extractCCM)
                 ?.takeIf { matrix ->
                     matrix.size == 9 && matrix.all(Float::isFinite)
                 }
             val camera2ColorCorrectionMode = captureResult
                 .get(CaptureResult.COLOR_CORRECTION_MODE)
-            val cameraWhite = computeCameraWhiteFromCharacteristics(characteristics, wbGains)
-            val whitePointXy = computeWhiteXyFromCharacteristics(characteristics, wbGains)
+            val cameraWhite = computeCameraWhite(cameraCalibration, whiteBalanceGains)
+            val whitePointXy = if (wbGains != null) computeWhiteXy(cameraCalibration, whiteBalanceGains) else null
             val colorTemperature = whitePointXy?.let(DngSdkColorSpec::colorTemperatureForXy)
 
             // 6. 获取镜头阴影校正
@@ -691,26 +684,20 @@ data class RawMetadata(
          *
          * WB 通过 CameraNeutral 进入 CameraToPCS，不在 demosaic 阶段预乘。
          */
-        private fun computeCCMFromCharacteristics(
-            characteristics: CameraCharacteristics,
-            wbGains: RggbChannelVector?,
-            colorSpace: ColorSpace = ColorSpace.SRGB
+        private fun computeCCM(
+            calibration: RawCameraCalibration,
+            whiteBalanceGains: FloatArray,
+            colorSpace: ColorSpace
         ): FloatArray {
-            val whiteBalanceGains = if (wbGains != null) {
-                floatArrayOf(wbGains.red, wbGains.greenEven, wbGains.greenOdd, wbGains.blue)
-            } else {
-                floatArrayOf(1f, 1f, 1f, 1f)
-            }
-            val calibration = RawColorCalibrationPolicy.fromCharacteristics(characteristics)
             return DngSdkColorSpec.computeCameraToWorkingMatrix(
-                colorMatrix1 = calibration.colorMatrix1?.let(::extractCCM),
-                colorMatrix2 = calibration.colorMatrix2?.let(::extractCCM),
-                forwardMatrix1 = calibration.forwardMatrix1?.let(::extractCCM),
-                forwardMatrix2 = calibration.forwardMatrix2?.let(::extractCCM),
-                calibrationIlluminant1 = calibration.illuminant1,
-                calibrationIlluminant2 = calibration.illuminant2,
-                cameraCalibration1 = calibration.calibration1?.let(::extractCCM),
-                cameraCalibration2 = calibration.calibration2?.let(::extractCCM),
+                colorMatrix1 = calibration.colorMatrix1,
+                colorMatrix2 = calibration.colorMatrix2,
+                forwardMatrix1 = calibration.forwardMatrix1,
+                forwardMatrix2 = calibration.forwardMatrix2,
+                calibrationIlluminant1 = calibration.calibrationIlluminant1,
+                calibrationIlluminant2 = calibration.calibrationIlluminant2,
+                cameraCalibration1 = calibration.cameraCalibration1,
+                cameraCalibration2 = calibration.cameraCalibration2,
                 whiteBalanceGains = whiteBalanceGains,
                 workingColorSpace = colorSpace
             ) ?: run {
@@ -719,52 +706,35 @@ data class RawMetadata(
             }
         }
 
-        private fun computeCameraWhiteFromCharacteristics(
-            characteristics: CameraCharacteristics,
-            wbGains: RggbChannelVector?
-        ): FloatArray {
-            val whiteBalanceGains = if (wbGains != null) {
-                floatArrayOf(wbGains.red, wbGains.greenEven, wbGains.greenOdd, wbGains.blue)
-            } else {
-                floatArrayOf(1f, 1f, 1f, 1f)
-            }
-            val calibration = RawColorCalibrationPolicy.fromCharacteristics(characteristics)
-            return DngSdkColorSpec.computeCameraWhite(
-                colorMatrix1 = calibration.colorMatrix1?.let(::extractCCM),
-                colorMatrix2 = calibration.colorMatrix2?.let(::extractCCM),
-                forwardMatrix1 = calibration.forwardMatrix1?.let(::extractCCM),
-                forwardMatrix2 = calibration.forwardMatrix2?.let(::extractCCM),
-                calibrationIlluminant1 = calibration.illuminant1,
-                calibrationIlluminant2 = calibration.illuminant2,
-                cameraCalibration1 = calibration.calibration1?.let(::extractCCM),
-                cameraCalibration2 = calibration.calibration2?.let(::extractCCM),
-                whiteBalanceGains = whiteBalanceGains
-            ) ?: floatArrayOf(1f, 1f, 1f)
-        }
+        private fun computeCameraWhite(
+            calibration: RawCameraCalibration,
+            whiteBalanceGains: FloatArray
+        ): FloatArray = DngSdkColorSpec.computeCameraWhite(
+            colorMatrix1 = calibration.colorMatrix1,
+            colorMatrix2 = calibration.colorMatrix2,
+            forwardMatrix1 = calibration.forwardMatrix1,
+            forwardMatrix2 = calibration.forwardMatrix2,
+            calibrationIlluminant1 = calibration.calibrationIlluminant1,
+            calibrationIlluminant2 = calibration.calibrationIlluminant2,
+            cameraCalibration1 = calibration.cameraCalibration1,
+            cameraCalibration2 = calibration.cameraCalibration2,
+            whiteBalanceGains = whiteBalanceGains
+        ) ?: floatArrayOf(1f, 1f, 1f)
 
-        private fun computeWhiteXyFromCharacteristics(
-            characteristics: CameraCharacteristics,
-            wbGains: RggbChannelVector?
-        ): FloatArray? {
-            if (wbGains == null) return null
-            val calibration = RawColorCalibrationPolicy.fromCharacteristics(characteristics)
-            return DngSdkColorSpec.computeWhiteXy(
-                colorMatrix1 = calibration.colorMatrix1?.let(::extractCCM),
-                colorMatrix2 = calibration.colorMatrix2?.let(::extractCCM),
-                forwardMatrix1 = calibration.forwardMatrix1?.let(::extractCCM),
-                forwardMatrix2 = calibration.forwardMatrix2?.let(::extractCCM),
-                calibrationIlluminant1 = calibration.illuminant1,
-                calibrationIlluminant2 = calibration.illuminant2,
-                cameraCalibration1 = calibration.calibration1?.let(::extractCCM),
-                cameraCalibration2 = calibration.calibration2?.let(::extractCCM),
-                whiteBalanceGains = floatArrayOf(
-                    wbGains.red,
-                    wbGains.greenEven,
-                    wbGains.greenOdd,
-                    wbGains.blue
-                )
-            )
-        }
+        private fun computeWhiteXy(
+            calibration: RawCameraCalibration,
+            whiteBalanceGains: FloatArray
+        ): FloatArray? = DngSdkColorSpec.computeWhiteXy(
+            colorMatrix1 = calibration.colorMatrix1,
+            colorMatrix2 = calibration.colorMatrix2,
+            forwardMatrix1 = calibration.forwardMatrix1,
+            forwardMatrix2 = calibration.forwardMatrix2,
+            calibrationIlluminant1 = calibration.calibrationIlluminant1,
+            calibrationIlluminant2 = calibration.calibrationIlluminant2,
+            cameraCalibration1 = calibration.cameraCalibration1,
+            cameraCalibration2 = calibration.cameraCalibration2,
+            whiteBalanceGains = whiteBalanceGains
+        )
 
         /**
          * 计算双光源插值权重

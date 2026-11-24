@@ -89,6 +89,7 @@ object SuperResolutionDngWriter {
     /** Builds the same embedded color plan that [write] serializes into the DNG IFD. */
     fun resolveEmbeddedRenderPlan(
         characteristics: CameraCharacteristics,
+        captureResult: CaptureResult,
         metadata: RawMetadata,
         imageLayout: ImageLayout,
         profileGainTableMap: DngProfileGainTableMap?,
@@ -96,7 +97,10 @@ object SuperResolutionDngWriter {
     ): DcpRenderPlan? {
         return DcpProfileParser.resolveRenderPlan(
             profile = buildEmbeddedProfile(
-                characteristics, imageLayout, profileGainTableMap, profileToneCurve,
+                RawColorCalibrationPolicy.fromCapture(characteristics, captureResult),
+                imageLayout,
+                profileGainTableMap,
+                profileToneCurve,
             ),
             metadata = metadata,
             workingColorSpace = ColorSpace.ProPhoto,
@@ -105,12 +109,11 @@ object SuperResolutionDngWriter {
 
     /** Source calibration shared by capture metadata, render plans and DNG serialization. */
     internal fun buildEmbeddedProfile(
-        characteristics: CameraCharacteristics,
+        calibration: RawColorCalibrationPolicy.CameraCalibration,
         imageLayout: ImageLayout,
         profileGainTableMap: DngProfileGainTableMap? = null,
         profileToneCurve: FloatArray? = null,
     ): DcpProfile {
-        val calibration = RawColorCalibrationPolicy.fromCharacteristics(characteristics)
         val colorMatrix1 = calibration.colorMatrix1
             ?.let(::colorTransformToDngMatrix)
             ?.map(::serializedSignedRational)
@@ -518,7 +521,7 @@ object SuperResolutionDngWriter {
                 "includesPixelArray=${geometry.bufferIncludesPixelArray} " +
                 "scale=${geometry.scaleX},${geometry.scaleY}"
         )
-        val calibration = RawColorCalibrationPolicy.fromCharacteristics(characteristics)
+        val calibration = RawColorCalibrationPolicy.fromCapture(characteristics, captureResult, logDecision = true)
         val illuminant1 = calibration.illuminant1.takeIf { it != 0 } ?: 21
         val illuminant2 = calibration.illuminant2.takeIf { it != 0 }
         val colorMatrix1 = calibration.colorMatrix1
@@ -733,7 +736,7 @@ object SuperResolutionDngWriter {
                     add(sRationalArray(TAG_FORWARD_MATRIX_2, colorTransformToExactDngMatrix(it)))
                 }
             }
-            add(rationalArray(TAG_AS_SHOT_NEUTRAL, resolveAsShotNeutral(captureResult)))
+            add(rationalArray(TAG_AS_SHOT_NEUTRAL, resolveAsShotNeutral(captureResult, calibration.asShotNeutral)))
             if (profileGainTableMap != null) {
                 add(long(TAG_DEFAULT_BLACK_RENDER, 1))
             } else if (!isCfa) {
@@ -1505,8 +1508,12 @@ object SuperResolutionDngWriter {
             write(payload)
         }.toByteArray()
 
-    internal fun resolveAsShotNeutral(captureResult: CaptureResult): List<Double> {
-        return readAsShotNeutral(captureResult).map { value ->
+    internal fun resolveAsShotNeutral(
+        captureResult: CaptureResult,
+        synthesizedNeutral: FloatArray?,
+    ): List<Double> {
+        val neutral = synthesizedNeutral?.map { it.toDouble() } ?: readAsShotNeutral(captureResult)
+        return neutral.map { value ->
             val (numerator, denominator) = toUnsignedRational(value)
             numerator.toDouble() / denominator.toDouble()
         }

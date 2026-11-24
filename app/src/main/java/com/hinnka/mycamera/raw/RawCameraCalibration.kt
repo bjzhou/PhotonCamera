@@ -3,16 +3,13 @@ package com.hinnka.mycamera.raw
 import androidx.annotation.Keep
 
 /**
- * Fixed, physical-camera color calibration used for lens/profile selection.
+ * Source color calibration used for rendering and profile selection.
  *
  * The ColorMatrix fields retain DNG semantics: they map XYZ (under the
  * corresponding reference illuminant) to camera RGB. They are deliberately
  * separate from [RawMetadata.colorCorrectionMatrix], which is a per-frame
  * render matrix and may include the current white balance and working space.
- * A camera id is not part of this identity. For lens caches, the values of
- * these fixed matrices (and the optional calibration matrices) are sufficient
- * to identify the physical camera even when Camera2 does not expose a stable
- * id for it.
+ * Camera2 captures can supply an ISP-derived calibration specific to the shot.
  */
 @Keep
 class RawCameraCalibration(

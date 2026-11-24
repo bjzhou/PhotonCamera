@@ -6,6 +6,12 @@ import com.hinnka.mycamera.utils.PLog
 
 /** Select at the metadata boundary, before Float conversion or DNG normalization. */
 internal object ForwardMatrixPolicy {
+    data class ForwardMatrices(
+        val first: ColorSpaceTransform?,
+        val second: ColorSpaceTransform?,
+        val isPlaceholder: Boolean = false,
+    )
+
     // Bradford-adapted sRGB -> XYZ(D50), rounded to multiples of 1/128.
     // Keep in sync with the native RAW reader's exact rational signature.
     private val SRGB_TO_XYZ_D50_128 = intArrayOf(
@@ -17,15 +23,15 @@ internal object ForwardMatrixPolicy {
     fun fromCharacteristics(
         characteristics: CameraCharacteristics,
         rejectPlaceholder: Boolean = true,
-    ): Pair<ColorSpaceTransform?, ColorSpaceTransform?> {
+    ): ForwardMatrices {
         val first = characteristics.get(CameraCharacteristics.SENSOR_FORWARD_MATRIX1)
         val second = characteristics.get(CameraCharacteristics.SENSOR_FORWARD_MATRIX2)
         if (rejectPlaceholder && isSrgbPlaceholderPair(first?.rationalWords(), second?.rationalWords())) {
             PLog.d("ForwardMatrixPolicy", "Ignoring identical 1/128-quantized sRGB-to-XYZ(D50) ForwardMatrix pair")
-            return null to null
+            return ForwardMatrices(null, null, isPlaceholder = true)
         }
         // Usability is decided with the whole calibration set in RawColorCalibrationPolicy.
-        return first to second
+        return ForwardMatrices(first, second)
     }
 
     /** Original numerator/denominator words, not numerically equivalent fractions. */
