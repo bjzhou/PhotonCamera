@@ -24,6 +24,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.painter.Painter
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
@@ -279,6 +280,7 @@ fun LutSelector(
                     previewBitmap = thumbnail,
                     isSelected = activeLutId == lut.id,
                     isVip = lut.isVip,
+                    retainPreview = expanded,
                     onClick = {
                         if (activeLutId != lut.id || presetLookActive) {
                             browsedCategory = selectedCategory
@@ -755,11 +757,20 @@ internal fun LutItem(
     onManageClick: (() -> Unit)? = null,
     onEditClick: (() -> Unit)? = null,
     recipeTarget: BaselineColorCorrectionTarget? = null,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    retainPreview: Boolean = false,
 ) {
     val context = LocalContext.current
     val isNone = id == "none"
-    val previewReady = remember(id, previewBitmap) { mutableStateOf(false) }
+    val sourceBitmap = if (retainPreview && !isNone) {
+        var lastSource by remember(id) { mutableStateOf<Bitmap?>(null) }
+        if (previewBitmap != null) SideEffect { lastSource = previewBitmap }
+        previewBitmap ?: lastSource
+    } else previewBitmap
+    val lastPreview = remember(id, recipeTarget, if (retainPreview) null else sourceBitmap) {
+        mutableStateOf<Painter?>(null)
+    }
+    val previewReady = remember(lastPreview) { derivedStateOf { lastPreview.value != null } }
     LookThumbnailItem(
         name = name,
         selected = isSelected,
@@ -771,11 +782,13 @@ internal fun LutItem(
         thumbnailVisible = if (isNone) null else previewReady,
         modifier = modifier
     ) {
-        if (!isNone && previewBitmap != null) {
+        if (isNone) {
+            Icon(AppIcons.Block, null, tint = Color.White.copy(alpha = 0.7f), modifier = Modifier.size(24.dp))
+        } else if (sourceBitmap != null) {
             // 照片缩略图
-            val transformation = remember(id, previewBitmap) {
+            val transformation = remember(id, sourceBitmap) {
                 object : Transformation {
-                    override val cacheKey: String = "previewTransformation_${previewBitmap.hashCode()}_$id"
+                    override val cacheKey: String = "previewTransformation_${sourceBitmap.hashCode()}_$id"
                     val contentRepository = ContentRepository.getInstance(context)
 
                     override suspend fun transform(
@@ -798,9 +811,9 @@ internal fun LutItem(
 
                 }
             }
-            val imageRequest = remember(previewBitmap, transformation) {
+            val imageRequest = remember(sourceBitmap, transformation) {
                 ImageRequest.Builder(context)
-                    .data(previewBitmap)
+                    .data(sourceBitmap)
                     .crossfade(false)
                     .transformations(transformation)
                     .build()
@@ -810,11 +823,20 @@ internal fun LutItem(
                 model = imageRequest,
                 contentDescription = name,
                 contentScale = ContentScale.Crop,
-                onState = { previewReady.value = it is AsyncImagePainter.State.Success },
+                transform = { state ->
+                    val previous = lastPreview.value.takeIf { retainPreview }
+                    if (previous == null) state else when (state) {
+                        is AsyncImagePainter.State.Loading -> state.copy(painter = previous)
+                        is AsyncImagePainter.State.Error -> state.copy(painter = previous)
+                        else -> state
+                    }
+                },
+                onState = { state ->
+                    if (state is AsyncImagePainter.State.Success) lastPreview.value = state.painter
+                    else if (!retainPreview) lastPreview.value = null
+                },
                 modifier = Modifier.fillMaxSize()
             )
-        } else if (isNone) {
-            Icon(AppIcons.Block, null, tint = Color.White.copy(alpha = 0.7f), modifier = Modifier.size(24.dp))
         }
     }
 }
