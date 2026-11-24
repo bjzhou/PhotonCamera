@@ -1,9 +1,12 @@
 package com.hinnka.mycamera.ui.camera
 
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.rememberSplineBasedDecay
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
-import androidx.compose.foundation.gestures.detectHorizontalDragGestures
+import androidx.compose.foundation.gestures.Orientation
+import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.selection.toggleable
@@ -18,7 +21,10 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.input.pointer.changedToDownIgnoreConsumed
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.input.pointer.util.VelocityTracker
+import androidx.compose.ui.input.pointer.util.addPointerInputChange
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.ProgressBarRangeInfo
@@ -29,11 +35,15 @@ import androidx.compose.ui.semantics.setProgress
 import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.Velocity
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.hinnka.mycamera.ui.theme.AccentColor
 import com.hinnka.mycamera.ui.theme.OnAccentColor
 import com.hinnka.mycamera.R
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.launch
 import kotlin.math.abs
 import kotlin.math.roundToInt
 
@@ -79,18 +89,20 @@ fun ParameterRuler(
     var scrollIndex by remember(parameter, scaleValues) {
         mutableFloatStateOf(closestScaleIndex(scaleValues, currentValue).toFloat())
     }
-    var isDragging by remember(parameter, scaleValues) { mutableStateOf(false) }
+    var isInteracting by remember(parameter, scaleValues) { mutableStateOf(false) }
+    var flingJob by remember(parameter, scaleValues) { mutableStateOf<Job?>(null) }
     val currentValueState by rememberUpdatedState(currentValue)
     val canReset = resetValue != null
     val resetValueState by rememberUpdatedState(resetValue)
-    val adjustableState by rememberUpdatedState(isAdjustable && scaleValues.size > 1)
+    val canAdjust = isAdjustable && scaleValues.size > 1
     val autoModeState by rememberUpdatedState(isAutoMode)
     val onValueChangeState by rememberUpdatedState(onValueChange)
     val haptic = LocalHapticFeedback.current
+    val flingDecay = rememberSplineBasedDecay<Float>()
 
-    LaunchedEffect(currentValue, isDragging, scaleValues) {
-        // Capture results continue to arrive during a gesture; they must not pull the ruler back.
-        if (!isDragging) {
+    LaunchedEffect(currentValue, isInteracting, parameter, scaleValues) {
+        // The ruler owns the position through both the drag and the fling.
+        if (!isInteracting) {
             selectedValue = currentValue
             scrollIndex = closestScaleIndex(scaleValues, currentValue).toFloat()
         }
@@ -107,7 +119,35 @@ fun ParameterRuler(
         }
     }
 
-    val displayedValue = if (isDragging) selectedValue else currentValue
+    fun moveRuler(index: Float) {
+        scrollIndex = index.coerceIn(0f, scaleValues.lastIndex.toFloat())
+        val value = scaleValues[scrollIndex.roundToInt()]
+        if (value != selectedValue) selectValue(value)
+    }
+
+    fun settleRuler() {
+        flingJob = null
+        scrollIndex = scrollIndex.roundToInt().toFloat()
+        isInteracting = false
+    }
+
+    fun stopMotion() {
+        flingJob?.cancel()
+        settleRuler()
+    }
+
+    suspend fun animateFling(velocity: Float, spacing: Float) {
+        val position = Animatable(scrollIndex * spacing)
+        position.updateBounds(0f, scaleValues.lastIndex * spacing)
+        position.animateDecay(velocity, flingDecay) { moveRuler(value / spacing) }
+        val target = scrollIndex.roundToInt() * spacing
+        if (position.value != target) {
+            position.animateTo(target) { moveRuler(value / spacing) }
+        }
+        settleRuler()
+    }
+
+    val displayedValue = if (isInteracting) selectedValue else currentValue
     val displayedValueLabel = formatParameterValue(parameter, displayedValue)
     Row(
         modifier = modifier.fillMaxWidth().height(CameraParameterRulerHeight)
@@ -119,7 +159,10 @@ fun ParameterRuler(
             RulerModeButton(
                 selected = isAutoMode,
                 enabled = isAutoModeToggleEnabled,
-                onClick = onAutoModeToggle
+                onClick = {
+                    stopMotion()
+                    onAutoModeToggle()
+                }
             ) {
                 Text(
                     text = stringResource(R.string.camera_parameter_auto),
@@ -131,7 +174,10 @@ fun ParameterRuler(
         if (showHyperfocalButton && onHyperfocalToggle != null) {
             RulerModeButton(
                 selected = hyperfocalEnabled,
-                onClick = { onHyperfocalToggle(!hyperfocalEnabled) },
+                onClick = {
+                    stopMotion()
+                    onHyperfocalToggle(!hyperfocalEnabled)
+                },
                 modifier = Modifier.width(64.dp)
             ) {
                 Column(horizontalAlignment = Alignment.CenterHorizontally) {
@@ -160,52 +206,73 @@ fun ParameterRuler(
                         0f..scaleValues.lastIndex.toFloat(),
                         (scaleValues.size - 2).coerceAtLeast(0)
                     )
-                    if (isAdjustable && scaleValues.size > 1) {
+                    if (canAdjust) {
                         setProgress { index ->
+                            stopMotion()
                             selectValue(scaleValues[index.roundToInt().coerceIn(scaleValues.indices)], force = true)
                             true
                         }
                     }
                 }
-                .pointerInput(parameter, scaleValues, canReset) {
+                .pointerInput(parameter, scaleValues, canReset, canAdjust) {
+                    if (!canAdjust) return@pointerInput
                     detectTapGestures(
                         onDoubleTap = if (canReset) {
                             {
-                                if (adjustableState) {
-                                    resetValueState?.let { selectValue(it, force = true) }
-                                }
+                                resetValueState?.let { selectValue(it, force = true) }
                             }
                         } else null,
-                        onTap = { position ->
-                            if (adjustableState) {
-                                val index = (scrollIndex + (position.x - size.width / 2f) /
-                                    ParameterRulerTickSpacing.toPx()).roundToInt().coerceIn(scaleValues.indices)
-                                selectValue(scaleValues[index], force = true)
-                            }
+                        onTap = onTap@{ position ->
+                            if (isInteracting) return@onTap
+                            val index = (scrollIndex + (position.x - size.width / 2f) /
+                                ParameterRulerTickSpacing.toPx()).roundToInt().coerceIn(scaleValues.indices)
+                            selectValue(scaleValues[index], force = true)
                         }
                     )
                 }
-                .pointerInput(parameter, scaleValues) {
-                    detectHorizontalDragGestures(
-                        onDragStart = {
-                            isDragging = adjustableState
-                            if (isDragging) {
-                                scrollIndex = closestScaleIndex(scaleValues, currentValueState).toFloat()
-                                selectValue(scaleValues[scrollIndex.roundToInt()], force = true)
-                            }
-                        },
-                        onDragEnd = { isDragging = false },
-                        onDragCancel = { isDragging = false },
-                        onHorizontalDrag = { change, delta ->
-                            if (isDragging && adjustableState) {
-                                change.consume()
-                                scrollIndex = (scrollIndex - delta / ParameterRulerTickSpacing.toPx())
-                                    .coerceIn(0f, scaleValues.lastIndex.toFloat())
-                                val value = scaleValues[scrollIndex.roundToInt()]
-                                if (value != selectedValue) selectValue(value)
-                            }
+                .pointerInput(parameter, scaleValues, canAdjust, flingDecay) {
+                    if (!canAdjust) return@pointerInput
+                    val spacing = ParameterRulerTickSpacing.toPx()
+                    val velocityTracker = VelocityTracker()
+                    val maxSpeed = viewConfiguration.maximumFlingVelocity
+                    val maxVelocity = Velocity(maxSpeed, maxSpeed)
+                    try {
+                        coroutineScope {
+                            detectDragGestures(
+                                orientationLock = Orientation.Horizontal,
+                                shouldAwaitTouchSlop = { flingJob?.isActive != true },
+                                onDragStart = { down, _, _ ->
+                                    flingJob?.cancel()
+                                    flingJob = null
+                                    velocityTracker.addPointerInputChange(down)
+                                    if (!isInteracting) {
+                                        isInteracting = true
+                                        scrollIndex = closestScaleIndex(scaleValues, currentValueState).toFloat()
+                                        selectValue(scaleValues[scrollIndex.roundToInt()], force = true)
+                                    }
+                                },
+                                onDragEnd = onDragEnd@{ up ->
+                                    if (!isInteracting) return@onDragEnd
+                                    velocityTracker.addPointerInputChange(up)
+                                    val velocity = -velocityTracker.calculateVelocity(maxVelocity).x
+                                    if (abs(velocity) <= viewConfiguration.minimumFlingVelocity) {
+                                        settleRuler()
+                                    } else {
+                                        flingJob = launch { animateFling(velocity, spacing) }
+                                    }
+                                },
+                                onDragCancel = { stopMotion() },
+                                onDrag = { change, delta ->
+                                    if (!change.changedToDownIgnoreConsumed()) {
+                                        velocityTracker.addPointerInputChange(change)
+                                    }
+                                    if (isInteracting) moveRuler(scrollIndex - delta.x / spacing)
+                                },
+                            )
                         }
-                    )
+                    } finally {
+                        stopMotion()
+                    }
                 },
             contentAlignment = Alignment.TopCenter
         ) {
