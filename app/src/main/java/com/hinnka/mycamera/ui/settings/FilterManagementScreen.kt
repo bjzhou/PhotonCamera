@@ -28,6 +28,7 @@ import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.material3.TabRowDefaults.tabIndicatorOffset
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -203,8 +204,6 @@ fun FilterManagementScreen(
     var pendingImportUris by remember { mutableStateOf<List<Uri>>(emptyList()) }
     var pendingZipUris by remember { mutableStateOf<Set<Uri>>(emptySet()) }
 
-    val lazyListState = rememberLazyListState()
-
     LaunchedEffect(pendingLutImportUris) {
         if (pendingLutImportUris.isNotEmpty()) {
             pendingImportUris = pendingLutImportUris
@@ -235,7 +234,7 @@ fun FilterManagementScreen(
     }
     val categoryTitles = builtInLutCategories.associateWith { lutCategoryTitle(it) }
 
-    var selectedCategory by remember { mutableStateOf<String?>(null) }
+    var selectedCategory by rememberSaveable(locateLutId) { mutableStateOf<String?>(null) }
     val categories = remember(localLutList, categoryOrder, favoriteText, uncategorizedText) {
         orderedLutCategoryTitles(
             luts = localLutList,
@@ -245,7 +244,11 @@ fun FilterManagementScreen(
             includeEmptyCategories = true,
         )
     }
-    val currentTabIndex = categories.indexOf(selectedCategory ?: DIGITAL_LUT_CATEGORY)
+    val locateCategory = locateLutId
+        ?.takeIf { selectedCategory == null && it.isNotEmpty() }
+        ?.let { id -> localLutList.firstOrNull { it.id == id } }
+        ?.let { lut -> if (lut.isFavorite) favoriteText else lut.category.ifEmpty { uncategorizedText } }
+    val currentTabIndex = categories.indexOf(selectedCategory ?: locateCategory ?: DIGITAL_LUT_CATEGORY)
         .takeIf { it >= 0 } ?: 0
     val currentCategory = categories[currentTabIndex]
     val managedCategories = categories.filter { it !in reservedCategoryNames }
@@ -256,37 +259,15 @@ fun FilterManagementScreen(
         localLutList.inLutCategory(currentCategory, uncategorizedText, favoriteText)
     }
 
-    var hasLocated by remember(locateLutId) { mutableStateOf(false) }
-
-    // 自动定位到指定滤镜
-    LaunchedEffect(locateLutId, categories, localLutList) {
-        if (!locateLutId.isNullOrEmpty() && !hasLocated) {
-            // 确保本地列表已同步且包含目标项
-            val targetLut = localLutList.find { it.id == locateLutId }
-            if (targetLut != null) {
-                // 等待页面入场动画完成 (约 350ms)，避免与 Navigation 切换动画抢占资源导致掉帧卡顿
-                kotlinx.coroutines.delay(350)
-
-                // 查找目标所属分类
-                val categoryName = if (targetLut.isFavorite) favoriteText
-                    else targetLut.category.ifEmpty { uncategorizedText }
-                val categoryIndex = categories.indexOf(categoryName)
-
-                if (categoryIndex >= 0 && currentCategory != categoryName) {
-                    selectedCategory = categoryName
-                    // 等待 Tab 切换引起的列表重组完成
-                    kotlinx.coroutines.delay(150)
-                }
-
-                // 重新获取当前分类下的列表并定位
-                val filteredLutsNow = localLutList.inLutCategory(categoryName, uncategorizedText, favoriteText)
-
-                val indexInFiltered = filteredLutsNow.indexOfFirst { it.id == locateLutId }
-                if (indexInFiltered >= 0) {
-                    // 使用带动画的滚动，给用户一个明确的"定位"视觉反馈
-                    lazyListState.animateScrollToItem(maxOf(0, indexInFiltered - 1))
-                }
-                hasLocated = true
+    // Each category has its own item animator so outgoing rows cannot overlay the next tab.
+    val lazyListState = key(currentCategory) { rememberLazyListState() }
+    if (currentCategory == locateCategory) {
+        val targetIndex = filteredLutList.indexOfFirst { it.id == locateLutId }
+        if (targetIndex >= 0) {
+            val precedingRows = if (importResult != null) 1 else 0
+            SideEffect {
+                lazyListState.requestScrollToItem((targetIndex - 1).coerceAtLeast(0) + precedingRows)
+                selectedCategory = currentCategory
             }
         }
     }
