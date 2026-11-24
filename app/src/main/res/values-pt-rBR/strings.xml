@@ -91,6 +91,8 @@
     <string name="settings_level_description">Mostrar indicador de nível horizontal ao fotografar</string>
     <string name="settings_grid_lines">Linhas de Grade</string>
     <string name="settings_grid_description">Mostrar linhas de grade para composição</string>
+    <string name="settings_focus_magnifier">Lupa de Foco Manual</string>
+    <string name="settings_focus_magnifier_description">Sobrepõe uma imagem ampliada do centro do visor durante o foco manual</string>
     <string name="settings_grid_style">Estilo de Grade</string>
     <string name="grid_style_off">Desativadas</string>
     <string name="grid_style_thirds">Regra dos Terços</string>

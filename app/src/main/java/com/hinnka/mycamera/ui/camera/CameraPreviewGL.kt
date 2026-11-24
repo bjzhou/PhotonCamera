@@ -16,6 +16,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
@@ -81,6 +82,7 @@ fun CameraPreviewGL(
     onGLSurfaceViewReady: ((CameraGLSurfaceView) -> Unit)? = null,
     isAutoFocus: Boolean = true,
     focusPeakingEnabled: Boolean = true,
+    focusMagnifierTopInset: Dp? = null,
     stabilizationCoordinator: RealtimeStabilizationCoordinator? = null,
     previewYuvChannel: PreviewYuvFrameChannel? = null,
     sharedEisRgbFrames: SharedEisRgbFrameChannel? = null,
@@ -149,6 +151,13 @@ fun CameraPreviewGL(
             displayHeight = displayWidth / targetRatio
         }
 
+        val density = LocalDensity.current
+        val focusMagnifierTopInsetPx = with(density) {
+            focusMagnifierTopInset?.let { inset ->
+                val previewTop = (containerHeight - displayHeight) / 2f
+                (inset.toPx() - previewTop).toInt().coerceAtLeast(0)
+            }
+        }
         var viewWidth by remember { mutableIntStateOf(0) }
         var viewHeight by remember { mutableIntStateOf(0) }
 
@@ -162,8 +171,8 @@ fun CameraPreviewGL(
 
         Box(
             modifier = Modifier
-                .width(with(LocalDensity.current) { displayWidth.toDp() })
-                .height(with(LocalDensity.current) { displayHeight.toDp() })
+                .width(with(density) { displayWidth.toDp() })
+                .height(with(density) { displayHeight.toDp() })
                 .clipToBounds()
                 .onSizeChanged { size ->
                     viewWidth = size.width
@@ -334,6 +343,7 @@ fun CameraPreviewGL(
                         glSurfaceView.setVideoLogProfile(videoLogProfile)
                         glSurfaceView.setAutoFocus(isAutoFocus)
                         glSurfaceView.setFocusPeakingEnabled(focusPeakingEnabled)
+                        glSurfaceView.setFocusMagnifierTopInset(focusMagnifierTopInsetPx)
                         glSurfaceView.setEyeFocusBusy(isEyeFocusBusy)
                     },
                     modifier = Modifier.fillMaxSize()

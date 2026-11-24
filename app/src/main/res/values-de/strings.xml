@@ -90,6 +90,8 @@
     <string name="settings_level_description">Horizontale Wasserwaage beim Fotografieren anzeigen</string>
     <string name="settings_grid_lines">Gitternetzlinien</string>
     <string name="settings_grid_description">Gitternetzlinien für die Bildkomposition anzeigen</string>
+    <string name="settings_focus_magnifier">Fokuslupe</string>
+    <string name="settings_focus_magnifier_description">Beim manuellen Fokussieren die Suchermitte in einem eingeblendeten Ausschnitt vergrößern</string>
     <string name="settings_grid_style">Gitterstil</string>
     <string name="grid_style_off">Aus</string>
     <string name="grid_style_thirds">Drittelregel</string>

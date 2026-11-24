@@ -76,6 +76,8 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
     private val previewTiming = VideoRenderTiming.create("viewfinder")
     private val previewYuvRenderer = PreviewYuvRenderer(TAG, previewTiming)
     private val sharedRgbPreviewRenderer = SharedEisRgbPreviewRenderer(TAG)
+    private val focusMagnifier = FocusMagnifierGl(context.resources.displayMetrics.density)
+    private var focusMagnifierTopInsetPx: Int? = null
     private var sharedRgbChannel: SharedEisRgbFrameChannel? = null
     private var sharedRgbConsumer: SharedEisRgbFrameChannel.Consumer? = null
     private var previewYuvChannel: PreviewYuvFrameChannel? = null
@@ -214,7 +216,6 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
     private var focusPeakingProgramId: Int = 0
     private var uPeakInputTexLoc: Int = 0
     private var uPeakTexelSizeLoc: Int = 0
-    private var uPeakThresholdLoc: Int = 0
     private var uPeakColorLoc: Int = 0
     private var aPeakPositionLoc: Int = 0
     private var aPeakTexCoordLoc: Int = 0
@@ -602,6 +603,7 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
         previewYuvRenderer.resetAfterContextLoss()
         previewTiming?.resetAfterContextLoss()
         sharedRgbPreviewRenderer.resetAfterContextLoss()
+        focusMagnifier.resetAfterContextLoss()
         cameraTextureId = 0
         currentCameraTextureId = 0
         currentCameraTextureSource = PreviewColorTextureSource.EXTERNAL_OES
@@ -1405,6 +1407,10 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
                 compositeFinalDisplay = false
             )
         }
+        val magnifierTopInset = focusMagnifierTopInsetPx
+        if (magnifierTopInset != null && currentFrameTimestampNs > 0L && copyProgramId != 0) {
+            focusMagnifier.draw(viewportWidth, viewportHeight, magnifierTopInset) { drawCopyTexture(it) }
+        }
         if (cameraFrameUpdated && !firstFrameRendered) {
             firstFrameRendered = true
             onFirstFrameRendered?.invoke()
@@ -1484,6 +1490,10 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
         }
     }
 
+    fun setFocusMagnifierTopInset(topInsetPx: Int?) {
+        focusMagnifierTopInsetPx = topInsetPx
+    }
+
     /**
      * 将 FBO 纹理绘制到屏幕 (Copy Shader)
      */
@@ -1497,7 +1507,10 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
         GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, fboId)
         GLES30.glViewport(0, 0, width, height)
         GLES30.glClear(GLES30.GL_COLOR_BUFFER_BIT)
+        drawCopyTexture(sourceTextureId, targetMvpMatrix)
+    }
 
+    private fun drawCopyTexture(sourceTextureId: Int, targetMvpMatrix: FloatArray? = null) {
         GLES30.glUseProgram(copyProgramId)
 
         GLES30.glActiveTexture(GLES30.GL_TEXTURE0)
@@ -3372,6 +3385,7 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
     fun release() {
         releaseNonGlResources()
         previewTiming?.closeGl()
+        focusMagnifier.release()
         // 删除纹理
         if (cameraTextureId != 0) {
             GlUtils.deleteTexture(cameraTextureId)
@@ -3724,7 +3738,6 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
         if (focusPeakingProgramId != 0) {
             uPeakInputTexLoc = GLES30.glGetUniformLocation(focusPeakingProgramId, "uInputTexture")
             uPeakTexelSizeLoc = GLES30.glGetUniformLocation(focusPeakingProgramId, "uTexelSize")
-            uPeakThresholdLoc = GLES30.glGetUniformLocation(focusPeakingProgramId, "uThreshold")
             uPeakColorLoc = GLES30.glGetUniformLocation(focusPeakingProgramId, "uPeakColor")
             aPeakPositionLoc = GLES30.glGetAttribLocation(focusPeakingProgramId, "aPosition")
             aPeakTexCoordLoc = GLES30.glGetAttribLocation(focusPeakingProgramId, "aTexCoord")
@@ -3749,7 +3762,6 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
         GLES30.glUniform1i(uPeakInputTexLoc, 0)
 
         GLES30.glUniform2f(uPeakTexelSizeLoc, 1.0f / width, 1.0f / height)
-        GLES30.glUniform1f(uPeakThresholdLoc, 0.8f)
         GLES30.glUniform3f(uPeakColorLoc, 1.0f, 0.1f, 0.1f)
 
         GLES30.glBindBuffer(GLES30.GL_ARRAY_BUFFER, vertexBufferId)

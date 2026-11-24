@@ -220,29 +220,42 @@ object Shaders {
         precision highp float;
         in vec2 vTexCoord;
         out vec4 fragColor;
-        uniform sampler2D uInputTexture;
+        uniform highp sampler2D uInputTexture;
         uniform vec2 uTexelSize;
-        uniform float uThreshold;
         uniform vec3 uPeakColor;
+
+        vec3 sampleOffset(vec2 offset) {
+            return texture(uInputTexture, vTexCoord + offset * uTexelSize).rgb;
+        }
+
+        float gradientMagnitude(vec3 gx, vec3 gy) {
+            // Square each channel before summing so equal-luminance color edges survive.
+            return sqrt(dot(vec3(0.25, 0.5, 0.25), gx * gx + gy * gy));
+        }
 
         void main() {
             vec4 color = texture(uInputTexture, vTexCoord);
+            vec3 bottomLeft = sampleOffset(vec2(-1.0, -1.0));
+            vec3 bottom = sampleOffset(vec2(0.0, -1.0));
+            vec3 bottomRight = sampleOffset(vec2(1.0, -1.0));
+            vec3 left = sampleOffset(vec2(-1.0, 0.0));
+            vec3 right = sampleOffset(vec2(1.0, 0.0));
+            vec3 topLeft = sampleOffset(vec2(-1.0, 1.0));
+            vec3 top = sampleOffset(vec2(0.0, 1.0));
+            vec3 topRight = sampleOffset(vec2(1.0, 1.0));
 
-            // Sobel edge detection
-            float l00 = dot(texture(uInputTexture, vTexCoord + vec2(-uTexelSize.x, -uTexelSize.y)).rgb, vec3(0.299, 0.587, 0.114));
-            float l10 = dot(texture(uInputTexture, vTexCoord + vec2(0.0, -uTexelSize.y)).rgb, vec3(0.299, 0.587, 0.114));
-            float l20 = dot(texture(uInputTexture, vTexCoord + vec2(uTexelSize.x, -uTexelSize.y)).rgb, vec3(0.299, 0.587, 0.114));
-            float l01 = dot(texture(uInputTexture, vTexCoord + vec2(-uTexelSize.x, 0.0)).rgb, vec3(0.299, 0.587, 0.114));
-            float l21 = dot(texture(uInputTexture, vTexCoord + vec2(uTexelSize.x, 0.0)).rgb, vec3(0.299, 0.587, 0.114));
-            float l02 = dot(texture(uInputTexture, vTexCoord + vec2(-uTexelSize.x, uTexelSize.y)).rgb, vec3(0.299, 0.587, 0.114));
-            float l12 = dot(texture(uInputTexture, vTexCoord + vec2(0.0, uTexelSize.y)).rgb, vec3(0.299, 0.587, 0.114));
-            float l22 = dot(texture(uInputTexture, vTexCoord + vec2(uTexelSize.x, uTexelSize.y)).rgb, vec3(0.299, 0.587, 0.114));
+            // Normalize Sobel to the contrast of a one-pixel step on a straight edge.
+            vec3 gx = ((bottomRight - bottomLeft) + 2.0 * (right - left) + (topRight - topLeft)) * 0.25;
+            vec3 gy = ((topLeft - bottomLeft) + 2.0 * (top - bottom) + (topRight - bottomRight)) * 0.25;
+            float fine = gradientMagnitude(gx, gy);
+            vec3 coarseX = sampleOffset(vec2(2.0, 0.0)) - sampleOffset(vec2(-2.0, 0.0));
+            vec3 coarseY = sampleOffset(vec2(0.0, 2.0)) - sampleOffset(vec2(0.0, -2.0));
+            float coarse = gradientMagnitude(coarseX, coarseY);
 
-            float gx = l00 + 2.0 * l01 + l02 - l20 - 2.0 * l21 - l22;
-            float gy = l00 + 2.0 * l10 + l20 - l02 - 2.0 * l12 - l22;
-            float edge = sqrt(gx * gx + gy * gy);
-            float peakFactor = smoothstep(uThreshold, uThreshold * 1.5, edge);
-            fragColor = vec4(mix(color.rgb, uPeakColor, peakFactor * 0.9), color.a);
+            // A blurred transition gains contrast over the wider span. Sharp detail rises within the shorter span.
+            float sharpness = smoothstep(0.56, 0.80, fine / max(coarse, 0.001));
+            float strength = smoothstep(0.04, 0.10, fine);
+            fragColor = vec4(mix(color.rgb, uPeakColor, strength * sharpness * 0.9), color.a);
         }
     """.trimIndent()
 

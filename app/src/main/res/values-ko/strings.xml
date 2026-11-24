@@ -91,6 +91,8 @@
     <string name="settings_level_description">촬영 중 수평계 표시</string>
     <string name="settings_grid_lines">격자선</string>
     <string name="settings_grid_description">구도를 위한 격자선 표시</string>
+    <string name="settings_focus_magnifier">수동 초점 확대</string>
+    <string name="settings_focus_magnifier_description">수동 초점 조절 시 뷰파인더 중앙의 확대 화면을 뷰파인더 위에 표시합니다</string>
     <string name="settings_grid_style">격자 스타일</string>
     <string name="grid_style_off">꺼짐</string>
     <string name="grid_style_thirds">삼분할</string>

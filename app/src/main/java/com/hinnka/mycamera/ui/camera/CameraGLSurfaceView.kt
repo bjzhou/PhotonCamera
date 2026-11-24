@@ -44,10 +44,11 @@ class CameraGLSurfaceView @JvmOverloads constructor(
         private const val TAG = "CameraGLSurfaceView"
     }
 
-    private val renderer: LutRenderer = LutRenderer(context.applicationContext)
+    private val renderer = LutRenderer(context)
     private var currentStabilizationCoordinator: RealtimeStabilizationCoordinator? = null
     private var currentPreviewStabilizationUseCase: StabilizationUseCase? = null
     private var currentPreviewStabilizationStrength = 0f
+    private var currentFocusMagnifierTopInset: Int? = null
 
     var onHistogramUpdated: ((IntArray) -> Unit)? = null
     var onMeteringUpdated: ((Double, Double) -> Unit)? = null
@@ -274,6 +275,15 @@ class CameraGLSurfaceView @JvmOverloads constructor(
     fun setFocusPeakingEnabled(enabled: Boolean) {
         renderer.focusPeakingEnabled = enabled
         requestRender()
+    }
+
+    fun setFocusMagnifierTopInset(topInsetPx: Int?) {
+        if (currentFocusMagnifierTopInset == topInsetPx) return
+        currentFocusMagnifierTopInset = topInsetPx
+        queueEvent {
+            renderer.setFocusMagnifierTopInset(topInsetPx)
+            requestRender()
+        }
     }
 
     fun setEyeFocusBusy(busy: Boolean) {

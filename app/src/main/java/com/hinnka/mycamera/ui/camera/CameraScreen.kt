@@ -257,6 +257,7 @@ fun CameraScreen(
     val latestPhoto by galleryViewModel.latestPhoto.collectAsState()
     var showLevelIndicator by rememberPreference(UserPreferences::showLevelIndicator)
     val focusPeakingEnabled by preferenceValue { it.focusPeakingEnabled }
+    val focusMagnifierEnabled by preferenceValue { it.focusMagnifierEnabled }
     val eyeFocusEnabled by preferenceValue { it.eyeFocusEnabled }
     val keepScreenOn by preferenceValue { it.keepScreenOn }
     val lookSelection by viewModel.lutLookSelection.collectAsState()
@@ -1343,6 +1344,14 @@ fun CameraScreen(
                     val portraitMaskActive = state.captureMode == CaptureMode.PHOTO &&
                         state.useRaw &&
                         state.isRawSupported
+                    val showFocusMagnifier = focusMagnifierEnabled &&
+                        state.isPreviewActive &&
+                        !state.isAutoFocus &&
+                        !state.isHyperfocalFocusEnabled &&
+                        state.minimumFocusDistance > 0f &&
+                        !glassPanelVisible &&
+                        !previewTransitionActive &&
+                        !lensSwitchTransition.isActive
 
                     // 相机准备完成后再创建 Surface，首次只打开最终选中的镜头。
                     if (isCameraPrepared) {
@@ -1420,6 +1429,7 @@ fun CameraScreen(
                             isEyeFocusBusy = viewModel.isEyeFocusBusy,
                             isAutoFocus = state.isAutoFocus,
                             focusPeakingEnabled = focusPeakingEnabled && !state.isHyperfocalFocusEnabled,
+                            focusMagnifierTopInset = viewfinderTopOverlayPadding.takeIf { showFocusMagnifier },
                             stabilizationCoordinator = viewModel.realtimeStabilizationCoordinator,
                             previewYuvChannel = viewModel.previewYuvChannel,
                             sharedEisRgbFrames = viewModel.sharedEisRgbFrames,

@@ -256,6 +256,8 @@
     <string name="settings_level_description">Show horizontal level indicator while shooting</string>
     <string name="settings_focus_peaking">Focus Peaking</string>
     <string name="settings_focus_peaking_description">Show focus peaking highlights during manual focus</string>
+    <string name="settings_focus_magnifier">Manual Focus Magnifier</string>
+    <string name="settings_focus_magnifier_description">Show a magnified view of the center over the viewfinder during manual focus</string>
     <string name="settings_photo_preview_stabilization">Photo Preview Stabilization</string>
     <string name="camera_preview_stabilization">Preview Stabilization</string>
     <string name="settings_photo_preview_stabilization_description">Stabilize the photo viewfinder using gyro motion. The saved photo is unchanged; rear cameras only.</string>

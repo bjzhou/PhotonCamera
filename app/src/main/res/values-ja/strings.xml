@@ -470,6 +470,8 @@
     <string name="settings_section_data_maintenance">データ管理</string>
     <string name="settings_focus_peaking">フォーカスピーキング</string>
     <string name="settings_focus_peaking_description">MF時にピーキング表示</string>
+    <string name="settings_focus_magnifier">マニュアルフォーカス拡大</string>
+    <string name="settings_focus_magnifier_description">マニュアルフォーカス時に、ファインダー中央の拡大像を重ねて表示します</string>
     <string name="settings_photo_preview_stabilization">写真プレビュー手ブレ補正</string>
     <string name="camera_preview_stabilization">プレビュー手ブレ補正</string>
     <string name="settings_use_jpg_max">マルチフレームNR</string>

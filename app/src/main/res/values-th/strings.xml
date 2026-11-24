@@ -186,6 +186,8 @@
     <string name="settings_level_description">แสดงตัวบ่งชี้ระดับแนวนอนขณะถ่าย</string>
     <string name="settings_focus_peaking">โฟกัสจุดสูงสุด</string>
     <string name="settings_focus_peaking_description">แสดงไฮไลท์จุดโฟกัสเมื่อโฟกัสด้วยตนเอง</string>
+    <string name="settings_focus_magnifier">แว่นขยายโฟกัสแบบแมนนวล</string>
+    <string name="settings_focus_magnifier_description">แสดงภาพขยายของบริเวณกลางช่องมองภาพซ้อนทับขณะโฟกัสด้วยตนเอง</string>
     <string name="settings_grid_lines">เส้นตาราง</string>
     <string name="settings_grid_description">แสดงเส้นตารางสำหรับการจัดองค์ประกอบ</string>
     <string name="settings_grid_style">รูปแบบเส้นตาราง</string>

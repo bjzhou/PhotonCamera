@@ -643,6 +643,8 @@
     <string name="settings_section_help_about">Aide et à propos</string>
     <string name="settings_focus_peaking">Focus peaking</string>
     <string name="settings_focus_peaking_description">Met en évidence les zones nettes pendant la mise au point manuelle</string>
+    <string name="settings_focus_magnifier">Loupe de mise au point</string>
+    <string name="settings_focus_magnifier_description">Superpose une vue agrandie du centre du viseur pendant la mise au point manuelle</string>
     <string name="settings_photo_preview_stabilization">Stabilisation de l\'aperçu photo</string>
     <string name="camera_preview_stabilization">Stabilisation de l\'aperçu</string>
     <string name="settings_photo_preview_stabilization_description">Stabilise le viseur photo grâce au gyroscope. La photo enregistrée n\'est pas modifiée ; caméras arrière uniquement.</string>
