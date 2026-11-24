@@ -266,7 +266,7 @@ fun CameraScreen(
     val currentLutLook by viewModel.currentLutLook.collectAsState()
     val currentRecipeParams = currentLutLook.recipe
     val canEditCurrentLut = !presetLookSelected && !currentLutLook.fromPreset &&
-        currentLutId != "none" && currentLutLook.id == currentLutId
+        currentLutLook.id == currentLutId
     val lutSelectorMode by viewModel.lutSelectorMode.collectAsState()
     val activePresetId by preferenceValue { it.activePresetId }
     val activePresetModified by viewModel.isActivePresetModified.collectAsState()

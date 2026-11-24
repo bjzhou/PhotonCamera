@@ -588,7 +588,11 @@ data class CameraLutLook(
 }
 
 private fun CameraLutLook.photoColorRecipeEdits(): String? =
-    if (id == "none" && fromPreset) PhotoColorRecipeEdits(base = recipe).toJson() else null
+    if (id == "none" && (fromPreset || !recipe.isSameAs(ColorRecipeParams.DEFAULT))) {
+        PhotoColorRecipeEdits(base = recipe).toJson()
+    } else {
+        null
+    }
 
 /**
  * 相机 ViewModel
@@ -3968,19 +3972,15 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         val lutId = selection.lutId
         val presetRecipe = selection.presetRecipe
         _lutLookSelection.value = selection
-        if (lutId == "none") {
-            publishLutLook(CameraLutLook(lutId, null, presetRecipe ?: ColorRecipeParams.DEFAULT, presetRecipe != null))
-            return null
-        }
 
         val currentState = state.value
-        if (currentState.captureMode == CaptureMode.VIDEO) {
+        if (currentState.captureMode == CaptureMode.VIDEO && lutId != "none") {
             validateAndCancelNonMatchingVideoLut(currentState.videoConfig.logProfile)
             if (lutLookSelection.value.lutId != lutId) return null
         }
-        return viewModelScope.launch {
-            val loadedLut = withContext(Dispatchers.IO) {
-                contentRepository.lutManager.loadLut(lutId)
+        val loadJob = viewModelScope.launch {
+            val loadedLut = lutId.takeUnless { it == "none" }?.let { id ->
+                withContext(Dispatchers.IO) { contentRepository.lutManager.loadLut(id) }
             }
             fun publishRecipe(recipe: ColorRecipeParams) {
                 val activeState = state.value
@@ -4000,6 +4000,8 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 contentRepository.lutManager.getColorRecipeParams(lutId).collect(::publishRecipe)
             }
         }.also { lutLoadJob = it }
+        // Only a preset load completes. The global recipe is observed until the selection changes.
+        return loadJob.takeIf { presetRecipe != null }
     }
 
     private fun publishLutLook(look: CameraLutLook) {

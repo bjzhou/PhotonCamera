@@ -222,7 +222,7 @@ fun LutSelector(
 
     val activeLutId = currentLutId
     val editActiveLut = onEditClick.takeIf {
-        !presetLookActive && activeLutId != null && activeLutId != "none"
+        !presetLookActive && activeLutId != null
     }
     val supportsFrames = onFrameSelected != null
     val supportsPresets = presetModeEnabled

@@ -7,7 +7,6 @@ import android.net.Uri
 import android.os.Bundle
 import com.hinnka.mycamera.data.ContentRepository
 import com.hinnka.mycamera.lut.LutConfig
-import com.hinnka.mycamera.model.ColorRecipeParams
 import com.hinnka.mycamera.utils.PLog
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
@@ -43,8 +42,7 @@ class PhotonLookProvider : ContentProvider() {
         val normalizedLutId = lutId.takeUnless { it == LutConfigNone }
         val lutConfig = normalizedLutId?.let { repository.lutManager.loadLut(it) }
         val recipe = preferences.photoPresetRecipe
-            ?: normalizedLutId?.let { repository.lutManager.loadColorRecipeParams(it) }
-            ?: ColorRecipeParams.DEFAULT
+            ?: repository.lutManager.loadColorRecipeParams(lutId)
         val payload = lutConfig?.takeIf { it.isValid() }?.toByteArray()
         val recipeJson = recipe.toJson()
         val signature = buildLookSignature(normalizedLutId, lutConfig, payload, recipeJson)

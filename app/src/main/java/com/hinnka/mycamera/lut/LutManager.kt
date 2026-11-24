@@ -158,7 +158,6 @@ class LutManager(private val context: Context) {
             lutId: String,
             target: BaselineColorCorrectionTarget?
         ): ColorRecipeParams? {
-            if (lutId == "none") return null
             preferences[recipeKey(lutId, target)]?.let { return ColorRecipeParams.fromJson(it) }
             if (target != null) return null
             val hasLegacyRecipe = legacyFieldNames.any { name ->
@@ -370,7 +369,6 @@ class LutManager(private val context: Context) {
         params: ColorRecipeParams,
         target: BaselineColorCorrectionTarget? = null
     ) {
-        if (lutId == "none") return
         context.colorRecipeDataStore.edit { preferences ->
             preferences[recipeKey(lutId, target)] = params.toJson()
             if (target == null) {

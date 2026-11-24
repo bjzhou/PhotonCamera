@@ -174,7 +174,7 @@ private fun MgcFilterSelectionRoute(
         ?: sortedLuts.firstOrNull { it.isDefault }?.id
     val presetLookActive = preferences?.photoPresetRecipe != null
     val editableLutId = activeLutId?.takeIf { id ->
-        !presetLookActive && id != "none" && sortedLuts.any { it.id == id }
+        !presetLookActive && sortedLuts.any { it.id == id }
     }
     var editingLutId by remember(editableLutId) { mutableStateOf<String?>(null) }
     val editLut = editableLutId?.let { id -> { editingLutId = id } }
