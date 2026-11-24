@@ -1074,10 +1074,12 @@ fun CameraScreen(
                 ?: state.physicalAperture
                 ?: state.availableApertures.firstOrNull() ?: 0f
             val apertureSelected = selectedParameter == CameraParameter.APERTURE
+            val evRange = state.getExposureCompensationRange()
+            val evStep = state.getExposureCompensationStep()
             ParameterRuler(
                 parameter = selectedParameter,
                 currentValue = when (selectedParameter) {
-                    CameraParameter.EXPOSURE_COMPENSATION -> state.exposureCompensation * state.getExposureCompensationStep()
+                    CameraParameter.EXPOSURE_COMPENSATION -> state.exposureCompensation * evStep
                     CameraParameter.SHUTTER_SPEED -> state.shutterSpeed.toFloat()
                     CameraParameter.APERTURE -> apertureValue
                     CameraParameter.ISO -> state.iso.toFloat()
@@ -1085,7 +1087,7 @@ fun CameraScreen(
                     CameraParameter.WHITE_BALANCE -> whiteBalanceCurrentValue
                 },
                 minValue = when (selectedParameter) {
-                    CameraParameter.EXPOSURE_COMPENSATION -> state.getExposureCompensationRange().lower * state.getExposureCompensationStep()
+                    CameraParameter.EXPOSURE_COMPENSATION -> evRange.lower * evStep
                     CameraParameter.SHUTTER_SPEED -> state.getManualShutterSpeedRange().lower.toFloat()
                     CameraParameter.APERTURE -> state.availableApertures.firstOrNull() ?: apertureValue
                     CameraParameter.ISO -> state.getIsoRange().lower.toFloat()
@@ -1093,7 +1095,7 @@ fun CameraScreen(
                     CameraParameter.WHITE_BALANCE -> state.awbTemperatureMin.toFloat()
                 },
                 maxValue = when (selectedParameter) {
-                    CameraParameter.EXPOSURE_COMPENSATION -> state.getExposureCompensationRange().upper * state.getExposureCompensationStep()
+                    CameraParameter.EXPOSURE_COMPENSATION -> evRange.upper * evStep
                     CameraParameter.SHUTTER_SPEED -> state.getManualShutterSpeedRange().upper.toFloat()
                     CameraParameter.APERTURE -> state.availableApertures.lastOrNull() ?: apertureValue
                     CameraParameter.ISO -> state.getIsoRange().upper.toFloat()
@@ -1101,7 +1103,7 @@ fun CameraScreen(
                     CameraParameter.WHITE_BALANCE -> state.awbTemperatureMax.toFloat()
                 },
                 isAdjustable = when (selectedParameter) {
-                    CameraParameter.EXPOSURE_COMPENSATION -> state.isAutoExposure
+                    CameraParameter.EXPOSURE_COMPENSATION -> state.isAutoExposure && evRange.lower < evRange.upper
                     CameraParameter.SHUTTER_SPEED, CameraParameter.ISO -> true
                     CameraParameter.APERTURE -> state.isApertureAdjustable
                     CameraParameter.FOCUS -> state.minimumFocusDistance > 0f
@@ -1123,7 +1125,7 @@ fun CameraScreen(
                     CameraParameter.APERTURE -> state.isApertureAdjustable
                     else -> true
                 },
-                valueStep = state.getExposureCompensationStep(),
+                valueStep = evStep,
                 discreteValues = state.availableApertures.takeIf { apertureSelected },
                 resetValue = selectedParameter.defaultResetValue(),
                 showHyperfocalButton = selectedParameter == CameraParameter.FOCUS && state.minimumFocusDistance > 0f,
@@ -1134,7 +1136,7 @@ fun CameraScreen(
                 },
                 onValueChange = { value ->
                     when (selectedParameter) {
-                        CameraParameter.EXPOSURE_COMPENSATION -> viewModel.setExposureCompensation((value / state.getExposureCompensationStep()).roundToInt())
+                        CameraParameter.EXPOSURE_COMPENSATION -> viewModel.setExposureCompensation((value / evStep).roundToInt())
                         CameraParameter.SHUTTER_SPEED -> viewModel.setShutterSpeed(value.toLong())
                         CameraParameter.APERTURE -> viewModel.setPhysicalAperture(value)
                         CameraParameter.ISO -> viewModel.setIso(value.toInt())

@@ -28,6 +28,8 @@ class CameraDiscovery(private val context: Context) {
 
     companion object {
         private const val TAG = "CameraDiscovery"
+        private val MIN_EXPOSURE_COMPENSATION_RANGE = Range(-24, 24)
+        private const val DEFAULT_EXPOSURE_COMPENSATION_STEP = 1f / 3f
 
         // 探测的最大 Camera ID
         private const val MAX_PROBE_ID = 6
@@ -243,7 +245,12 @@ class CameraDiscovery(private val context: Context) {
                     }
                 }
 
-                PLog.d(TAG, "Camera2: $cameraId: facing=$lensFacing, intrinsicZoom=$intrinsicZoomRatio")
+                PLog.d(
+                    TAG,
+                    "Camera2: selected=$cameraId, open=${info.getOpenCameraId()}, facing=$lensFacing, " +
+                        "intrinsicZoom=$intrinsicZoomRatio, evRange=${info.exposureCompensationRange}, " +
+                        "evStep=${info.exposureCompensationStep}"
+                )
 
             } catch (e: Exception) {
                 PLog.w(TAG, "Failed to get camera $cameraId info", e)
@@ -1486,19 +1493,23 @@ class CameraDiscovery(private val context: Context) {
         // 计算 35mm 等效焦距
         val focalLength35mm = get35mmEquivalentFocalLength(characteristics)
 
-        // ISO 范围
-        val isoRange = characteristics.readMetadataOrNull(CameraCharacteristics.SENSOR_INFO_SENSITIVITY_RANGE)
+        val exposureRanges = characteristics.readExposureRanges(
+            cameraId = cameraId,
+            // Exposure requests target the opened device, so a bound physical camera's vendor range may not apply.
+            allowVendorExtension = logicalBinding == null,
+        )
 
-        // 曝光时间范围
-        val exposureTimeRange = characteristics.readMetadataOrNull(CameraCharacteristics.SENSOR_INFO_EXPOSURE_TIME_RANGE)
-
-        // 曝光补偿范围
-        val exposureCompensationRange = characteristics.readMetadataOrNull(CameraCharacteristics.CONTROL_AE_COMPENSATION_RANGE)
-            ?: Range(0, 0)
-
-        // 曝光补偿步长
-        val exposureCompensationStep =
-            characteristics.get(CameraCharacteristics.CONTROL_AE_COMPENSATION_STEP)?.toFloat() ?: 0f
+        // AE compensation is set on the opened device's request, including for bound physical outputs.
+        val aeCharacteristics = logicalBinding?.let { getCameraCharacteristics(it.logicalCameraId) }
+            ?: characteristics
+        val exposureCompensationStep = aeCharacteristics
+            .readMetadataOrNull(CameraCharacteristics.CONTROL_AE_COMPENSATION_STEP)
+            ?.toFloat()
+            ?.takeIf { it.isFinite() && it > 0f } ?: DEFAULT_EXPOSURE_COMPENSATION_STEP
+        val exposureCompensationRange = aeCharacteristics
+            .readMetadataOrNull(CameraCharacteristics.CONTROL_AE_COMPENSATION_RANGE)
+            ?.extend(MIN_EXPOSURE_COMPENSATION_RANGE)
+            ?: MIN_EXPOSURE_COMPENSATION_RANGE
 
         // Camera2 zoom ratio range 可以表达逻辑多摄的 <1x 超广角范围
         val zoomRatioRange = characteristics.readMetadataOrNull(CameraCharacteristics.CONTROL_ZOOM_RATIO_RANGE)
@@ -1524,8 +1535,8 @@ class CameraDiscovery(private val context: Context) {
             lensFacing = lensFacing,
             lensType = LensType.BACK_MAIN, // 临时，后续分类
             physicalCameraIds = logicalBinding?.physicalCameraIds ?: characteristics.physicalCameraIds.toList(),
-            isoRange = isoRange,
-            exposureTimeRange = exposureTimeRange,
+            isoRange = exposureRanges.iso,
+            exposureTimeRange = exposureRanges.shutter,
             exposureCompensationRange = exposureCompensationRange,
             exposureCompensationStep = exposureCompensationStep,
             maxZoom = maxZoom,
