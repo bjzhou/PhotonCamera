@@ -29,7 +29,7 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 
 private const val LookOptionColumns = 5
-private const val LookOptionVisibleRows = 3
+private const val LookOptionMaxRows = 3
 private val LookOptionPadding = 8.dp
 private val LookOptionVerticalPadding = 4.dp
 private val LookOptionColumnSpacing = 8.dp
@@ -44,14 +44,19 @@ private fun lookOptionCellWidth(width: Dp, density: Density): Dp = with(density)
 }
 
 @Composable
-internal fun lookOptionGridHeight(width: Dp, footerHeight: Dp): Dp = with(LocalDensity.current) {
-    val cellHeight = (minOf(lookOptionCellWidth(width, this), LookOptionExpandedSize) + footerHeight).roundToPx()
-    (cellHeight * LookOptionVisibleRows +
-        LookOptionRowSpacing.roundToPx() * (LookOptionVisibleRows - 1) +
-        LookOptionVerticalPadding.roundToPx() * 2).toDp()
+internal fun lookOptionGridHeight(width: Dp, footerHeight: Dp, optionCount: Int): Dp {
+    if (optionCount == 0) return 0.dp
+    val visibleOptionCount = optionCount.coerceAtMost(LookOptionColumns * LookOptionMaxRows)
+    val rowCount = (visibleOptionCount + LookOptionColumns - 1) / LookOptionColumns
+    return with(LocalDensity.current) {
+        val cellHeight = (minOf(lookOptionCellWidth(width, this), LookOptionExpandedSize) + footerHeight).roundToPx()
+        (cellHeight * rowCount +
+            LookOptionRowSpacing.roundToPx() * (rowCount - 1) +
+            LookOptionVerticalPadding.roundToPx() * 2).toDp()
+    }
 }
 
-/** Fit five options across the available width and exactly three rows in the expanded viewport. */
+/** Fit five options across the available width and up to three rows in the expanded viewport. */
 @Composable
 internal fun <T> LookOptionList(
     options: List<T>,
@@ -80,7 +85,8 @@ internal fun <T> LookOptionList(
             LazyVerticalGrid(
                 columns = GridCells.Fixed(LookOptionColumns),
                 state = gridState,
-                modifier = Modifier.fillMaxWidth().height(lookOptionGridHeight(maxWidth, itemFooterHeight)),
+                modifier = Modifier.fillMaxWidth()
+                    .height(lookOptionGridHeight(maxWidth, itemFooterHeight, options.size)),
                 contentPadding = PaddingValues(horizontal = LookOptionPadding, vertical = LookOptionVerticalPadding),
                 horizontalArrangement = Arrangement.spacedBy(LookOptionColumnSpacing),
                 verticalArrangement = Arrangement.spacedBy(LookOptionRowSpacing)

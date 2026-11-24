@@ -12,7 +12,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -30,6 +30,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontWeight
@@ -47,6 +48,10 @@ private val HeaderSegmentContainerBorder = Color.White.copy(alpha = 0.10f)
 private val HeaderSegmentSelectedBackground = Color(0xFF282E36)
 private val HeaderActionIconBackground = Color.White.copy(alpha = 0.08f)
 private val HeaderActionIconBorder = Color.White.copy(alpha = 0.16f)
+internal val CameraLookSubBarLineHeight = 16.sp
+internal val CameraLookSubBarTabVerticalPadding = 3.dp
+internal val CameraLookSubBarIndicatorSpacing = 2.dp
+internal val CameraLookSubBarIndicatorHeight = 2.dp
 
 internal data class CameraLookHeaderIconAction(
     val icon: ImageVector,
@@ -250,10 +255,17 @@ internal fun CameraLookSubBar(
     modifier: Modifier = Modifier,
     leading: @Composable RowScope.() -> Unit
 ) {
+    val height = with(LocalDensity.current) {
+        val tabHeight = CameraLookSubBarLineHeight.roundToPx() +
+            CameraLookSubBarTabVerticalPadding.roundToPx() * 2 +
+            CameraLookSubBarIndicatorSpacing.roundToPx() +
+            CameraLookSubBarIndicatorHeight.roundToPx()
+        maxOf(26.dp, tabHeight.toDp())
+    }
     Row(
         modifier = modifier
             .fillMaxWidth()
-            .heightIn(min = 26.dp)
+            .height(height)
             .padding(horizontal = 10.dp),
         verticalAlignment = Alignment.CenterVertically,
         content = leading
@@ -270,7 +282,7 @@ internal fun CameraLookSubBarTitle(
         text = title,
         color = Color.White.copy(alpha = 0.88f),
         fontSize = 12.sp,
-        lineHeight = 15.sp,
+        lineHeight = CameraLookSubBarLineHeight,
         fontWeight = FontWeight.Medium,
         maxLines = 1,
         overflow = TextOverflow.Ellipsis,

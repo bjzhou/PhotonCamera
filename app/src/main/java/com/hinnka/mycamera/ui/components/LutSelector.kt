@@ -1,6 +1,8 @@
 package com.hinnka.mycamera.ui.components
 
 import android.graphics.Bitmap
+import androidx.compose.animation.animateContentSize
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.*
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.*
@@ -32,6 +34,7 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
@@ -381,14 +384,16 @@ fun LutSelector(
                         ) {
                             browsedCategory = category
                         }
-                        .padding(horizontal = 8.dp, vertical = 3.dp),
+                        .padding(horizontal = 8.dp, vertical = CameraLookSubBarTabVerticalPadding),
                     horizontalAlignment = Alignment.CenterHorizontally,
-                    verticalArrangement = Arrangement.spacedBy(2.dp)
+                    verticalArrangement = Arrangement.spacedBy(CameraLookSubBarIndicatorSpacing)
                 ) {
                     Text(
                         text = lutCategoryTitle(category),
+                        modifier = if (expanded) Modifier.weight(1f, fill = false) else Modifier,
                         color = if (isSelected) AccentColor else Color.White.copy(alpha = if (expanded) 0.78f else 1f),
                         fontSize = 11.sp,
+                        lineHeight = if (expanded) CameraLookSubBarLineHeight else TextUnit.Unspecified,
                         fontWeight = if (isSelected) FontWeight.SemiBold else FontWeight.Medium,
                         maxLines = 1,
                         softWrap = false,
@@ -398,7 +403,7 @@ fun LutSelector(
                         Box(
                             modifier = Modifier
                                 .width(12.dp)
-                                .height(2.dp)
+                                .height(CameraLookSubBarIndicatorHeight)
                                 .clip(CircleShape)
                                 .background(if (isSelected) AccentColor else Color.Transparent)
                         )
@@ -411,9 +416,15 @@ fun LutSelector(
     val optionsOrEmptyContent = @Composable {
         val emptyStyleList = actualMode == LutSelectorMode.Style && lutOptions.isEmpty()
         if (expanded && (!showExpandedOptions || emptyStyleList)) {
+            val optionCount = when (actualMode) {
+                LutSelectorMode.Style -> lutOptions.size.coerceAtLeast(1)
+                LutSelectorMode.Presets -> allPresets.size
+                LutSelectorMode.Frame -> availableFrames.size + 1 // Includes the no-frame option.
+            }
             BoxWithConstraints(Modifier.fillMaxWidth()) {
                 Box(
-                    modifier = Modifier.fillMaxWidth().height(lookOptionGridHeight(maxWidth, lutFooterHeight)),
+                    modifier = Modifier.fillMaxWidth()
+                        .height(lookOptionGridHeight(maxWidth, lutFooterHeight, optionCount)),
                     contentAlignment = Alignment.Center
                 ) {
                     if (showExpandedOptions) {
@@ -537,6 +548,7 @@ fun LutSelector(
                     .fillMaxWidth()
                     .clip(CameraLookPanelShape)
                     .then(cameraPanelBackground)
+                    .animateContentSize(tween(220))
                     .padding(bottom = 4.dp),
                 verticalArrangement = Arrangement.spacedBy(4.dp)
             ) {
@@ -548,22 +560,18 @@ fun LutSelector(
                     onModeSelected = onModeSelected,
                     actions = headerActions
                 )
-                when (actualMode) {
-                    LutSelectorMode.Style -> CameraLookSubBar(
-                        leading = {
+                CameraLookSubBar {
+                    when (actualMode) {
+                        LutSelectorMode.Style -> {
                             styleCategoryRow(Modifier.fillMaxWidth(), PaddingValues(horizontal = 0.dp))
                         }
-                    )
-                    LutSelectorMode.Presets -> CameraLookSubBar(
-                        leading = {
+                        LutSelectorMode.Presets -> {
                             CameraLookSubBarTitle(title = currentPresetCaption, scrollTitle = scrollCaption)
                         }
-                    )
-                    LutSelectorMode.Frame -> CameraLookSubBar(
-                        leading = {
+                        LutSelectorMode.Frame -> {
                             CameraLookSubBarTitle(title = currentFrameCaption, scrollTitle = scrollCaption)
                         }
-                    )
+                    }
                 }
                 optionsOrEmptyContent()
             }

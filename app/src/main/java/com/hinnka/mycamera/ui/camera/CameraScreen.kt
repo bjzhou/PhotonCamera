@@ -2381,7 +2381,7 @@ private fun Controls(
 
             Box(Modifier.fillMaxWidth().onFocusChanged { panelHasFocus = it.hasFocus }.focusGroup()) {
                 if (panelMounted || mountPanel) {
-                    Column(Modifier.fillMaxWidth().animateContentSize(tween(220))) {
+                    Column(Modifier.fillMaxWidth()) {
                         Spacer(Modifier.height(6.dp))
                         filterSelector(optionsLoaded || showOptions)
                     }
