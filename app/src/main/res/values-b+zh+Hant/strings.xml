@@ -641,6 +641,12 @@
     <string name="delete_dcp_confirm_message">刪除 DCP "%s"？</string>
     <string name="rename_dialog_title">重命名</string>
     <string name="export_lut_cube">匯出LUT</string>
+    <string name="film_lut_generate">儲存為照片濾鏡</string>
+    <string name="film_lut_generate_description">將目前 %1$s 的色彩與影調儲存為照片濾鏡。顆粒、光暈、擴散等空間效果會被省略。</string>
+    <string name="film_lut_generate_action_description">將目前的膠片色彩加入濾鏡庫</string>
+    <string name="film_lut_generate_progress">正在建立濾鏡…</string>
+    <string name="film_lut_generate_success">已加入濾鏡庫</string>
+    <string name="film_lut_generate_failed">建立濾鏡失敗</string>
     <string name="export_lut_title">匯出濾鏡預設</string>
     <string name="export_mode_raw_cube">匯出原版 .cube</string>
     <string name="export_mode_plut">匯出無損配方 .plut</string>

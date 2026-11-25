@@ -26,6 +26,12 @@
     <string name="share">공유</string>
     <string name="delete">삭제</string>
     <string name="export">내보내기</string>
+    <string name="film_lut_generate">사진 필터로 저장</string>
+    <string name="film_lut_generate_description">현재 %1$s의 색상과 톤을 사진 필터로 저장합니다. 입자, 할레이션, 확산 등 공간 효과는 제외됩니다.</string>
+    <string name="film_lut_generate_action_description">현재 필름 색감을 필터 라이브러리에 추가</string>
+    <string name="film_lut_generate_progress">필터 생성 중…</string>
+    <string name="film_lut_generate_success">필터가 라이브러리에 추가되었습니다</string>
+    <string name="film_lut_generate_failed">필터를 생성하지 못했습니다</string>
     <string name="export_video_select_resolution">내보내기 해상도 선택</string>
     <string name="export_video_resolution_original">원본 해상도</string>
     <string name="export_video_resolution_8k">8K</string>
@@ -369,6 +375,7 @@
     <string name="settings_raw_leica_color_matrix_m9">M9</string>
     <string name="camera_focus_point_label">초점</string>
     <string name="camera_metering_point_label">측광점</string>
+    <string name="spektrafilm_section_film">필름 노출 및 현상</string>
     <!-- Fotufilm controls -->
     <string name="fotufilm_section_filmStock">필름</string>
     <string name="fotufilm_section_filmGrain">입자</string>

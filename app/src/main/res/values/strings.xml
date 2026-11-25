@@ -687,6 +687,12 @@
     <string name="delete_dcp_confirm_message">Delete DCP \"%s\"?</string>
     <string name="rename_dialog_title">Rename</string>
     <string name="export_lut_cube">Export LUT</string>
+    <string name="film_lut_generate">Save as Photo Filter</string>
+    <string name="film_lut_generate_description">Save the current %1$s colors and tones as a photo filter. Grain, halation, diffusion, and other spatial effects are omitted.</string>
+    <string name="film_lut_generate_action_description">Add the current film look to the filter library</string>
+    <string name="film_lut_generate_progress">Generating filter…</string>
+    <string name="film_lut_generate_success">Filter added to library</string>
+    <string name="film_lut_generate_failed">Could not generate filter</string>
     <string name="export_lut_title">Export Filter Preset</string>
     <string name="export_mode_raw_cube">Export original .cube</string>
     <string name="export_mode_plut">Export lossless .plut</string>

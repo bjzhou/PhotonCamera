@@ -11,6 +11,7 @@ import com.hinnka.mycamera.frame.FrameElement
 import com.hinnka.mycamera.frame.FrameTemplate
 import com.hinnka.mycamera.frame.FrameTemplateParser
 import com.hinnka.mycamera.frame.FrameRenderer
+import com.hinnka.mycamera.lut.LutConfig
 import com.hinnka.mycamera.lut.LutInfo
 import com.hinnka.mycamera.lut.XmpLutParser
 import com.hinnka.mycamera.raw.ColorSpace
@@ -25,6 +26,8 @@ import java.io.File
 import java.io.FileOutputStream
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
+import java.nio.file.Files
+import java.nio.file.StandardCopyOption
 import java.util.Locale
 import java.util.UUID
 
@@ -80,6 +83,7 @@ class CustomImportManager(private val context: Context) {
 
         // 配置文件
         private const val CUSTOM_LUT_CONFIG = "custom_luts.json"
+        private val customLutConfigLock = Any()
         private const val CUSTOM_FRAME_CONFIG = "custom_frames.json"
         private const val CUSTOM_DCP_CONFIG = "custom_dcps.json"
         private const val CUSTOM_RAW_NOISE_PROFILE_CONFIG = "custom_raw_noise_profiles.json"
@@ -272,6 +276,22 @@ class CustomImportManager(private val context: Context) {
         } catch (e: Exception) {
             PLog.e(TAG, "Failed to import LUT", e)
             null
+        }
+    }
+
+    internal fun importGeneratedLut(config: LutConfig, name: String, category: String): String {
+        require(config.isValid()) { "Invalid generated LUT" }
+        val id = "custom_${UUID.randomUUID()}"
+        val file = File(customLutDir, "$id.plut")
+        try {
+            FileOutputStream(file).use { output ->
+                LutConverter.exportToPlut(config, output)
+            }
+            saveLutToConfig(id, name, file.name, sanitizeCustomLutCategory(category))
+            return id
+        } catch (e: Exception) {
+            file.delete()
+            throw e
         }
     }
 
@@ -1032,11 +1052,11 @@ class CustomImportManager(private val context: Context) {
     /**
      * 更新自定义 LUT 名称
      */
-    fun updateLutName(lutId: String, newName: String): Boolean {
-        return try {
+    fun updateLutName(lutId: String, newName: String): Boolean = synchronized(customLutConfigLock) {
+        try {
             val configFile = File(context.filesDir, CUSTOM_LUT_CONFIG)
             if (!configFile.exists()) {
-                return false
+                return@synchronized false
             }
 
             val configJson = configFile.readText()
@@ -1058,7 +1078,7 @@ class CustomImportManager(private val context: Context) {
             }
 
             if (updated) {
-                configFile.writeText(newArray.toString())
+                writeLutConfig(configFile, newArray)
                 PLog.d(TAG, "LUT name updated: $lutId -> $newName")
             }
 
@@ -1072,9 +1092,9 @@ class CustomImportManager(private val context: Context) {
     /**
      * 更新自定义 LUT 分类
      */
-    fun updateLutCategory(lutId: String, newCategory: String): Boolean {
-        if (!isCustomLutId(lutId)) return false
-        return try {
+    fun updateLutCategory(lutId: String, newCategory: String): Boolean = synchronized(customLutConfigLock) {
+        if (!isCustomLutId(lutId)) return@synchronized false
+        try {
             val sanitizedCategory = sanitizeCustomLutCategory(newCategory)
 
             // 同步到分类重写文件，兼容已有备份。
@@ -1103,7 +1123,7 @@ class CustomImportManager(private val context: Context) {
                     newArray.put(lutObj)
                 }
                 if (updated) {
-                    configFile.writeText(newArray.toString())
+                    writeLutConfig(configFile, newArray)
                 }
             }
 
@@ -1118,8 +1138,8 @@ class CustomImportManager(private val context: Context) {
     /**
      * 更新 LUT 收藏状态（支持内置和自定义）。
      */
-    fun updateLutFavorite(lutId: String, isFavorite: Boolean): Boolean {
-        return try {
+    fun updateLutFavorite(lutId: String, isFavorite: Boolean): Boolean = synchronized(customLutConfigLock) {
+        try {
             val overridesFile = File(context.filesDir, FAVORITE_OVERRIDES_CONFIG)
             val overridesJson = if (overridesFile.exists()) {
                 JSONObject(overridesFile.readText())
@@ -1144,7 +1164,7 @@ class CustomImportManager(private val context: Context) {
                     newArray.put(lutObj)
                 }
                 if (updated) {
-                    configFile.writeText(newArray.toString())
+                    writeLutConfig(configFile, newArray)
                 }
             }
 
@@ -1199,8 +1219,8 @@ class CustomImportManager(private val context: Context) {
     /**
      * 删除自定义 LUT
      */
-    fun deleteCustomLut(lutId: String): Boolean {
-        return try {
+    fun deleteCustomLut(lutId: String): Boolean = synchronized(customLutConfigLock) {
+        try {
             // 从配置文件中移除
             val configFile = File(context.filesDir, CUSTOM_LUT_CONFIG)
             if (configFile.exists()) {
@@ -1218,7 +1238,7 @@ class CustomImportManager(private val context: Context) {
                     }
                 }
 
-                configFile.writeText(newArray.toString())
+                writeLutConfig(configFile, newArray)
 
                 // 删除文件
                 fileName?.let {
@@ -1373,7 +1393,7 @@ class CustomImportManager(private val context: Context) {
         fileName: String,
         category: String? = null,
         isFavorite: Boolean = false,
-    ) {
+    ) = synchronized(customLutConfigLock) {
         val configFile = File(context.filesDir, CUSTOM_LUT_CONFIG)
 
         val jsonArray = if (configFile.exists()) {
@@ -1399,7 +1419,17 @@ class CustomImportManager(private val context: Context) {
         }
 
         jsonArray.put(lutObj)
-        configFile.writeText(jsonArray.toString())
+        writeLutConfig(configFile, jsonArray)
+    }
+
+    private fun writeLutConfig(configFile: File, config: JSONArray) {
+        val temp = File.createTempFile(configFile.name, ".tmp", configFile.parentFile)
+        try {
+            temp.writeText(config.toString())
+            Files.move(temp.toPath(), configFile.toPath(), StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING)
+        } finally {
+            temp.delete()
+        }
     }
 
     private fun saveDcpToConfig(dcpId: String, name: String, fileName: String) {

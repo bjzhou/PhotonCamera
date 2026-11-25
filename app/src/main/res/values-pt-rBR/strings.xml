@@ -26,6 +26,12 @@
     <string name="share">Compartilhar</string>
     <string name="delete">Excluir</string>
     <string name="export">Exportar</string>
+    <string name="film_lut_generate">Salvar como filtro fotográfico</string>
+    <string name="film_lut_generate_description">Salva as cores e os tons atuais de %1$s como filtro fotográfico. Granulação, halos, difusão e outros efeitos espaciais são omitidos.</string>
+    <string name="film_lut_generate_action_description">Adicionar o visual de filme atual à biblioteca de filtros</string>
+    <string name="film_lut_generate_progress">Gerando filtro…</string>
+    <string name="film_lut_generate_success">Filtro adicionado à biblioteca</string>
+    <string name="film_lut_generate_failed">Não foi possível gerar o filtro</string>
     <string name="export_video_select_resolution">Selecionar resolução de exportação</string>
     <string name="export_video_resolution_original">Resolução original</string>
     <string name="export_video_resolution_8k">8K</string>
@@ -369,6 +375,7 @@
     <string name="settings_raw_leica_color_matrix_m9">M9</string>
     <string name="camera_focus_point_label">Foco</string>
     <string name="camera_metering_point_label">Medição</string>
+    <string name="spektrafilm_section_film">Exposição e revelação do filme</string>
     <!-- Fotufilm controls -->
     <string name="fotufilm_section_filmStock">Filme</string>
     <string name="fotufilm_section_filmGrain">Grão</string>

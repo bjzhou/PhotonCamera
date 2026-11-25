@@ -14,7 +14,7 @@ internal fun SpektrafilmGrainSection(
     settings: SpectralGrain,
     onCommit: (SpectralGrain) -> Unit,
 ) {
-    SpektrafilmSection(R.string.recipe_param_film_grain) {
+    FilmAdjustmentSection(R.string.recipe_param_film_grain) {
         SwitchSettingItem(
             title = stringResource(R.string.spektrafilm_grain_enabled),
             checked = settings.enabled,
@@ -27,7 +27,7 @@ internal fun SpektrafilmGrainSection(
                 onCheckedChange = { onCommit(settings.copy(sublayers = it)) },
             )
             SpektrafilmNumberControls(grainControls, settings, grainDefaults, onCommit)
-            SpektrafilmSection(R.string.recipe_panel_advanced) {
+            FilmAdjustmentSection(R.string.recipe_panel_advanced) {
                 SpektrafilmRgbSetting(
                     R.string.spektrafilm_grain_particle_scale, settings.particleScale, grainDefaults.particleScale,
                     0.01f..8f, 0.05f,
@@ -79,7 +79,7 @@ internal fun SpektrafilmDirAdvancedControls(
         onCommit(tuning.copy(dirMatrix = value.takeUnless { it == stockMatrix }))
     }
 
-    SpektrafilmSection(R.string.recipe_panel_advanced) {
+    FilmAdjustmentSection(R.string.recipe_panel_advanced) {
         SpektrafilmNumberControls(dirDiffusionControls, tuning, SpectralFilmTuning.DEFAULT, onCommit)
         SpektrafilmRgbSetting(
             R.string.spektrafilm_dir_from_red, currentMatrix.r, stockMatrix.r,

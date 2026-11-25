@@ -1,72 +1,22 @@
 package com.hinnka.mycamera.ui.components
 
 import androidx.annotation.StringRes
-import androidx.compose.foundation.clickable
-import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material3.Icon
-import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
-import androidx.compose.ui.Alignment
-import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
-import androidx.compose.ui.draw.rotate
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import com.hinnka.mycamera.R
 import com.hinnka.mycamera.raw.SpectralRgb
-import com.hinnka.mycamera.ui.icons.AppIcons
 import com.hinnka.mycamera.ui.settings.DropdownSettingItem
 import kotlin.math.abs
 import kotlin.math.expm1
 import kotlin.math.ln1p
 import kotlin.math.roundToInt
 import kotlin.math.sign
-
-@Composable
-internal fun SpektrafilmSection(
-    @StringRes title: Int,
-    content: @Composable () -> Unit,
-) {
-    var expanded by rememberSaveable { mutableStateOf(false) }
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clip(RoundedCornerShape(8.dp))
-            .clickable { expanded = !expanded }
-            .padding(vertical = 10.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Text(
-            text = stringResource(title),
-            modifier = Modifier.weight(1f),
-            color = Color.White,
-            fontSize = 16.sp,
-        )
-        Icon(
-            imageVector = AppIcons.ChevronRight,
-            contentDescription = null,
-            tint = Color.White.copy(alpha = 0.75f),
-            modifier = Modifier.size(22.dp).rotate(if (expanded) 90f else 0f),
-        )
-    }
-    if (expanded) {
-        Column(Modifier.fillMaxWidth().padding(start = 12.dp)) { content() }
-    }
-}
 
 @Composable
 internal fun SpektrafilmNumberSetting(
@@ -187,7 +137,7 @@ internal fun SpektrafilmRgbSetting(
     maxAtDefault: Boolean = false,
     onCommit: (SpectralRgb) -> Unit,
 ) {
-    SpektrafilmSection(title) {
+    FilmAdjustmentSection(title) {
         val titles = intArrayOf(redTitle, greenTitle, blueTitle)
         rgbChannels.forEachIndexed { index, channel ->
             key(channel.title) {

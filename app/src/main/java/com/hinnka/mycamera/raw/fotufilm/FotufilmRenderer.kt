@@ -58,7 +58,7 @@ internal class FotufilmRenderer(private val quad: RawFullscreenQuad) {
         fields: FotufilmFrameFields?,
         targetFramebuffer: Int,
         targetTexture: Int,
-    ) {
+    ): Boolean {
         require(inputWidth > 0 && inputHeight > 0) { "Invalid Fotufilm input size" }
         require(targetTexture != 0 || targetFramebuffer != 0) { "Missing Fotufilm target" }
         val flags = Flags(frame.featureMask)
@@ -110,7 +110,11 @@ internal class FotufilmRenderer(private val quad: RawFullscreenQuad) {
                 }
             }
             printPass(flags, region, developed, transmittance, spread, targetFramebuffer)
+            val error = GLES30.glGetError()
+            if (error == GLES30.GL_NO_ERROR) return true
+            PLog.e(TAG, "Render failed: glError $error")
             RawGlesProgram.logErrors("FotufilmRenderer.render")
+            return false
         } finally {
             scope.close()
         }

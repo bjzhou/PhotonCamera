@@ -51,7 +51,9 @@ internal class FotufilmPreviewBake(private val quad: RawFullscreenQuad) {
             request.context, request.document, width, height, measureFlareOnDevice = false,
         ).frame
         val frame = built.copy(featureMask = built.featureMask and SPATIAL_STAGES.inv(), filmTiles = null, filmTilesKey = null)
-        renderer.render(frame, sceneTexture, width, height, 0, 0, null, printFramebuffer, printTexture)
+        if (!renderer.render(frame, sceneTexture, width, height, 0, 0, null, printFramebuffer, printTexture)) {
+            return false
+        }
         if (program == 0) program = quad.createProgram(FINISH_SHADER, "fotufilmPreviewFinish")
         if (program == 0) return false
         GLES30.glUseProgram(program)

@@ -293,6 +293,7 @@ fun CameraScreen(
     val rawDcpIdsByLens by preferenceValue { it.rawDcpIdsByLens }
     val rawHncsFilmCurveMode by preferenceValue { it.rawHncsFilmCurveMode }
     val rawColorEngine by preferenceValue { it.rawRenderingEngine }
+    val rawExposureCompensation by preferenceValue { it.rawExposureCompensation }
     val rawToneMappingParameters by preferenceValue { it.rawToneMappingParameters }
     val rawSpectralFilmStock by preferenceValue { it.rawSpectralFilmStock }
     val rawSpectralFilmSelection by viewModel.rawSpectralFilmSelection.collectAsState()
@@ -1981,6 +1982,7 @@ fun CameraScreen(
             availableDcps = viewModel.availableDcps,
             rawHncsFilmCurveMode = rawHncsFilmCurveMode,
             rawRenderingEngine = rawColorEngine,
+            rawExposureCompensation = rawExposureCompensation,
             rawToneMappingParameters = rawToneMappingParameters,
             rawSpectralFilmSelection = rawSpectralFilmSelection ?: SpectralFilmSelection(rawSpectralFilmStock ?: "kodak_portra_400"),
             rawSpectralFilmPrint = rawSpectralFilmPrint ?: "kodak_portra_endura",

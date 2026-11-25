@@ -688,6 +688,12 @@
     <string name="apply_lut_permission_title">ファイルアクセスが必要です</string>
     <string name="apply_lut_permission_message">共有画像からLUTを適用するにはファイル管理権限が必要です。先にこのアプリへ権限を付与してください。</string>
     <string name="export_lut_cube">LUTを書き出し</string>
+    <string name="film_lut_generate">写真フィルターとして保存</string>
+    <string name="film_lut_generate_description">現在の %1$s の色と階調を写真フィルターとして保存します。粒状感、ハレーション、拡散などの空間効果は省略されます。</string>
+    <string name="film_lut_generate_action_description">現在のフィルムの色をフィルターライブラリに追加</string>
+    <string name="film_lut_generate_progress">フィルターを作成中…</string>
+    <string name="film_lut_generate_success">フィルターをライブラリに追加しました</string>
+    <string name="film_lut_generate_failed">フィルターを作成できませんでした</string>
     <string name="export_lut_title">フィルタープリセットを書き出し</string>
     <string name="export_mode_raw_cube">元の .cube を書き出し</string>
     <string name="export_mode_plut">ロスレス .plut を書き出し</string>
@@ -1169,6 +1175,7 @@
     <string name="settings_raw_leica_color_matrix_m9">M9</string>
     <string name="camera_focus_point_label">フォーカス</string>
     <string name="camera_metering_point_label">測光点</string>
+    <string name="spektrafilm_section_film">フィルム露光と現像</string>
     <!-- Fotufilm controls -->
     <string name="fotufilm_section_filmStock">フィルム</string>
     <string name="fotufilm_section_filmGrain">粒状</string>

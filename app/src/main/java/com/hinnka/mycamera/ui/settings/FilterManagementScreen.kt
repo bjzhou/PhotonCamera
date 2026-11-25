@@ -44,8 +44,6 @@ import com.hinnka.mycamera.ui.theme.PremiumGold
 import com.hinnka.mycamera.ui.theme.AccentColor
 import com.hinnka.mycamera.ui.theme.OnAccentColor
 import com.hinnka.mycamera.R
-import com.hinnka.mycamera.video.VideoLogProfile
-import com.hinnka.mycamera.color.TransferCurve
 import com.hinnka.mycamera.data.CustomImportManager
 import com.hinnka.mycamera.data.ZipCubeImportManager
 import com.hinnka.mycamera.lut.DIGITAL_LUT_CATEGORY
@@ -53,8 +51,9 @@ import com.hinnka.mycamera.lut.LutInfo
 import com.hinnka.mycamera.lut.builtInLutCategories
 import com.hinnka.mycamera.lut.inLutCategory
 import com.hinnka.mycamera.lut.orderedLutCategoryTitles
+import com.hinnka.mycamera.ui.components.FileLutImportDialog
 import com.hinnka.mycamera.ui.components.lutCategoryTitle
-import com.hinnka.mycamera.raw.ColorSpace
+import com.hinnka.mycamera.ui.components.sanitizeCustomLutCategoryInput
 import com.hinnka.mycamera.ui.camera.autoRotate
 import com.hinnka.mycamera.ui.camera.LutEditBottomSheet
 import com.hinnka.mycamera.utils.PLog
@@ -72,16 +71,6 @@ private data class CategoryManagementItem(
     val name: String,
     val isFixed: Boolean
 )
-
-private fun sanitizeCustomLutCategoryInput(
-    category: String,
-    reservedCategoryNames: Set<String>,
-    categoryTitles: Map<String, String>,
-): String {
-    val trimmedCategory = category.trim()
-    if (trimmedCategory in reservedCategoryNames) return ""
-    return categoryTitles.entries.firstOrNull { it.value == trimmedCategory }?.key ?: trimmedCategory
-}
 
 private fun sanitizeCategoryOrder(
     order: List<String>,
@@ -200,7 +189,7 @@ fun FilterManagementScreen(
     var showCategoryDialog by remember { mutableStateOf(false) }
     var categorizingIds by remember { mutableStateOf<List<String>>(emptyList()) }
     var categoryText by remember { mutableStateOf("") }
-    var showImportCategoryDialog by remember { mutableStateOf(false) }
+    var importInitialCategory by remember { mutableStateOf("") }
     var pendingImportUris by remember { mutableStateOf<List<Uri>>(emptyList()) }
     var pendingZipUris by remember { mutableStateOf<Set<Uri>>(emptySet()) }
 
@@ -208,8 +197,7 @@ fun FilterManagementScreen(
         if (pendingLutImportUris.isNotEmpty()) {
             pendingImportUris = pendingLutImportUris
             pendingZipUris = pendingLutImportUris.filter { isZipImportUri(context, it) }.toSet()
-            categoryText = ""
-            showImportCategoryDialog = true
+            importInitialCategory = ""
             onLutImportHandled()
         }
     }
@@ -279,9 +267,8 @@ fun FilterManagementScreen(
         if (uris.isNotEmpty()) {
             pendingImportUris = uris
             pendingZipUris = uris.filter { isZipImportUri(context, it) }.toSet()
-            categoryText = if (currentCategory in reservedCategoryNames) "" else
+            importInitialCategory = if (currentCategory in reservedCategoryNames) "" else
                 categoryTitles[currentCategory] ?: currentCategory
-            showImportCategoryDialog = true
         }
     }
 
@@ -1136,241 +1123,76 @@ fun FilterManagementScreen(
         }
 
         // 导入时分类选择对话框
-        if (showImportCategoryDialog && pendingImportUris.isNotEmpty()) {
-            var selectedLogProfile by remember { mutableStateOf(VideoLogProfile.APPLE_LOG2) }
-            var selectedLutType by remember { mutableIntStateOf(0) } // 0: Photo, 1: Video
-            val selectedCurve = if (selectedLutType == 1) selectedLogProfile.logCurve else TransferCurve.SRGB
-            val selectedColorSpace = if (selectedLutType == 1) selectedLogProfile.colorSpace else ColorSpace.SRGB
-            AlertDialog(
-                onDismissRequest = {
-                    //showImportCategoryDialog = false
-                    //pendingImportUris = emptyList()
+        if (pendingImportUris.isNotEmpty()) {
+            FileLutImportDialog(
+                initialCategory = importInitialCategory,
+                managedCategories = managedCategories,
+                categoryTitles = categoryTitles,
+                reservedCategoryNames = reservedCategoryNames,
+                onDismiss = {
+                    pendingImportUris = emptyList()
+                    pendingZipUris = emptySet()
                 },
-                title = { Text(stringResource(R.string.import_to_category)) },
-                text = {
-                    Column(modifier = Modifier.verticalScroll(rememberScrollState())) {
-                        SingleChoiceSegmentedButtonRow(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(vertical = 8.dp)
-                        ) {
-                            SegmentedButton(
-                                selected = selectedLutType == 0,
-                                onClick = { selectedLutType = 0 },
-                                shape = SegmentedButtonDefaults.itemShape(index = 0, count = 2),
-                                colors = SegmentedButtonDefaults.colors(
-                                    activeContainerColor = AccentColor,
-                                    activeContentColor = OnAccentColor,
-                                    inactiveContainerColor = Color.Transparent,
-                                    inactiveContentColor = Color.White.copy(alpha = 0.5f),
-                                    activeBorderColor = AccentColor,
-                                    inactiveBorderColor = Color.White.copy(alpha = 0.2f)
-                                )
-                            ) {
-                                Text(stringResource(R.string.photo_lut), fontSize = 13.sp)
-                            }
-                            SegmentedButton(
-                                selected = selectedLutType == 1,
-                                onClick = { selectedLutType = 1 },
-                                shape = SegmentedButtonDefaults.itemShape(index = 1, count = 2),
-                                colors = SegmentedButtonDefaults.colors(
-                                    activeContainerColor = AccentColor,
-                                    activeContentColor = OnAccentColor,
-                                    inactiveContainerColor = Color.Transparent,
-                                    inactiveContentColor = Color.White.copy(alpha = 0.5f),
-                                    activeBorderColor = AccentColor,
-                                    inactiveBorderColor = Color.White.copy(alpha = 0.2f)
-                                )
-                            ) {
-                                Text(stringResource(R.string.video_lut), fontSize = 13.sp)
-                            }
-                        }
+                onConfirm = { targetCategory, colorSpace, curveToUse ->
+                    val urisToImport = pendingImportUris
+                    val zipUrisToImport = pendingZipUris
+                    pendingImportUris = emptyList()
+                    pendingZipUris = emptySet()
 
-                        if (selectedLutType == 1) {
-                            var expanded by remember { mutableStateOf(false) }
-                            Spacer(modifier = Modifier.height(12.dp))
+                    isImporting = true
+                    importProgress = Pair(0, urisToImport.size)
+                    scope.launch {
+                        var successCount = 0
+                        var failCount = 0
+                        val zipCubeImportManager = ZipCubeImportManager(context.applicationContext)
 
-                            ExposedDropdownMenuBox(
-                                expanded = expanded,
-                                onExpandedChange = { expanded = !expanded },
-                                modifier = Modifier.fillMaxWidth()
-                            ) {
-                                OutlinedTextField(
-                                    value = selectedLogProfile.displayName,
-                                    onValueChange = {},
-                                    readOnly = true,
-                                    label = { Text(stringResource(R.string.video_log_format)) },
-                                    trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = expanded) },
-                                    colors = ExposedDropdownMenuDefaults.outlinedTextFieldColors(
-                                        focusedBorderColor = AccentColor,
-                                        focusedLabelColor = AccentColor,
-                                        unfocusedLabelColor = Color.White.copy(alpha = 0.5f)
-                                    ),
-                                    modifier = Modifier.fillMaxWidth().menuAnchor()
-                                )
-                                ExposedDropdownMenu(
-                                    expanded = expanded,
-                                    onDismissRequest = { expanded = false },
-                                    modifier = Modifier.background(Color(0xFF2C2C2C))
-                                ) {
-                                    VideoLogProfile.entries.filter { it.isEnabled }.forEach { profile ->
-                                        DropdownMenuItem(
-                                            text = { Text(profile.displayName) },
-                                            onClick = {
-                                                selectedLogProfile = profile
-                                                expanded = false
-                                            },
-                                            colors = MenuDefaults.itemColors(
-                                                textColor = if (selectedLogProfile == profile) AccentColor else Color.White
-                                            )
-                                        )
-                                    }
-                                }
-                            }
-
-                            Spacer(modifier = Modifier.height(12.dp))
-                            OutlinedTextField(
-                                value = selectedColorSpace.name,
-                                onValueChange = {},
-                                readOnly = true,
-                                label = { Text(stringResource(R.string.color_space)) },
-                                supportingText = { Text(stringResource(R.string.video_log_color_space_auto)) },
-                                modifier = Modifier.fillMaxWidth()
-                            )
-                            Spacer(modifier = Modifier.height(16.dp))
-                        }
-
-                        OutlinedTextField(
-                            value = categoryText,
-                            onValueChange = { categoryText = it },
-                            label = { Text(stringResource(R.string.category)) },
-                            singleLine = true,
-                            modifier = Modifier.fillMaxWidth(),
-                            trailingIcon = if (categoryText.isNotEmpty()) {
-                                {
-                                    IconButton(onClick = { categoryText = "" }) {
-                                        Icon(
-                                            imageVector = Icons.Default.Clear,
-                                            contentDescription = "Clear",
-                                            tint = Color.White.copy(alpha = 0.5f)
-                                        )
-                                    }
-                                }
-                            } else null
-                        )
-
-                        Spacer(modifier = Modifier.height(8.dp))
-
-                        // 常用分类快速选择
-                        if (managedCategories.isNotEmpty()) {
-                            Text(
-                                text = stringResource(R.string.common_categories),
-                                fontSize = 12.sp,
-                                color = Color.White.copy(alpha = 0.5f),
-                                modifier = Modifier.padding(vertical = 4.dp)
-                            )
-                            FlowRow(
-                                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                                verticalArrangement = Arrangement.spacedBy(4.dp)
-                            ) {
-                                managedCategories.forEach { cat ->
-                                    val title = categoryTitles[cat] ?: cat
-                                    InputChip(
-                                        selected = categoryText == title,
-                                        onClick = { categoryText = title },
-                                        label = { Text(title) }
+                        urisToImport.forEachIndexed { index, uri ->
+                            importProgress = Pair(index + 1, urisToImport.size)
+                            if (uri in zipUrisToImport || isZipImportUri(context, uri)) {
+                                val result = withContext(Dispatchers.IO) {
+                                    zipCubeImportManager.importCubeFilesFromZip(
+                                        uri = uri,
+                                        category = targetCategory,
+                                        colorSpace = colorSpace,
+                                        curve = curveToUse
                                     )
                                 }
-                            }
-                        }
-
-                        Spacer(modifier = Modifier.height(12.dp))
-
-                    }
-                },
-                confirmButton = {
-                    TextButton(
-                        onClick = {
-                            val targetCategory = sanitizeCustomLutCategoryInput(
-                                category = categoryText,
-                                reservedCategoryNames = reservedCategoryNames,
-                                categoryTitles = categoryTitles,
-                            )
-                            val urisToImport = pendingImportUris
-                            val curveToUse = selectedCurve
-                            val colorSpace = selectedColorSpace
-                            val zipUrisToImport = pendingZipUris
-                            showImportCategoryDialog = false
-                            pendingImportUris = emptyList()
-                            pendingZipUris = emptySet()
-
-                            isImporting = true
-                            importProgress = Pair(0, urisToImport.size)
-                            scope.launch {
-                                var successCount = 0
-                                var failCount = 0
-                                val zipCubeImportManager = ZipCubeImportManager(context.applicationContext)
-
-                                urisToImport.forEachIndexed { index, uri ->
-                                    importProgress = Pair(index + 1, urisToImport.size)
-                                    if (uri in zipUrisToImport || isZipImportUri(context, uri)) {
-                                        val result = withContext(Dispatchers.IO) {
-                                            zipCubeImportManager.importCubeFilesFromZip(
-                                                uri = uri,
-                                                category = targetCategory,
-                                                colorSpace = colorSpace,
-                                                curve = curveToUse
-                                            )
-                                        }
-                                        successCount += result.successCount
-                                        failCount += result.failCount
-                                    } else {
-                                        val lutId = withContext(Dispatchers.IO) {
-                                            customImportManager.importLut(
-                                                uri,
-                                                category = targetCategory,
-                                                colorSpace = colorSpace,
-                                                curve = curveToUse
-                                            )
-                                        }
-                                        if (lutId != null) {
-                                            successCount++
-                                            // 若为 .plut v4 文件，提取嵌入的色彩配方并保存
-                                            viewModel.extractAndSaveColorRecipeFromPlut(lutId, uri)
-                                        } else {
-                                            failCount++
-                                        }
-                                    }
+                                successCount += result.successCount
+                                failCount += result.failCount
+                            } else {
+                                val lutId = withContext(Dispatchers.IO) {
+                                    customImportManager.importLut(
+                                        uri,
+                                        category = targetCategory,
+                                        colorSpace = colorSpace,
+                                        curve = curveToUse
+                                    )
                                 }
-
-                                viewModel.refreshCustomContent()
-                                isImporting = false
-                                importProgress = null
-
-                                importResult = when {
-                                    failCount == 0 && successCount == 1 -> null
-                                    failCount == 0 -> context.getString(R.string.import_success, successCount)
-                                    successCount == 0 -> context.getString(R.string.import_failed, failCount)
-                                    else -> context.getString(
-                                        R.string.import_success,
-                                        successCount
-                                    ) + ", " + context.getString(R.string.import_failed, failCount)
+                                if (lutId != null) {
+                                    successCount++
+                                    // 若为 .plut v4 文件，提取嵌入的色彩配方并保存
+                                    viewModel.extractAndSaveColorRecipeFromPlut(lutId, uri)
+                                } else {
+                                    failCount++
                                 }
                             }
                         }
-                    ) {
-                        Text(stringResource(R.string.confirm))
+
+                        viewModel.refreshCustomContent()
+                        isImporting = false
+                        importProgress = null
+
+                        importResult = when {
+                            failCount == 0 && successCount == 1 -> null
+                            failCount == 0 -> context.getString(R.string.import_success, successCount)
+                            successCount == 0 -> context.getString(R.string.import_failed, failCount)
+                            else -> context.getString(
+                                R.string.import_success,
+                                successCount
+                            ) + ", " + context.getString(R.string.import_failed, failCount)
+                        }
                     }
                 },
-                dismissButton = {
-                    TextButton(onClick = {
-                        showImportCategoryDialog = false
-                        pendingImportUris = emptyList()
-                        pendingZipUris = emptySet()
-                    }) {
-                        Text(stringResource(R.string.cancel))
-                    }
-                }
             )
         }
 

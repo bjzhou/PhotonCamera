@@ -168,9 +168,10 @@ import com.hinnka.mycamera.ui.camera.labelRes
 import com.hinnka.mycamera.ui.components.LogViewerDialog
 import com.hinnka.mycamera.ui.components.PaymentDialog
 import com.hinnka.mycamera.ui.components.DepthModelDownloadDialog
+import com.hinnka.mycamera.ui.components.RawBaselineColorCorrectionSelector
+import com.hinnka.mycamera.ui.components.RawLightAdjustmentSliders
+import com.hinnka.mycamera.ui.components.RawRenderingEngineSettingsPanel
 import com.hinnka.mycamera.ui.components.SliderSettingItem
-import com.hinnka.mycamera.ui.components.RawEditPanel
-import com.hinnka.mycamera.ui.components.RawEditPanelContentMode
 import com.hinnka.mycamera.ui.components.RawNoiseProfileSelector
 import com.hinnka.mycamera.ui.components.RawDngMetadataCorrectionSettings
 import com.hinnka.mycamera.ui.components.rawDcpLensOptions
@@ -2389,64 +2390,80 @@ fun SettingsScreen(
 
                     Spacer(modifier = Modifier.height(24.dp))
 
+                    SettingsSection(title = stringResource(R.string.recipe_tab_light)) {
+                        RawLightAdjustmentSliders(
+                            rawExposureCompensation = rawExposureCompensationUi,
+                            rawHighlightsAdjustment = rawHighlightsAdjustmentUi,
+                            rawShadowsAdjustment = rawShadowsAdjustmentUi,
+                            rawBlackPointCorrection = rawBlackPointCorrectionUi,
+                            rawWhitePointCorrection = rawWhitePointCorrectionUi,
+                            onRawExposureCompensationChange = { rawExposureCompensationUi = it },
+                            onRawHighlightsAdjustmentChange = { rawHighlightsAdjustmentUi = it },
+                            onRawShadowsAdjustmentChange = { rawShadowsAdjustmentUi = it },
+                            onRawBlackPointCorrectionChange = { rawBlackPointCorrectionUi = it },
+                            onRawWhitePointCorrectionChange = { rawWhitePointCorrectionUi = it },
+                            onAdjustmentStart = { isRawSliderAdjusting = true },
+                            onAdjustmentEnd = ::commitRawSliderValues,
+                        )
+                    }
+
+                    Spacer(modifier = Modifier.height(24.dp))
+
                     SettingsSection(
                         title = stringResource(R.string.settings_raw_group_development)
                     ) {
-                        RawEditPanel(
-                        selectedDcpId = rawDcpId,
-                        rawDcpIdsByLens = rawDcpIdsByLens,
-                        dcpLensOptions = rawDcpLensOptions(state.availableCameras),
-                        availableDcps = availableDcps,
-                        selectedBaselineLutId = rawBaselineLutId,
-                        onSelectBaselineLut = viewModel::setRawBaselineLutId,
-                        onEditBaselineRecipe = { showRawBaselineRecipeEditor = true },
-                        availableLuts = availableLuts,
-                        thumbnail = previewThumbnail,
-                        rawExposureCompensation = rawExposureCompensationUi,
-                        rawHighlightsAdjustment = rawHighlightsAdjustmentUi,
-                        rawShadowsAdjustment = rawShadowsAdjustmentUi,
-                        rawBlackPointCorrection = rawBlackPointCorrectionUi,
-                        rawWhitePointCorrection = rawWhitePointCorrectionUi,
-                        rawRenderingEngine = rawColorEngine,
-                        rawToneMappingParameters = rawToneMappingParametersUi,
-                        spectralFilmSelection = rawSpectralFilmSelection ?: SpectralFilmSelection(rawSpectralFilmStock ?: "kodak_portra_400"),
-                        spectralFilmPrint = rawSpectralFilmPrint ?: "kodak_portra_endura",
-                        onSelectDcp = { viewModel.setRawDcpId(it) },
-                        onRawDcpIdsByLensChange = { viewModel.setRawDcpIdsByLens(it) },
-                        onImportDcp = { importDcpLauncher.launch(arrayOf("*/*")) },
-                        onDeleteDcp = { dcp ->
-                            viewModel.deleteRawDcp(dcp.id) { success ->
-                                android.widget.Toast.makeText(
-                                    context,
-                                    if (success) R.string.raw_dcp_delete_success else R.string.raw_dcp_delete_failed,
-                                    android.widget.Toast.LENGTH_SHORT
-                                ).show()
-                            }
-                        },
-                        onRawExposureCompensationChange = {
-                            rawExposureCompensationUi = it
-                        },
-                        onRawHighlightsAdjustmentChange = {
-                            rawHighlightsAdjustmentUi = it
-                        },
-                        onRawShadowsAdjustmentChange = {
-                            rawShadowsAdjustmentUi = it
-                        },
-                        onRawBlackPointCorrectionChange = { rawBlackPointCorrectionUi = it },
-                        onRawWhitePointCorrectionChange = { rawWhitePointCorrectionUi = it },
-                        onRawColorEngineChange = { viewModel.setRawColorEngine(it) },
-                        onRawToneMappingParametersChange = { rawToneMappingParametersUi = it },
-                        onSpectralFilmSelectionChange = { viewModel.setRawSpectralFilmSelection(it) },
-                        onSpectralFilmPrintChange = { viewModel.setRawSpectralFilmPrint(it) },
-                        fotufilmDocument = rawFotufilmDocument,
-                        onFotufilmDocumentChange = { viewModel.setRawFotufilmDocument(it) },
-                        onAdjustmentStart = { isRawSliderAdjusting = true },
-                        onAdjustmentEnd = { commitRawSliderValues() },
-                        hncsFilmCurveMode = rawHncsFilmCurveMode,
-                        onHncsFilmCurveModeChange = viewModel::setRawHncsFilmCurveMode,
-                            contentMode = RawEditPanelContentMode.FULL
+                        RawRenderingEngineSettingsPanel(
+                            selectedDcpId = rawDcpId,
+                            rawDcpIdsByLens = rawDcpIdsByLens,
+                            dcpLensOptions = rawDcpLensOptions(state.availableCameras),
+                            availableDcps = availableDcps,
+                            rawRenderingEngine = rawColorEngine,
+                            rawExposureCompensation = rawExposureCompensationUi,
+                            rawToneMappingParameters = rawToneMappingParametersUi,
+                            spectralFilmSelection = rawSpectralFilmSelection
+                                ?: SpectralFilmSelection(rawSpectralFilmStock ?: "kodak_portra_400"),
+                            spectralFilmPrint = rawSpectralFilmPrint ?: "kodak_portra_endura",
+                            onSelectDcp = { viewModel.setRawDcpId(it) },
+                            onRawDcpIdsByLensChange = { viewModel.setRawDcpIdsByLens(it) },
+                            onImportDcp = { importDcpLauncher.launch(arrayOf("*/*")) },
+                            onDeleteDcp = { dcp ->
+                                viewModel.deleteRawDcp(dcp.id) { success ->
+                                    android.widget.Toast.makeText(
+                                        context,
+                                        if (success) R.string.raw_dcp_delete_success else R.string.raw_dcp_delete_failed,
+                                        android.widget.Toast.LENGTH_SHORT
+                                    ).show()
+                                }
+                            },
+                            onRawColorEngineChange = { viewModel.setRawColorEngine(it) },
+                            onRawToneMappingParametersChange = { rawToneMappingParametersUi = it },
+                            onSpectralFilmSelectionChange = { viewModel.setRawSpectralFilmSelection(it) },
+                            onSpectralFilmPrintChange = { viewModel.setRawSpectralFilmPrint(it) },
+                            fotufilmDocument = rawFotufilmDocument,
+                            onFotufilmDocumentChange = { viewModel.setRawFotufilmDocument(it) },
+                            onAdjustmentStart = { isRawSliderAdjusting = true },
+                            onAdjustmentEnd = ::commitRawSliderValues,
+                            hncsFilmCurveMode = rawHncsFilmCurveMode,
+                            onHncsFilmCurveModeChange = viewModel::setRawHncsFilmCurveMode,
                         )
                     }
+
+                    Spacer(modifier = Modifier.height(24.dp))
+
+                    SettingsSection(
+                        title = stringResource(R.string.settings_baseline_raw_title),
+                        showTitle = false,
+                    ) {
+                        RawBaselineColorCorrectionSelector(
+                            selectedLutId = rawBaselineLutId,
+                            availableLuts = availableLuts,
+                            thumbnail = previewThumbnail,
+                            onSelectLut = viewModel::setRawBaselineLutId,
+                            onEditRecipe = { showRawBaselineRecipeEditor = true },
+                        )
+                    }
+
+                    Spacer(modifier = Modifier.height(24.dp))
 
                     SettingsSection(
                         title = stringResource(R.string.settings_raw_group_capture_output)

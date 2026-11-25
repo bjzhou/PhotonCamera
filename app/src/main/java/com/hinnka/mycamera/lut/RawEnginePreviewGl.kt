@@ -2,6 +2,7 @@ package com.hinnka.mycamera.lut
 
 import android.opengl.GLES30
 import android.os.SystemClock
+import com.hinnka.mycamera.lut.creator.OklchConverter
 import com.hinnka.mycamera.raw.DcpTextureResources
 import com.hinnka.mycamera.raw.RawCurveTextureResources
 import com.hinnka.mycamera.raw.RawEnginePreviewPlan
@@ -10,6 +11,7 @@ import com.hinnka.mycamera.raw.RawFullscreenQuad
 import com.hinnka.mycamera.raw.RawRenderingEngine
 import com.hinnka.mycamera.raw.RawToneMappingGl
 import com.hinnka.mycamera.utils.PLog
+import java.nio.ByteBuffer
 
 /**
  * Bakes the pointwise ISP sRGB -> engine -> linear sRGB mapping when its plan changes.
@@ -100,6 +102,44 @@ internal class RawEnginePreviewGl {
         GLES30.glUniform1i(location, 5)
     }
 
+    /** Reads the preview's grid nodes as display sRGB in .cube order (red changing fastest). */
+    fun readSrgbCube(pixels: ByteBuffer): FloatArray {
+        check(lastPlan != null && framebuffer != 0) { "Preview engine atlas is not ready" }
+        GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, framebuffer)
+        try {
+            GLES30.glBindBuffer(GLES30.GL_PIXEL_PACK_BUFFER, 0)
+            GLES30.glPixelStorei(GLES30.GL_PACK_ALIGNMENT, 4)
+            GLES30.glPixelStorei(GLES30.GL_PACK_ROW_LENGTH, 0)
+            GLES30.glPixelStorei(GLES30.GL_PACK_SKIP_PIXELS, 0)
+            GLES30.glPixelStorei(GLES30.GL_PACK_SKIP_ROWS, 0)
+            GLES30.glReadPixels(0, 0, ATLAS_WIDTH, ATLAS_HEIGHT, GLES30.GL_RGBA, GLES30.GL_FLOAT, pixels)
+            val error = GLES30.glGetError()
+            check(error == GLES30.GL_NO_ERROR) { "Preview engine atlas readback failed: GL=$error" }
+        } finally {
+            GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, 0)
+        }
+
+        val atlas = pixels.asFloatBuffer()
+        val cube = FloatArray(GRID_SIZE * GRID_SIZE * GRID_SIZE * 3)
+        var index = 0
+        for (blue in 0 until GRID_SIZE) {
+            val tileX = (blue % TILES_PER_ROW) * GRID_SIZE
+            val tileY = (blue / TILES_PER_ROW) * GRID_SIZE
+            for (green in 0 until GRID_SIZE) {
+                var offset = ((tileY + green) * ATLAS_WIDTH + tileX) * 4
+                for (red in 0 until GRID_SIZE) {
+                    for (channel in 0..2) {
+                        val linear = atlas.get(offset + channel)
+                        check(linear.isFinite()) { "Invalid preview engine LUT sample at $red, $green, $blue" }
+                        cube[index++] = OklchConverter.linearToSrgb(linear.coerceIn(0f, 1f))
+                    }
+                    offset += 4
+                }
+            }
+        }
+        return cube
+    }
+
     // CPU submission only: GL calls are asynchronous, so this is not GPU duration.
     private fun logWork(plan: RawEnginePreviewPlan) {
         val now = SystemClock.elapsedRealtimeNanos()
@@ -187,6 +227,7 @@ internal class RawEnginePreviewGl {
         private const val TILES_PER_ROW = 9
         private const val ATLAS_WIDTH = GRID_SIZE * TILES_PER_ROW
         private const val ATLAS_HEIGHT = GRID_SIZE * ((GRID_SIZE + TILES_PER_ROW - 1) / TILES_PER_ROW)
+        const val ATLAS_READBACK_BYTES = ATLAS_WIDTH * ATLAS_HEIGHT * 4 * Float.SIZE_BYTES
 
         val SAMPLING_GLSL = """
             uniform highp sampler2D uEnginePreviewLut;

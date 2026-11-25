@@ -182,6 +182,7 @@ fun RawEditPanel(
             dcpLensOptions = dcpLensOptions,
             availableDcps = availableDcps,
             rawRenderingEngine = rawRenderingEngine,
+            rawExposureCompensation = rawExposureCompensation,
             rawToneMappingParameters = rawToneMappingParameters,
             spectralFilmSelection = spectralFilmSelection,
             spectralFilmPrint = spectralFilmPrint,
@@ -229,61 +230,20 @@ fun RawEditPanel(
                 }
             }
             if (!compactLayout || lightAdjustmentsExpanded) {
-                SliderSettingItem(
-                    title = stringResource(R.string.settings_raw_exposure_compensation),
-                    value = rawExposureCompensation,
-                    valueRange = MeteringSystem.RAW_EXPOSURE_MIN_EV..MeteringSystem.RAW_EXPOSURE_MAX_EV,
-                    resetValue = 0f,
-                    onResetValue = onRawExposureCompensationReset,
-                    onValueChange = {
-                        onAdjustmentStart()
-                        onRawExposureCompensationChange(it)
-                    },
-                    onValueChangeFinished = onAdjustmentEnd
-                )
-                SliderSettingItem(
-                    title = stringResource(R.string.settings_raw_highlights_adjustment),
-                    value = rawHighlightsAdjustment,
-                    valueRange = -1f..1f,
-                    resetValue = 0f,
-                    onValueChange = {
-                        onAdjustmentStart()
-                        onRawHighlightsAdjustmentChange(it)
-                    },
-                    onValueChangeFinished = onAdjustmentEnd
-                )
-                SliderSettingItem(
-                    title = stringResource(R.string.settings_raw_shadows_adjustment),
-                    value = rawShadowsAdjustment,
-                    valueRange = -1f..1f,
-                    resetValue = 0f,
-                    onValueChange = {
-                        onAdjustmentStart()
-                        onRawShadowsAdjustmentChange(it)
-                    },
-                    onValueChangeFinished = onAdjustmentEnd
-                )
-                SliderSettingItem(
-                    title = stringResource(R.string.settings_raw_blacks_adjustment),
-                    value = rawBlackPointCorrection,
-                    valueRange = -1f..1f,
-                    resetValue = 0f,
-                    onValueChange = {
-                        onAdjustmentStart()
-                        onRawBlackPointCorrectionChange(it)
-                    },
-                    onValueChangeFinished = onAdjustmentEnd
-                )
-                SliderSettingItem(
-                    title = stringResource(R.string.settings_raw_whites_adjustment),
-                    value = rawWhitePointCorrection,
-                    valueRange = -1f..1f,
-                    resetValue = 0f,
-                    onValueChange = {
-                        onAdjustmentStart()
-                        onRawWhitePointCorrectionChange(it)
-                    },
-                    onValueChangeFinished = onAdjustmentEnd
+                RawLightAdjustmentSliders(
+                    rawExposureCompensation = rawExposureCompensation,
+                    rawHighlightsAdjustment = rawHighlightsAdjustment,
+                    rawShadowsAdjustment = rawShadowsAdjustment,
+                    rawBlackPointCorrection = rawBlackPointCorrection,
+                    rawWhitePointCorrection = rawWhitePointCorrection,
+                    onRawExposureCompensationChange = onRawExposureCompensationChange,
+                    onRawHighlightsAdjustmentChange = onRawHighlightsAdjustmentChange,
+                    onRawShadowsAdjustmentChange = onRawShadowsAdjustmentChange,
+                    onRawBlackPointCorrectionChange = onRawBlackPointCorrectionChange,
+                    onRawWhitePointCorrectionChange = onRawWhitePointCorrectionChange,
+                    onAdjustmentStart = onAdjustmentStart,
+                    onAdjustmentEnd = onAdjustmentEnd,
+                    onRawExposureCompensationReset = onRawExposureCompensationReset,
                 )
             }
             if (showDngMetadataControls) {
@@ -316,12 +276,87 @@ fun RawEditPanel(
 }
 
 @Composable
+internal fun RawLightAdjustmentSliders(
+    rawExposureCompensation: Float,
+    rawHighlightsAdjustment: Float,
+    rawShadowsAdjustment: Float,
+    rawBlackPointCorrection: Float,
+    rawWhitePointCorrection: Float,
+    onRawExposureCompensationChange: (Float) -> Unit,
+    onRawHighlightsAdjustmentChange: (Float) -> Unit,
+    onRawShadowsAdjustmentChange: (Float) -> Unit,
+    onRawBlackPointCorrectionChange: (Float) -> Unit,
+    onRawWhitePointCorrectionChange: (Float) -> Unit,
+    onAdjustmentStart: () -> Unit,
+    onAdjustmentEnd: () -> Unit,
+    onRawExposureCompensationReset: ((Float) -> Unit)? = null,
+) {
+    SliderSettingItem(
+        title = stringResource(R.string.settings_raw_exposure_compensation),
+        value = rawExposureCompensation,
+        valueRange = MeteringSystem.RAW_EXPOSURE_MIN_EV..MeteringSystem.RAW_EXPOSURE_MAX_EV,
+        resetValue = 0f,
+        onResetValue = onRawExposureCompensationReset,
+        onValueChange = {
+            onAdjustmentStart()
+            onRawExposureCompensationChange(it)
+        },
+        onValueChangeFinished = onAdjustmentEnd,
+    )
+    SliderSettingItem(
+        title = stringResource(R.string.settings_raw_highlights_adjustment),
+        value = rawHighlightsAdjustment,
+        valueRange = -1f..1f,
+        resetValue = 0f,
+        onValueChange = {
+            onAdjustmentStart()
+            onRawHighlightsAdjustmentChange(it)
+        },
+        onValueChangeFinished = onAdjustmentEnd,
+    )
+    SliderSettingItem(
+        title = stringResource(R.string.settings_raw_shadows_adjustment),
+        value = rawShadowsAdjustment,
+        valueRange = -1f..1f,
+        resetValue = 0f,
+        onValueChange = {
+            onAdjustmentStart()
+            onRawShadowsAdjustmentChange(it)
+        },
+        onValueChangeFinished = onAdjustmentEnd,
+    )
+    SliderSettingItem(
+        title = stringResource(R.string.settings_raw_blacks_adjustment),
+        value = rawBlackPointCorrection,
+        valueRange = -1f..1f,
+        resetValue = 0f,
+        onValueChange = {
+            onAdjustmentStart()
+            onRawBlackPointCorrectionChange(it)
+        },
+        onValueChangeFinished = onAdjustmentEnd,
+    )
+    SliderSettingItem(
+        title = stringResource(R.string.settings_raw_whites_adjustment),
+        value = rawWhitePointCorrection,
+        valueRange = -1f..1f,
+        resetValue = 0f,
+        onValueChange = {
+            onAdjustmentStart()
+            onRawWhitePointCorrectionChange(it)
+        },
+        onValueChangeFinished = onAdjustmentEnd,
+    )
+}
+
+@Composable
 fun RawRenderingEngineSettingsPanel(
     selectedDcpId: String?,
     rawDcpIdsByLens: Map<String, String?> = emptyMap(),
     dcpLensOptions: List<RawDcpLensOption> = emptyList(),
     availableDcps: List<DcpInfo>,
     rawRenderingEngine: RawRenderingEngine,
+    rawExposureCompensation: Float,
     rawToneMappingParameters: RawToneMappingParameters,
     spectralFilmSelection: SpectralFilmSelection?,
     spectralFilmPrint: String?,
@@ -346,6 +381,14 @@ fun RawRenderingEngineSettingsPanel(
     showToneMappingControls: Boolean = true,
     modifier: Modifier = Modifier,
 ) {
+    val filmLutSettings = filmLutGenerationSettings(
+        engine = rawRenderingEngine,
+        exposureEv = rawExposureCompensation,
+        tone = rawToneMappingParameters,
+        spectralFilmSelection = spectralFilmSelection,
+        spectralFilmPrint = spectralFilmPrint,
+        fotufilmDocument = fotufilmDocument,
+    )
     Column(modifier = modifier.fillMaxWidth()) {
         RawRenderingEngineSelector(
             selectedEngine = rawRenderingEngine,
@@ -549,6 +592,11 @@ fun RawRenderingEngineSettingsPanel(
                 onAdjustmentStart = onAdjustmentStart,
                 onAdjustmentEnd = onAdjustmentEnd,
             )
+        }
+
+        if (filmLutSettings != null) {
+            FilmLutSaveAction(filmLutSettings, rawRenderingEngineName(rawRenderingEngine))
+            Spacer(modifier = Modifier.height(16.dp))
         }
     }
 }

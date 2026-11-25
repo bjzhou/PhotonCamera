@@ -27,6 +27,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -94,38 +95,55 @@ fun FotufilmControls(
         }
     }
 
-    Column(modifier = Modifier.fillMaxWidth()) {
-        val visible = current.controls.filter { control ->
-            control.available && control.kind !is FotufilmCatalogue.Kind.Other &&
-                (control.section in SHOWN_SECTIONS || control.field in SHOWN_LIGHT_FIELDS) &&
-                (control.foldsUnder == null || current.control(control.foldsUnder)?.moved == true)
-        }
-        visible.groupBy { sectionOf(it) }.forEach { (section, controls) ->
-            Text(
-                text = FotufilmStrings.section(section),
-                color = Color.White.copy(alpha = 0.5f),
-                fontSize = 12.sp,
-                fontWeight = FontWeight.Medium,
-                modifier = Modifier.padding(top = 12.dp, bottom = 4.dp),
+    val visible = current.controls.filter { control ->
+        control.available && control.kind !is FotufilmCatalogue.Kind.Other &&
+            (control.section in SHOWN_SECTIONS || control.field == CAMERA_PREFLASH_FIELD) &&
+            (control.foldsUnder == null || current.control(control.foldsUnder)?.moved == true)
+    }
+    val (primary, adjustments) = visible.partition { control ->
+        control.field == FotufilmDocument.STOCK_FIELD || control.field == OUTPUT_MEDIUM_FIELD
+    }
+    val bySection = adjustments.groupBy { it.section }
+    val filmControls = FILM_SECTION_ORDER.flatMap { bySection[it].orEmpty() }
+
+    val showControl: @Composable (FotufilmCatalogue.Control) -> Unit = { control ->
+        key(control.field) {
+            FotufilmControl(
+                control = control,
+                draggingValue = dragging[control.field],
+                onDrag = { value ->
+                    onAdjustmentStart()
+                    dragging[control.field] = value
+                },
+                onDragEnd = {
+                    val value = dragging.remove(control.field) ?: return@FotufilmControl
+                    commit(document.withNumber(control, value.toDouble()))
+                },
+                onValue = { value ->
+                    onAdjustmentStart()
+                    commit(document.withValue(control, value))
+                },
+                onStock = ::changeStock,
             )
-            controls.forEach { control ->
-                FotufilmControl(
-                    control = control,
-                    draggingValue = dragging[control.field],
-                    onDrag = { value ->
-                        onAdjustmentStart()
-                        dragging[control.field] = value
-                    },
-                    onDragEnd = {
-                        val value = dragging.remove(control.field) ?: return@FotufilmControl
-                        commit(document.withNumber(control, value.toDouble()))
-                    },
-                    onValue = { value ->
-                        onAdjustmentStart()
-                        commit(document.withValue(control, value))
-                    },
-                    onStock = ::changeStock,
-                )
+        }
+    }
+
+    Column(modifier = Modifier.fillMaxWidth()) {
+        primary.forEach { showControl(it) }
+        Spacer(modifier = Modifier.height(8.dp))
+        key(document.stockId) {
+            if (filmControls.isNotEmpty()) {
+                FilmAdjustmentSection(title = stringResource(R.string.spektrafilm_section_film)) {
+                    filmControls.forEach { showControl(it) }
+                }
+            }
+            ADJUSTMENT_SECTION_ORDER.forEach { section ->
+                val controls = bySection[section] ?: return@forEach
+                key(section) {
+                    FilmAdjustmentSection(title = FotufilmStrings.section(section)) {
+                        controls.forEach { showControl(it) }
+                    }
+                }
             }
         }
     }
@@ -432,14 +450,14 @@ private fun FotufilmCatalogue.accepts(field: String, value: FotufilmDocument.Val
 private fun matchesDevelopmentStop(stop: Double, value: Double): Boolean =
     if (stop == 0.0) value.toFloat() == 0f else abs(stop.toFloat() - value.toFloat()) <= 1e-4f
 
-private fun sectionOf(control: FotufilmCatalogue.Control): String =
-    if (control.field in SHOWN_LIGHT_FIELDS) LIGHT_SECTION else control.section
-
 private const val TAG = "FotufilmControls"
 private const val PUSH_FIELD = "push"
 private const val STOCK_MENU = "stocks"
-private const val LIGHT_SECTION = "lightExposure"
-private val SHOWN_SECTIONS = setOf(
-    "filmStock", "filmGrain", "filmHalation", "filmEmulsion", "filmLab", "printPaper", "printLamp",
+private const val OUTPUT_MEDIUM_FIELD = "paper"
+private const val CAMERA_PREFLASH_FIELD = "cameraPreflash"
+private const val LIGHT_EXPOSURE_SECTION = "lightExposure"
+private val FILM_SECTION_ORDER = listOf(LIGHT_EXPOSURE_SECTION, "filmLab", "filmStock")
+private val ADJUSTMENT_SECTION_ORDER = listOf(
+    "filmEmulsion", "printPaper", "printLamp", "filmHalation", "filmGrain",
 )
-private val SHOWN_LIGHT_FIELDS = setOf("cameraPreflash")
+private val SHOWN_SECTIONS = (FILM_SECTION_ORDER + ADJUSTMENT_SECTION_ORDER).toSet() - LIGHT_EXPOSURE_SECTION

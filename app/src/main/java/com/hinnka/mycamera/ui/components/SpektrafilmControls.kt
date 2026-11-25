@@ -48,7 +48,7 @@ internal fun SpektrafilmControls(
 
     Column(Modifier.fillMaxWidth()) {
         key(selection.id) {
-            SpektrafilmSection(R.string.spektrafilm_section_film) {
+            FilmAdjustmentSection(R.string.spektrafilm_section_film) {
                 filmSliders.forEach { slider(it) }
                 DyeOrderSetting(
                     title = R.string.spektrafilm_film_dye_order,
@@ -56,11 +56,7 @@ internal fun SpektrafilmControls(
                     onOrderChange = { commit(tuning.copy(filmDyeOrder = it)) },
                 )
             }
-            SpektrafilmDiffusionSection(R.string.spektrafilm_section_camera_diffusion, tuning.cameraDiffusion) {
-                commit(tuning.copy(cameraDiffusion = it))
-            }
-            SpektrafilmHalationSection(selection.id, tuning.halation) { commit(tuning.copy(halation = it)) }
-            SpektrafilmSection(R.string.spektrafilm_section_couplers) {
+            FilmAdjustmentSection(R.string.spektrafilm_section_couplers) {
                 SwitchSettingItem(
                     title = stringResource(R.string.spektrafilm_dir_enabled),
                     description = stringResource(R.string.spektrafilm_dir_description),
@@ -72,9 +68,8 @@ internal fun SpektrafilmControls(
                     SpektrafilmDirAdvancedControls(selection.id, tuning, ::commit)
                 }
             }
-            SpektrafilmGrainSection(tuning.grain) { commit(tuning.copy(grain = it)) }
             if (printsToPaper) {
-                SpektrafilmSection(R.string.spektrafilm_section_enlarger) {
+                FilmAdjustmentSection(R.string.spektrafilm_section_enlarger) {
                     SwitchSettingItem(
                         title = stringResource(R.string.spektrafilm_print_exposure_compensation),
                         description = stringResource(R.string.spektrafilm_print_exposure_compensation_description),
@@ -94,16 +89,13 @@ internal fun SpektrafilmControls(
                         onOrderChange = { commit(tuning.copy(printDyeOrder = it)) },
                     )
                 }
-                SpektrafilmDiffusionSection(R.string.spektrafilm_section_enlarger_diffusion, tuning.enlargerDiffusion) {
-                    commit(tuning.copy(enlargerDiffusion = it))
-                }
-                SpektrafilmSection(R.string.spektrafilm_section_preflash) {
+                FilmAdjustmentSection(R.string.spektrafilm_section_preflash) {
                     PreflashExposureSetting(tuning.preflashExposure) {
                         commit(tuning.copy(preflashExposure = it))
                     }
                     if (tuning.preflashExposure > 0f) preflashFilterSliders.forEach { slider(it) }
                 }
-                SpektrafilmSection(R.string.spektrafilm_section_chemistry) {
+                FilmAdjustmentSection(R.string.spektrafilm_section_chemistry) {
                     SwitchSettingItem(
                         title = stringResource(R.string.spektrafilm_print_chemistry_enabled),
                         description = stringResource(R.string.spektrafilm_print_chemistry_description),
@@ -112,12 +104,22 @@ internal fun SpektrafilmControls(
                     )
                     if (tuning.printChemistryEnabled) chemistrySliders.forEach { slider(it) }
                 }
-                SpektrafilmGlareSection(tuning.glare) { commit(tuning.copy(glare = it)) }
             }
-            SpektrafilmSection(R.string.spektrafilm_section_scanner) {
+            FilmAdjustmentSection(R.string.spektrafilm_section_scanner) {
+                if (positive || printsToPaper) SpektrafilmScannerLevels(tuning, ::commit)
                 scannerSliders.forEach { slider(it) }
                 if (tuning.scannerUnsharpAmount > 0f) slider(scannerUnsharpSigmaSlider)
-                if (positive || printsToPaper) SpektrafilmScannerLevels(tuning, ::commit)
+            }
+            SpektrafilmDiffusionSection(R.string.spektrafilm_section_camera_diffusion, tuning.cameraDiffusion) {
+                commit(tuning.copy(cameraDiffusion = it))
+            }
+            SpektrafilmHalationSection(selection.id, tuning.halation) { commit(tuning.copy(halation = it)) }
+            SpektrafilmGrainSection(tuning.grain) { commit(tuning.copy(grain = it)) }
+            if (printsToPaper) {
+                SpektrafilmDiffusionSection(R.string.spektrafilm_section_enlarger_diffusion, tuning.enlargerDiffusion) {
+                    commit(tuning.copy(enlargerDiffusion = it))
+                }
+                SpektrafilmGlareSection(tuning.glare) { commit(tuning.copy(glare = it)) }
             }
             SpektrafilmSpectralAndGamutControls(tuning, ::commit)
         }
@@ -209,6 +211,13 @@ private typealias SliderSpec = SpektrafilmNumberSpec<SpectralFilmTuning>
 
 private val filmSliders = listOf(
     SliderSpec(
+        R.string.spektrafilm_camera_exposure, -5f..5f, 0.25f,
+        SpectralFilmTuning::cameraExposureEv, R.string.spektrafilm_value_ev,
+    ) { copy(cameraExposureEv = it) },
+    SliderSpec(
+        R.string.spektrafilm_film_gamma, 0.1f..3f, 0.05f, SpectralFilmTuning::filmGamma,
+    ) { copy(filmGamma = it) },
+    SliderSpec(
         R.string.spektrafilm_film_format, 8f..120f, 1f,
         SpectralFilmTuning::filmFormatMm, R.string.spektrafilm_value_mm,
     ) { copy(filmFormatMm = it) },
@@ -216,13 +225,6 @@ private val filmSliders = listOf(
         R.string.spektrafilm_camera_lens_blur, 0f..30f, 0.05f,
         SpectralFilmTuning::cameraLensBlurUm, R.string.spektrafilm_value_um,
     ) { copy(cameraLensBlurUm = it) },
-    SliderSpec(
-        R.string.spektrafilm_camera_exposure, -5f..5f, 0.25f,
-        SpectralFilmTuning::cameraExposureEv, R.string.spektrafilm_value_ev,
-    ) { copy(cameraExposureEv = it) },
-    SliderSpec(
-        R.string.spektrafilm_film_gamma, 0.1f..3f, 0.05f, SpectralFilmTuning::filmGamma,
-    ) { copy(filmGamma = it) },
 )
 
 private val couplerSliders = listOf(

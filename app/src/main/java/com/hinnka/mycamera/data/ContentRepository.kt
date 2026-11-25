@@ -6,6 +6,7 @@ import com.hinnka.mycamera.frame.FrameManager
 import com.hinnka.mycamera.frame.FrameRenderer
 import com.hinnka.mycamera.gallery.GalleryRepository
 import com.hinnka.mycamera.gallery.PhotoProcessor
+import com.hinnka.mycamera.lut.LutConfig
 import com.hinnka.mycamera.lut.LutImageProcessor
 import com.hinnka.mycamera.lut.LutInfo
 import com.hinnka.mycamera.lut.LutManager
@@ -165,12 +166,24 @@ class ContentRepository private constructor(context: Context) {
      * 更新后会自动通知所有订阅者
      */
     fun refreshCustomContent() {
-        lutManager.initialize()
+        refreshLuts()
         frameManager.initialize()
-        _availableLuts.value = lutManager.getAvailableLuts()
-        initializeFrequentLuts()
         _availableFrames.value = frameManager.getAvailableFrames()
         _availableDcps.value = dcpManager.getAvailableDcps()
         _availableRawNoiseProfiles.value = rawNoiseProfileManager.getAvailableProfiles()
+    }
+
+    internal fun importGeneratedLut(config: LutConfig, name: String, category: String): LutInfo {
+        val id = customImportManager.importGeneratedLut(config, name, category)
+        return checkNotNull(refreshLuts().find { it.id == id }) { "Generated LUT missing from the library: $id" }
+    }
+
+    @Synchronized
+    private fun refreshLuts(): List<LutInfo> {
+        lutManager.initialize()
+        val luts = lutManager.getAvailableLuts()
+        _availableLuts.value = luts
+        initializeFrequentLuts()
+        return luts
     }
 }

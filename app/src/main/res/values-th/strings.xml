@@ -437,6 +437,12 @@
     <string name="delete_dcp_confirm_message">ลบ DCP \"%s\" หรือไม่</string>
     <string name="rename_dialog_title">เปลี่ยนชื่อ</string>
     <string name="export_lut_cube">ส่งออก LUT</string>
+    <string name="film_lut_generate">บันทึกเป็นฟิลเตอร์รูปภาพ</string>
+    <string name="film_lut_generate_description">บันทึกสีและโทนปัจจุบันของ %1$s เป็นฟิลเตอร์รูปภาพ โดยไม่รวมเกรน ฮาเลชัน การกระจายแสง และเอฟเฟกต์เชิงพื้นที่อื่น ๆ</string>
+    <string name="film_lut_generate_action_description">เพิ่มโทนฟิล์มปัจจุบันลงในคลังฟิลเตอร์</string>
+    <string name="film_lut_generate_progress">กำลังสร้างฟิลเตอร์…</string>
+    <string name="film_lut_generate_success">เพิ่มฟิลเตอร์ลงในคลังแล้ว</string>
+    <string name="film_lut_generate_failed">สร้างฟิลเตอร์ไม่สำเร็จ</string>
     <string name="export_lut_title">ส่งออกค่าที่ตั้งล่วงหน้าของตัวกรอง</string>
     <string name="export_mode_raw_cube">ส่งออก .cube ดั้งเดิม</string>
     <string name="export_mode_plut">ส่งออกสูตรแบบไม่สูญเสีย .plut</string>
@@ -950,6 +956,7 @@
     <string name="settings_raw_leica_color_matrix_m9">M9</string>
     <string name="camera_focus_point_label">จุดโฟกัส</string>
     <string name="camera_metering_point_label">จุดวัดแสง</string>
+    <string name="spektrafilm_section_film">การรับแสงและการล้างฟิล์ม</string>
     <!-- Fotufilm controls -->
     <string name="fotufilm_section_filmStock">ฟิล์ม</string>
     <string name="fotufilm_section_filmGrain">เกรน</string>

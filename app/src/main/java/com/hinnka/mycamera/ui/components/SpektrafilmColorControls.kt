@@ -40,7 +40,7 @@ internal fun SpektrafilmSpectralAndGamutControls(
     tuning: SpectralFilmTuning,
     onCommit: (SpectralFilmTuning) -> Unit,
 ) {
-    SpektrafilmSection(R.string.spektrafilm_section_spectral) {
+    FilmAdjustmentSection(R.string.spektrafilm_section_spectral) {
         SpektrafilmChoiceSetting(
             title = R.string.spektrafilm_spectral_method,
             value = tuning.spectralMethod,
@@ -68,7 +68,7 @@ internal fun SpektrafilmSpectralAndGamutControls(
         }
     }
     if (tuning.spectralMethod == 0) {
-        SpektrafilmSection(R.string.spektrafilm_input_gamut_compression) {
+        FilmAdjustmentSection(R.string.spektrafilm_input_gamut_compression) {
             SwitchSettingItem(
                 title = stringResource(R.string.spektrafilm_gamut_enabled),
                 description = stringResource(R.string.spektrafilm_input_gamut_compression_description),
@@ -89,7 +89,7 @@ internal fun SpektrafilmSpectralAndGamutControls(
             }
         }
     }
-    SpektrafilmSection(R.string.spektrafilm_section_output_gamut) {
+    FilmAdjustmentSection(R.string.spektrafilm_section_output_gamut) {
         SpektrafilmChoiceSetting(
             title = R.string.spektrafilm_gamut_algorithm,
             value = tuning.outputGamutMethod,
@@ -111,7 +111,7 @@ internal fun SpektrafilmSpectralAndGamutControls(
 
 @Composable
 private fun SpektrafilmGamutKnee(settings: SpectralKnee, onCommit: (SpectralKnee) -> Unit) {
-    SpektrafilmSection(R.string.recipe_panel_advanced) {
+    FilmAdjustmentSection(R.string.recipe_panel_advanced) {
         SpektrafilmNumberControls(gamutKneeControls, settings, gamutKneeDefaults, onCommit)
         SpektrafilmNumberSetting(
             R.string.spektrafilm_gamut_limit, settings.limit, (settings.threshold + 0.01f)..4f, 0.01f,

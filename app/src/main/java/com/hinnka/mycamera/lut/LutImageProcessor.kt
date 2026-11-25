@@ -14,6 +14,7 @@ import androidx.core.graphics.createBitmap
 import com.hinnka.mycamera.model.ColorRecipeParams
 import com.hinnka.mycamera.processor.GlesComputeWorkGroup
 import com.hinnka.mycamera.processor.DenoiseStrength
+import com.hinnka.mycamera.raw.RawEnginePreviewPlan
 import com.hinnka.mycamera.utils.LargeDirectBuffer
 import com.hinnka.mycamera.utils.PLog
 import kotlinx.coroutines.asCoroutineDispatcher
@@ -69,7 +70,7 @@ class LutImageProcessor(context: Context? = null) {
     private var lutTextureId = 0
     private val basicToneTextures = BasicToneGlTextures()
     private val logInput = LogInputGl()
-    private val thumbnailEngine = RawEnginePreviewGl()
+    private val previewEngine = RawEnginePreviewGl()
     private var thumbnailEngineProgram = 0
     private var framebufferId = 0
     private var outputTextureId = 0
@@ -197,6 +198,7 @@ class LutImageProcessor(context: Context? = null) {
             val version = IntArray(2)
             if (!EGL14.eglInitialize(eglDisplay, version, 0, version, 1)) {
                 PLog.e(TAG, "Unable to initialize EGL")
+                eglDisplay = EGL14.EGL_NO_DISPLAY
                 return false
             }
             val eglExtensions = EGL14.eglQueryString(eglDisplay, EGL14.EGL_EXTENSIONS).orEmpty()
@@ -286,6 +288,8 @@ class LutImageProcessor(context: Context? = null) {
         } catch (e: Exception) {
             PLog.e(TAG, "Failed to initialize", e)
             return false
+        } finally {
+            if (!isInitialized) releaseEgl()
         }
     }
 
@@ -366,7 +370,7 @@ class LutImageProcessor(context: Context? = null) {
     /** Apply the exact live-preview engine atlas to an unprocessed ISP sRGB snapshot. */
     suspend fun applyPreviewEngine(
         bitmap: Bitmap,
-        plan: com.hinnka.mycamera.raw.RawEnginePreviewPlan
+        plan: RawEnginePreviewPlan
     ): Bitmap = withContext(glDispatcher) {
         currentCoroutineContext().ensureActive()
         check(!isReleased && initialize()) { "Cannot initialize preset thumbnail renderer" }
@@ -392,7 +396,7 @@ class LutImageProcessor(context: Context? = null) {
             )
             check(thumbnailEngineProgram != 0) { "Cannot compile preset thumbnail engine program" }
         }
-        check(thumbnailEngine.prepare(plan)) { "Cannot prepare ${plan.engine} thumbnail mapping" }
+        check(previewEngine.prepare(plan)) { "Cannot prepare ${plan.engine} thumbnail mapping" }
         currentCoroutineContext().ensureActive()
         setupFramebuffer(bitmap.width, bitmap.height)
         uploadImageTexture(bitmap)
@@ -406,7 +410,7 @@ class LutImageProcessor(context: Context? = null) {
         GLES30.glBindBuffer(GLES30.GL_ARRAY_BUFFER, 0)
         GLES30.glBindBuffer(GLES30.GL_ELEMENT_ARRAY_BUFFER, 0)
         GLES30.glUseProgram(thumbnailEngineProgram)
-        thumbnailEngine.bind(GLES30.glGetUniformLocation(thumbnailEngineProgram, "uEnginePreviewLut"))
+        previewEngine.bind(GLES30.glGetUniformLocation(thumbnailEngineProgram, "uEnginePreviewLut"))
         GLES30.glActiveTexture(GLES30.GL_TEXTURE0)
         GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, imageTextureId)
         GLES30.glUniform1i(GLES30.glGetUniformLocation(thumbnailEngineProgram, "uImageTexture"), 0)
@@ -428,6 +432,15 @@ class LutImageProcessor(context: Context? = null) {
             GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, 0)
             GLES30.glBindBuffer(GLES30.GL_PIXEL_PACK_BUFFER, 0)
         }
+    }
+
+    internal suspend fun bakePreviewEngineCube(plan: RawEnginePreviewPlan): FloatArray = withContext(glDispatcher) {
+        currentCoroutineContext().ensureActive()
+        check(!isReleased && initialize()) { "Cannot initialize film LUT renderer" }
+        check(EGL14.eglMakeCurrent(eglDisplay, eglSurface, eglSurface, eglContext))
+        check(previewEngine.prepare(plan)) { "Cannot prepare ${plan.engine} LUT mapping" }
+        currentCoroutineContext().ensureActive()
+        previewEngine.readSrgbCube(obtainReadbackBuffer(RawEnginePreviewGl.ATLAS_READBACK_BYTES))
     }
 
     suspend fun applyLutStack(
@@ -2193,7 +2206,7 @@ class LutImageProcessor(context: Context? = null) {
         if (lutTextureId != 0) {
             GLES30.glDeleteTextures(1, intArrayOf(lutTextureId), 0)
         }
-        thumbnailEngine.release()
+        previewEngine.release()
         if (thumbnailEngineProgram != 0) GLES30.glDeleteProgram(thumbnailEngineProgram)
         thumbnailEngineProgram = 0
         basicToneTextures.release()
@@ -2234,13 +2247,20 @@ class LutImageProcessor(context: Context? = null) {
         }
         
 
-        EGL14.eglMakeCurrent(eglDisplay, EGL14.EGL_NO_SURFACE, EGL14.EGL_NO_SURFACE, EGL14.EGL_NO_CONTEXT)
-        EGL14.eglDestroySurface(eglDisplay, eglSurface)
-        EGL14.eglDestroyContext(eglDisplay, eglContext)
-        EGL14.eglTerminate(eglDisplay)
-
+        releaseEgl()
         isInitialized = false
         PLog.d(TAG, "LutImageProcessor released")
+    }
+
+    private fun releaseEgl() {
+        if (eglDisplay == EGL14.EGL_NO_DISPLAY) return
+        EGL14.eglMakeCurrent(eglDisplay, EGL14.EGL_NO_SURFACE, EGL14.EGL_NO_SURFACE, EGL14.EGL_NO_CONTEXT)
+        if (eglSurface != EGL14.EGL_NO_SURFACE) EGL14.eglDestroySurface(eglDisplay, eglSurface)
+        if (eglContext != EGL14.EGL_NO_CONTEXT) EGL14.eglDestroyContext(eglDisplay, eglContext)
+        EGL14.eglTerminate(eglDisplay)
+        eglSurface = EGL14.EGL_NO_SURFACE
+        eglContext = EGL14.EGL_NO_CONTEXT
+        eglDisplay = EGL14.EGL_NO_DISPLAY
     }
 
     private fun isOnGlThread(): Boolean = Thread.currentThread() === glThread

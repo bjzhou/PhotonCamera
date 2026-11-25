@@ -16,7 +16,7 @@ internal fun SpektrafilmDiffusionSection(
     settings: SpectralDiffusion,
     onCommit: (SpectralDiffusion) -> Unit,
 ) {
-    SpektrafilmSection(title) {
+    FilmAdjustmentSection(title) {
         SwitchSettingItem(
             title = stringResource(R.string.spektrafilm_diffusion_enabled),
             checked = settings.enabled,
@@ -35,7 +35,7 @@ internal fun SpektrafilmDiffusionSection(
                 onCommit = { onCommit(settings.copy(family = it)) },
             )
             SpektrafilmNumberControls(diffusionControls, settings, diffusionDefaults, onCommit)
-            SpektrafilmSection(R.string.recipe_panel_advanced) {
+            FilmAdjustmentSection(R.string.recipe_panel_advanced) {
                 SpektrafilmNumberControls(diffusionAdvancedControls, settings, diffusionDefaults, onCommit)
             }
         }
@@ -48,7 +48,7 @@ internal fun SpektrafilmHalationSection(
     settings: SpectralHalation,
     onCommit: (SpectralHalation) -> Unit,
 ) {
-    SpektrafilmSection(R.string.recipe_param_halation) {
+    FilmAdjustmentSection(R.string.recipe_param_halation) {
         SwitchSettingItem(
             title = stringResource(R.string.spektrafilm_halation_enabled),
             checked = settings.enabled,
@@ -61,7 +61,7 @@ internal fun SpektrafilmHalationSection(
         if (settings.enabled) {
             val defaults = SpectralFilmStockDefaults.halation(stock, halationDefaults)
             SpektrafilmNumberControls(halationControls, settings, defaults, onCommit)
-            SpektrafilmSection(R.string.recipe_panel_advanced) {
+            FilmAdjustmentSection(R.string.recipe_panel_advanced) {
                 SpektrafilmRgbSetting(
                     R.string.spektrafilm_scatter_core, settings.scatterCoreUm, defaults.scatterCoreUm,
                     0f..30f, 0.5f, R.string.spektrafilm_value_um,
@@ -101,7 +101,7 @@ internal fun SpektrafilmGlareSection(
     settings: SpectralGlare,
     onCommit: (SpectralGlare) -> Unit,
 ) {
-    SpektrafilmSection(R.string.spektrafilm_section_glare) {
+    FilmAdjustmentSection(R.string.spektrafilm_section_glare) {
         SwitchSettingItem(
             title = stringResource(R.string.spektrafilm_glare_enabled),
             checked = settings.enabled,
