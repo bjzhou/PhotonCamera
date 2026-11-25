@@ -1,5 +1,7 @@
 #include "mgc_full_resolution_denoise.h"
 
+#include "mgc_denoise_static.h"
+
 #include <jni.h>
 
 #include <algorithm>
@@ -58,7 +60,9 @@ Java_com_hinnka_mycamera_raw_MgcFullResolutionDenoise_nativeDenoiseRgba16f(
     jfloatArray chroma_outlier_array,
     jboolean diagnostics_enabled,
     jint low_frequency_log2_downsample,
-    jint chroma_median_filter_type) {
+    jint chroma_median_filter_type,
+    jboolean export_chroma_strength,
+    jobject chroma_strength_out_buffer) {
     if (rgba_buffer == nullptr || width <= 0 || height <= 0) return -1;
     photon::mgc_denoise::FullResolutionDenoiseRequest request;
     request.rgba = static_cast<uint16_t*>(env->GetDirectBufferAddress(rgba_buffer));
@@ -146,69 +150,81 @@ Java_com_hinnka_mycamera_raw_MgcFullResolutionDenoise_nativeDenoiseRgba16f(
     request.diagnostics_enabled = diagnostics_enabled == JNI_TRUE;
     request.low_frequency_log2_downsample = low_frequency_log2_downsample;
     request.chroma_median_filter_type = chroma_median_filter_type;
+    if (export_chroma_strength == JNI_TRUE && chroma_strength_out_buffer != nullptr) {
+        auto* strength_out = static_cast<uint16_t*>(
+            env->GetDirectBufferAddress(chroma_strength_out_buffer));
+        const jlong strength_capacity =
+            env->GetDirectBufferCapacity(chroma_strength_out_buffer);
+        const int64_t strength_w = ((static_cast<int64_t>(width) + 127) / 128) * 32;
+        const int64_t strength_h = ((static_cast<int64_t>(height) + 15) / 16) * 4;
+        const int64_t required_strength_bytes =
+            strength_w * strength_h * 4 * static_cast<int64_t>(sizeof(uint16_t));
+        if (strength_out == nullptr || strength_capacity < required_strength_bytes) {
+            return -1;
+        }
+        request.export_chroma_strength = true;
+        request.chroma_strength_rgba16ui = strength_out;
+    }
     return photon::mgc_denoise::RunFullResolutionDenoise(request);
 }
 
 extern "C" JNIEXPORT jint JNICALL
-Java_com_hinnka_mycamera_raw_MgcFullResolutionDenoise_nativeLowFrequencyChromaCorrection(
+Java_com_hinnka_mycamera_raw_MgcFullResolutionDenoise_nativeMeasureMoireRgba32uiToRgba16ui(
     JNIEnv* env,
     jobject,
-    jobject rgba_buffer,
-    jint low_width,
-    jint low_height,
-    jint full_width,
-    jint full_height,
-    jint log2_downsample,
-    jfloatArray prepared_normalized_yuv_read_array,
-    jfloat prepared_normalized_chroma_shot,
-    jfloat prepared_normalized_chroma_quadratic,
-    jfloatArray chroma_correlation_array,
-    jfloat denoise_response_offset,
-    jfloat denoise_response_cosine_offset,
-    jshortArray spatial_strength_q8_array,
-    jint spatial_strength_width,
-    jint spatial_strength_height,
-    jfloatArray chroma_strength_array,
-    jfloatArray chroma_outlier_array,
-    jint chroma_median_filter_type) {
-    if (rgba_buffer == nullptr || low_width <= 0 || low_height <= 0) return -1;
-    photon::mgc_denoise::LowFrequencyChromaRequest request;
-    request.rgba = static_cast<uint16_t*>(env->GetDirectBufferAddress(rgba_buffer));
-    const jlong capacity = env->GetDirectBufferCapacity(rgba_buffer);
-    if (request.rgba == nullptr ||
-        capacity < static_cast<int64_t>(low_width) * low_height * 4 * sizeof(uint16_t)) {
+    jobject y_plane_s16_buffer,
+    jobject strength_in_rgba32ui_buffer,
+    jobject strength_out_rgba16ui_buffer,
+    jint width,
+    jint height,
+    jint strength_width,
+    jint strength_height) {
+    if (y_plane_s16_buffer == nullptr || strength_in_rgba32ui_buffer == nullptr ||
+        strength_out_rgba16ui_buffer == nullptr || width <= 0 || height <= 0 ||
+        (width & 3) != 0 || (height & 3) != 0 ||
+        strength_width != width / 4 || strength_height != height / 4) {
         return -1;
     }
-    request.low_width = low_width;
-    request.low_height = low_height;
-    request.full_width = full_width;
-    request.full_height = full_height;
-    request.log2_downsample = log2_downsample;
-    if (!CopyFloats(env, prepared_normalized_yuv_read_array, 3, request.prepared_normalized_yuv_read) ||
-        !CopyFloats(env, chroma_correlation_array, 128, request.chroma_correlation) ||
-        !CopyFloats(env, chroma_strength_array, 5, request.chroma_strength) ||
-        !CopyFloats(env, chroma_outlier_array, 5, request.chroma_outlier)) {
+    const auto* y_plane = static_cast<const int16_t*>(
+        env->GetDirectBufferAddress(y_plane_s16_buffer));
+    const auto* strength_in = static_cast<const uint32_t*>(
+        env->GetDirectBufferAddress(strength_in_rgba32ui_buffer));
+    auto* strength_out = static_cast<uint16_t*>(
+        env->GetDirectBufferAddress(strength_out_rgba16ui_buffer));
+    const int64_t y_bytes = static_cast<int64_t>(width) * height * sizeof(int16_t);
+    const size_t strength_count =
+        static_cast<size_t>(strength_width) * static_cast<size_t>(strength_height);
+    const int64_t in_bytes =
+        static_cast<int64_t>(strength_count) * 4 * sizeof(uint32_t);
+    const int64_t out_bytes =
+        static_cast<int64_t>(strength_count) * 4 * sizeof(uint16_t);
+    if (y_plane == nullptr || strength_in == nullptr || strength_out == nullptr ||
+        env->GetDirectBufferCapacity(y_plane_s16_buffer) < y_bytes ||
+        env->GetDirectBufferCapacity(strength_in_rgba32ui_buffer) < in_bytes ||
+        env->GetDirectBufferCapacity(strength_out_rgba16ui_buffer) < out_bytes) {
         return -1;
     }
-    request.prepared_normalized_chroma_shot = prepared_normalized_chroma_shot;
-    request.prepared_normalized_chroma_quadratic = prepared_normalized_chroma_quadratic;
-    request.denoise_response_offset = denoise_response_offset;
-    request.denoise_response_cosine_offset = denoise_response_cosine_offset;
-    std::vector<uint16_t> spatial_strength;
-    if (spatial_strength_q8_array != nullptr) {
-        const jsize count = env->GetArrayLength(spatial_strength_q8_array);
-        if (spatial_strength_width <= 0 || spatial_strength_height <= 0 ||
-            count != spatial_strength_width * spatial_strength_height) {
-            return -1;
-        }
-        spatial_strength.resize(static_cast<size_t>(count));
-        env->GetShortArrayRegion(
-            spatial_strength_q8_array, 0, count, reinterpret_cast<jshort*>(spatial_strength.data()));
-        if (env->ExceptionCheck()) return -1;
-        request.spatial_strength_q8 = spatial_strength.data();
-        request.spatial_strength_width = spatial_strength_width;
-        request.spatial_strength_height = spatial_strength_height;
+    std::vector<uint16_t> planar_in(strength_count * 3);
+    for (size_t i = 0; i < strength_count; ++i) {
+        planar_in[i] = static_cast<uint16_t>(strength_in[i * 4 + 0]);
+        planar_in[strength_count + i] = static_cast<uint16_t>(strength_in[i * 4 + 1]);
+        planar_in[2 * strength_count + i] = static_cast<uint16_t>(strength_in[i * 4 + 2]);
     }
-    request.chroma_median_filter_type = chroma_median_filter_type;
-    return photon::mgc_denoise::RunLowFrequencyChromaCorrection(request);
+    std::vector<uint16_t> planar_out(strength_count * 3);
+    const int result = photon::mgc_denoise::RunMeasureMoireS16(
+        y_plane,
+        width,
+        height,
+        planar_in.data(),
+        strength_width,
+        strength_height,
+        planar_out.data());
+    if (result != 0) return result;
+    for (size_t i = 0; i < strength_count; ++i) {
+        strength_out[i * 4 + 0] = planar_out[i];
+        strength_out[i * 4 + 1] = planar_out[strength_count + i];
+        strength_out[i * 4 + 2] = planar_out[2 * strength_count + i];
+        strength_out[i * 4 + 3] = 0;
+    }
+    return 0;
 }

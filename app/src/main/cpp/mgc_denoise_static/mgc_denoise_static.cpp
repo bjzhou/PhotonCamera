@@ -3,6 +3,7 @@
 #include <android/log.h>
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstddef>
 #include <cstring>
@@ -118,17 +119,6 @@ using RgbRawToYuvFn = int (*)(
     float,
     float,
     HalideBuffer*);
-using ChromaFn = int (*)(
-    void*,
-    HalideBuffer*,
-    HalideBuffer*,
-    int,
-    int,
-    HalideBuffer*,
-    HalideBuffer*,
-    HalideBuffer*,
-    HalideBuffer*,
-    HalideBuffer*);
 using YuvToRgbFn = int (*)(
     void*,
     HalideBuffer*,
@@ -223,17 +213,6 @@ extern "C" int photon_mgc_rgb_raw_to_yuv_s16(
     float,
     float,
     float,
-    HalideBuffer*);
-extern "C" int photon_mgc_chroma_denoise_pyramid_complete_s16(
-    void*,
-    HalideBuffer*,
-    HalideBuffer*,
-    int,
-    int,
-    HalideBuffer*,
-    HalideBuffer*,
-    HalideBuffer*,
-    HalideBuffer*,
     HalideBuffer*);
 extern "C" int photon_mgc_pecan_luma_denoise_s16(
     void*,
@@ -1251,6 +1230,291 @@ bool PrepareDefaultBayerDenoiseNoiseModel(
     return true;
 }
 
+namespace chroma_cpu {
+
+inline int16_t Sat16(int64_t v) {
+    return static_cast<int16_t>(std::clamp<int64_t>(v, -32768, 32767));
+}
+
+inline uint16_t SatU16(uint64_t v) {
+    return static_cast<uint16_t>(std::min<uint64_t>(v, 65535));
+}
+
+inline int32_t Sat32(int64_t v) {
+    return static_cast<int32_t>(std::clamp<int64_t>(v, INT32_MIN, INT32_MAX));
+}
+
+inline int16_t SqAdd16(int16_t a, int16_t b) {
+    return Sat16(static_cast<int32_t>(a) + static_cast<int32_t>(b));
+}
+
+inline int16_t SqSub16(int16_t a, int16_t b) {
+    return Sat16(static_cast<int32_t>(a) - static_cast<int32_t>(b));
+}
+
+inline int16_t Hadd16(int16_t a, int16_t b) {
+    return static_cast<int16_t>((static_cast<int32_t>(a) + static_cast<int32_t>(b)) >> 1);
+}
+
+inline int16_t Rhadd16(int16_t a, int16_t b) {
+    return static_cast<int16_t>((static_cast<int32_t>(a) + static_cast<int32_t>(b) + 1) >> 1);
+}
+
+inline int16_t Sqrshrn3(int32_t v) {
+    return Sat16((static_cast<int64_t>(v) + 4) >> 3);
+}
+
+inline int16_t Sqrshrn15(int32_t v) {
+    return Sat16((static_cast<int64_t>(v) + 16384) >> 15);
+}
+
+inline uint16_t Uqshrn8(uint32_t v) {
+    return SatU16(v >> 8);
+}
+
+inline uint16_t Sabd16(int16_t a, int16_t b) {
+    const int32_t diff = static_cast<int32_t>(a) - static_cast<int32_t>(b);
+    return static_cast<uint16_t>(diff < 0 ? -diff : diff);
+}
+
+inline uint16_t FloatToU16Rne(float x) {
+    float r = std::fmax(std::fmin(std::nearbyint(x), 65535.0f), 0.0f);
+    return std::isnan(r) ? 0 : static_cast<uint16_t>(static_cast<int32_t>(r));
+}
+
+inline int16_t FloatToS16Rne(float x) {
+    float r = std::fmax(std::fmin(std::nearbyint(std::fmax(x, 0.0f)), 32767.0f), -32768.0f);
+    return std::isnan(r) ? 0 : static_cast<int16_t>(static_cast<int32_t>(r));
+}
+
+inline int32_t FloatToS32Rne(float x) {
+    float r = std::fmax(std::nearbyint(std::fmax(x, 0.0f)), -2147483648.0f);
+    if (r >= 2147483648.0f) return INT32_MAX;
+    return std::isnan(r) ? 0 : static_cast<int32_t>(r);
+}
+
+inline int ShiftCoord(int coord, int shift) {
+    return shift >= 0 ? (coord >> shift) : (coord << (-shift));
+}
+
+struct BranchCoeffs {
+    int32_t read_coeff = 0;
+    int16_t shot_coeff = 0;
+    int16_t quad_coeff = 0;
+    uint16_t scale_u = 0;
+    uint16_t scale_v = 0;
+    uint8_t outlier_threshold = 0;
+};
+
+BranchCoeffs BuildBranchCoeffs(const ChromaDenoiseNoiseBuffers& noise, int level, int branch) {
+    const int scalar_idx = level + branch * 12;
+    const float rY = noise.read[level + 0 * 4 + branch * 12];
+    const float rU = noise.read[level + 1 * 4 + branch * 12];
+    const float rV = noise.read[level + 2 * 4 + branch * 12];
+    const float shot = noise.shot[scalar_idx];
+    const float quad = noise.quadratic[scalar_idx];
+    constexpr float kEps = 1.0e-6f;
+    return {
+        FloatToS32Rne(rY),
+        FloatToS16Rne(shot * 256.0f),
+        FloatToS16Rne(quad * 65536.0f),
+        FloatToU16Rne(std::sqrt(rY / std::fmax(rU, kEps)) * 256.0f),
+        FloatToU16Rne(std::sqrt(rY / std::fmax(rV, kEps)) * 256.0f),
+        noise.outlier_threshold[level + branch * 4],
+    };
+}
+
+constexpr std::array<uint16_t, 16> kRecipLut = {
+    32768u, 16384u, 10923u, 8192u, 6554u, 5461u, 4681u, 4096u,
+    3641u, 3277u, 2979u, 2731u, 2521u, 2341u, 2185u, 2048u,
+};
+
+void DownsampleLevel(
+    const int16_t* input,
+    int in_w,
+    int in_h,
+    int16_t* output,
+    int out_w,
+    int out_h) {
+    const size_t in_plane = static_cast<size_t>(in_w) * in_h;
+    const size_t out_plane = static_cast<size_t>(out_w) * out_h;
+    std::vector<int16_t> temp(static_cast<size_t>(in_w) * out_h);
+    for (int c = 0; c < 3; ++c) {
+        const int16_t* src = input + c * in_plane;
+        int16_t* dst = output + c * out_plane;
+        for (int y = 0; y < out_h; ++y) {
+            const int16_t* r0 = src + static_cast<size_t>(std::clamp(2 * y - 1, 0, in_h - 1)) * in_w;
+            const int16_t* r1 = src + static_cast<size_t>(std::clamp(2 * y, 0, in_h - 1)) * in_w;
+            const int16_t* r2 = src + static_cast<size_t>(std::clamp(2 * y + 1, 0, in_h - 1)) * in_w;
+            const int16_t* r3 = src + static_cast<size_t>(std::clamp(2 * y + 2, 0, in_h - 1)) * in_w;
+            int16_t* row = temp.data() + static_cast<size_t>(y) * in_w;
+            for (int x = 0; x < in_w; ++x) {
+                row[x] = Sqrshrn3(
+                    static_cast<int32_t>(r0[x]) + 3 * static_cast<int32_t>(r1[x]) +
+                    3 * static_cast<int32_t>(r2[x]) + static_cast<int32_t>(r3[x]));
+            }
+        }
+        for (int y = 0; y < out_h; ++y) {
+            const int16_t* row = temp.data() + static_cast<size_t>(y) * in_w;
+            int16_t* out_row = dst + static_cast<size_t>(y) * out_w;
+            for (int x = 0; x < out_w; ++x) {
+                out_row[x] = Sqrshrn3(
+                    static_cast<int32_t>(row[std::clamp(2 * x - 1, 0, in_w - 1)]) +
+                    3 * static_cast<int32_t>(row[std::clamp(2 * x, 0, in_w - 1)]) +
+                    3 * static_cast<int32_t>(row[std::clamp(2 * x + 1, 0, in_w - 1)]) +
+                    static_cast<int32_t>(row[std::clamp(2 * x + 2, 0, in_w - 1)]));
+            }
+        }
+    }
+}
+
+void RunBlfPass(
+    const int16_t* src, int src_w, int src_h, int src_ox, int src_oy,
+    const uint16_t* strength_map, int sw, int sh, int strength_shift,
+    const BranchCoeffs& coeffs, int step,
+    int16_t* dst, int dst_w, int dst_h, int dst_ox, int dst_oy) {
+    const size_t src_plane = static_cast<size_t>(src_w) * src_h;
+    const size_t dst_plane = static_cast<size_t>(dst_w) * dst_h;
+    const size_t s_plane = static_cast<size_t>(sw) * sh;
+    constexpr uint16_t kMaxDiff = 37837u;
+    const auto at = [&](int c, int gx, int gy) -> int16_t {
+        return src[static_cast<size_t>(c) * src_plane +
+            static_cast<size_t>(gy - src_oy) * src_w + (gx - src_ox)];
+    };
+    for (int ly = 0; ly < dst_h; ++ly) {
+        const int gy = ly + dst_oy;
+        const int sy = std::clamp(ShiftCoord(gy, strength_shift), 0, sh - 1);
+        for (int lx = 0; lx < dst_w; ++lx) {
+            const int gx = lx + dst_ox;
+            const int sx = std::clamp(ShiftCoord(gx, strength_shift), 0, sw - 1);
+            const size_t s_idx = static_cast<size_t>(sy) * sw + sx;
+            const uint32_t s0 = strength_map[0 * s_plane + s_idx];
+            const uint32_t s1 = strength_map[1 * s_plane + s_idx];
+            const uint32_t s2 = strength_map[2 * s_plane + s_idx];
+            const int16_t yc = at(0, gx, gy);
+            const int16_t uc = at(1, gx, gy);
+            const int16_t vc = at(2, gx, gy);
+            const int16_t y_pos = std::max<int16_t>(yc, 0);
+            const int16_t y_sq_wrap = static_cast<int16_t>(static_cast<uint16_t>(
+                static_cast<int32_t>(y_pos) * static_cast<int32_t>(y_pos)));
+            const int32_t term_read = Sat32(
+                (static_cast<int64_t>(s2) * static_cast<int64_t>(coeffs.read_coeff)) >> 8);
+            const int32_t shot_y =
+                (static_cast<int32_t>(y_pos) * static_cast<int32_t>(coeffs.shot_coeff)) >> 8;
+            const int32_t term_shot = Sat32(
+                (static_cast<int64_t>(shot_y) * static_cast<int64_t>(s1)) >> 8);
+            const int32_t quad_y2 =
+                (static_cast<int32_t>(y_sq_wrap) * static_cast<int32_t>(coeffs.quad_coeff)) >> 16;
+            const int32_t term_quad =
+                static_cast<int32_t>(static_cast<uint32_t>(quad_y2) * s0) >> 8;
+            const int32_t threshold = Sat32(
+                static_cast<int64_t>(Sat32(static_cast<int64_t>(term_read) + term_shot)) +
+                term_quad);
+
+            int32_t sum_u1 = 0, sum_v1 = 0, sum_u2 = 0, sum_v2 = 0;
+            uint16_t w1 = 0, w2 = 0;
+            for (int dy = -step; dy <= step; dy += step) {
+                const int wy = (dy == 0) ? 2 : 1;
+                for (int dx = -step; dx <= step; dx += step) {
+                    const uint16_t wsp = static_cast<uint16_t>(((dx == 0) ? 2 : 1) * wy);
+                    const int16_t yn = at(0, gx + dx, gy + dy);
+                    const int16_t un = at(1, gx + dx, gy + dy);
+                    const int16_t vn = at(2, gx + dx, gy + dy);
+                    const uint32_t dY = std::min<uint16_t>(Sabd16(yc, yn), kMaxDiff);
+                    const uint32_t dU = std::min<uint16_t>(
+                        Uqshrn8(static_cast<uint32_t>(Sabd16(uc, un)) * coeffs.scale_u), kMaxDiff);
+                    const uint32_t dV = std::min<uint16_t>(
+                        Uqshrn8(static_cast<uint32_t>(Sabd16(vc, vn)) * coeffs.scale_v), kMaxDiff);
+                    const uint32_t dist2 = dY * dY + dU * dU + dV * dV;
+                    if (static_cast<int32_t>(dist2) <= threshold) {
+                        w1 = static_cast<uint16_t>(w1 + wsp);
+                        sum_u1 += static_cast<int32_t>(un) * wsp;
+                        sum_v1 += static_cast<int32_t>(vn) * wsp;
+                    }
+                    if (static_cast<int32_t>(dist2 >> 2) <= threshold) {
+                        w2 = static_cast<uint16_t>(w2 + wsp);
+                        sum_u2 += static_cast<int32_t>(un) * wsp;
+                        sum_v2 += static_cast<int32_t>(vn) * wsp;
+                    }
+                }
+            }
+            const bool use1 = w1 > coeffs.outlier_threshold;
+            const uint16_t w_sel = use1 ? w1 : w2;
+            const int16_t w_clamped = std::max<int16_t>(
+                static_cast<int16_t>(std::min<uint16_t>(w_sel, 16)), 1);
+            const uint32_t inv = kRecipLut[w_clamped - 1];
+            const size_t out_idx = static_cast<size_t>(ly) * dst_w + lx;
+            dst[0 * dst_plane + out_idx] = yc;
+            dst[1 * dst_plane + out_idx] = Sqrshrn15(static_cast<int32_t>(
+                static_cast<uint32_t>(use1 ? sum_u1 : sum_u2) * inv));
+            dst[2 * dst_plane + out_idx] = Sqrshrn15(static_cast<int32_t>(
+                static_cast<uint32_t>(use1 ? sum_v1 : sum_v2) * inv));
+        }
+    }
+}
+
+void RunPyramidLevel(
+    const int16_t* input, int width, int height,
+    const int16_t* downsampled, const int16_t* prev_output, int coarse_w, int coarse_h,
+    int level, const uint16_t* strength_map, int sw, int sh, int strength_shift,
+    const ChromaDenoiseNoiseBuffers& noise, int16_t* output) {
+    const BranchCoeffs b0 = BuildBranchCoeffs(noise, level, 0);
+    const BranchCoeffs b1 = BuildBranchCoeffs(noise, level, 1);
+    constexpr int kHalo = 3;
+    const int rw = width + 2 * kHalo;
+    const int rh = height + 2 * kHalo;
+    const size_t r_plane = static_cast<size_t>(rw) * rh;
+    const size_t in_plane = static_cast<size_t>(width) * height;
+    const size_t c_plane = static_cast<size_t>(coarse_w) * coarse_h;
+    std::vector<int16_t> recon(r_plane * 3);
+    const bool has_coarse = (downsampled != prev_output);
+    const auto diff_at = [&](int c, int X, int Y) -> int16_t {
+        const size_t idx = static_cast<size_t>(c) * c_plane +
+            static_cast<size_t>(std::clamp(Y, 0, coarse_h - 1)) * coarse_w +
+            std::clamp(X, 0, coarse_w - 1);
+        return SqSub16(prev_output[idx], downsampled[idx]);
+    };
+    for (int c = 0; c < 3; ++c) {
+        for (int ly = 0; ly < rh; ++ly) {
+            const int gy = ly - kHalo;
+            const int iy = std::clamp(gy, 0, height - 1);
+            const int Y = gy >> 1;
+            const int ny = ((gy & 1) == 0) ? (Y - 1) : (Y + 1);
+            for (int lx = 0; lx < rw; ++lx) {
+                const int gx = lx - kHalo;
+                const int ix = std::clamp(gx, 0, width - 1);
+                int16_t val = input[static_cast<size_t>(c) * in_plane +
+                    static_cast<size_t>(iy) * width + ix];
+                if (has_coarse) {
+                    const int X = gx >> 1;
+                    const int nx = ((gx & 1) == 0) ? (X - 1) : (X + 1);
+                    const int16_t a = diff_at(c, X, Y);
+                    const int16_t b = diff_at(c, nx, Y);
+                    const int16_t cc = diff_at(c, X, ny);
+                    const int16_t d = diff_at(c, nx, ny);
+                    const int16_t m1 = Hadd16(cc, b);
+                    const int16_t m2 = Rhadd16(cc, b);
+                    const int16_t m3 = Rhadd16(a, d);
+                    const int16_t m4 = Rhadd16(m1, m3);
+                    const int16_t m5 = Rhadd16(m2, m4);
+                    val = SqAdd16(val, Hadd16(a, m5));
+                }
+                recon[static_cast<size_t>(c) * r_plane + static_cast<size_t>(ly) * rw + lx] = val;
+            }
+        }
+    }
+    constexpr int kHalo1 = 1;
+    const int bw = width + 2 * kHalo1;
+    const int bh = height + 2 * kHalo1;
+    std::vector<int16_t> blf0(static_cast<size_t>(bw) * bh * 3);
+    RunBlfPass(recon.data(), rw, rh, -kHalo, -kHalo, strength_map, sw, sh, strength_shift,
+        b0, 2, blf0.data(), bw, bh, -kHalo1, -kHalo1);
+    RunBlfPass(blf0.data(), bw, bh, -kHalo1, -kHalo1, strength_map, sw, sh, strength_shift,
+        b1, 1, output, width, height, 0, 0);
+}
+
+}  // namespace chroma_cpu
+
 int RunChromaDenoise(
     const int16_t* input,
     int width,
@@ -1265,90 +1529,39 @@ int RunChromaDenoise(
     if (input == nullptr ||
         strength_map == nullptr || output == nullptr ||
         width <= 0 || height <= 0 ||
+        (width & 7) != 0 || (height & 7) != 0 ||
         log2_strength_map_decimation < 0 || log2_downsample_factor < 0 ||
         log2_strength_map_decimation + log2_downsample_factor != 2 ||
         strength_width != width >> log2_strength_map_decimation ||
         strength_height != height >> log2_strength_map_decimation) {
         return -1;
     }
-    const int pixel_count = width * height;
-    const int strength_count = strength_width * strength_height;
-    const HalideDimension image_dimensions[] = {
-        {0, width, 1, 0},
-        {0, height, width, 0},
-        {0, 3, pixel_count, 0},
-    };
-    const HalideDimension strength_dimensions[] = {
-        {0, strength_width, 1, 0},
-        {0, strength_height, strength_width, 0},
-        {0, 3, strength_count, 0},
-    };
-    // MGC slices channel zero from its original [4,3,2] quadratic and
-    // shot buffers, retaining the original branch stride of 12.
-    const HalideDimension scalar_noise_dimensions[] = {
-        {0, 4, 1, 0},
-        {0, 2, 12, 0},
-    };
-    const HalideDimension read_noise_dimensions[] = {
-        {0, 4, 1, 0},
-        {0, 3, 4, 0},
-        {0, 2, 12, 0},
-    };
-    const HalideDimension outlier_dimensions[] = {
-        {0, 4, 1, 0},
-        {0, 2, 4, 0},
-    };
-    HalideBuffer input_buffer = MakeBuffer(
-        const_cast<int16_t*>(input),
-        {0, 16, 1},
-        3,
-        image_dimensions);
-    HalideBuffer strength_buffer = MakeBuffer(
-        const_cast<uint16_t*>(strength_map),
-        {1, 16, 1},
-        3,
-        strength_dimensions);
-    HalideBuffer quadratic_buffer = MakeBuffer(
-        const_cast<float*>(noise.quadratic),
-        {2, 32, 1},
-        2,
-        scalar_noise_dimensions);
-    HalideBuffer shot_buffer = MakeBuffer(
-        const_cast<float*>(noise.shot),
-        {2, 32, 1},
-        2,
-        scalar_noise_dimensions);
-    HalideBuffer read_buffer = MakeBuffer(
-        const_cast<float*>(noise.read),
-        {2, 32, 1},
-        3,
-        read_noise_dimensions);
-    HalideBuffer outlier_buffer = MakeBuffer(
-        const_cast<uint8_t*>(noise.outlier_threshold),
-        {1, 8, 1},
-        2,
-        outlier_dimensions);
-    HalideBuffer output_buffer = MakeBuffer(
-        output,
-        {0, 16, 1},
-        3,
-        image_dimensions);
-    const auto function = reinterpret_cast<ChromaFn>(
-        &photon_mgc_chroma_denoise_pyramid_complete_s16);
-    // The full-resolution S16 call site at 0x468512c passes 2 and 0; the
-    // low-frequency call passes 2 - L and L for a 2^L box-downsampled input, so
-    // the one RAW/4 strength map addresses both resolutions.
-    return function(
-        nullptr,
-        &input_buffer,
-        &strength_buffer,
-        log2_strength_map_decimation,
-        log2_downsample_factor,
-        &quadratic_buffer,
-        &shot_buffer,
-        &read_buffer,
-        &outlier_buffer,
-        &output_buffer);
+    const int w1 = width / 2, h1 = height / 2;
+    const int w2 = w1 / 2, h2 = h1 / 2;
+    const int w3 = w2 / 2, h3 = h2 / 2;
+    std::vector<int16_t> in1(static_cast<size_t>(w1) * h1 * 3);
+    std::vector<int16_t> in2(static_cast<size_t>(w2) * h2 * 3);
+    std::vector<int16_t> in3(static_cast<size_t>(w3) * h3 * 3);
+    chroma_cpu::DownsampleLevel(input, width, height, in1.data(), w1, h1);
+    chroma_cpu::DownsampleLevel(in1.data(), w1, h1, in2.data(), w2, h2);
+    chroma_cpu::DownsampleLevel(in2.data(), w2, h2, in3.data(), w3, h3);
+
+    std::vector<int16_t> out3(static_cast<size_t>(w3) * h3 * 3);
+    chroma_cpu::RunPyramidLevel(in3.data(), w3, h3, in3.data(), in3.data(), w3, h3,
+        3, strength_map, strength_width, strength_height,
+        log2_strength_map_decimation - 3, noise, out3.data());
+    std::vector<int16_t> out2(static_cast<size_t>(w2) * h2 * 3);
+    chroma_cpu::RunPyramidLevel(in2.data(), w2, h2, in3.data(), out3.data(), w3, h3,
+        2, strength_map, strength_width, strength_height,
+        log2_strength_map_decimation - 2, noise, out2.data());
+    std::vector<int16_t> out1(static_cast<size_t>(w1) * h1 * 3);
+    chroma_cpu::RunPyramidLevel(in1.data(), w1, h1, in2.data(), out2.data(), w2, h2,
+        1, strength_map, strength_width, strength_height,
+        log2_strength_map_decimation - 1, noise, out1.data());
+    chroma_cpu::RunPyramidLevel(input, width, height, in1.data(), out1.data(), w1, h1,
+        0, strength_map, strength_width, strength_height,
+        log2_strength_map_decimation, noise, output);
+    return 0;
 }
 
 int RunMeasureMoireS16(

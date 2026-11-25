@@ -561,6 +561,8 @@ int RunFullResolutionDenoise(const FullResolutionDenoiseRequest& request) {
     const bool bayer_input = request.input_is_bayer;
     const bool run_measure_moire = request.measure_moire_enabled;
     const bool apply_bayer_lens_shading = request.apply_lens_shading_in_bayer_aot;
+    const bool export_chroma_strength =
+        request.export_chroma_strength && request.chroma_strength_rgba16ui != nullptr;
     if (request.rgba == nullptr || width <= 0 || height <= 0 ||
         full_width <= 0 || full_height <= 0 ||
         global_origin_x < 0 || global_origin_y < 0 ||
@@ -568,7 +570,7 @@ int RunFullResolutionDenoise(const FullResolutionDenoiseRequest& request) {
         global_origin_y + height > full_height ||
         (bayer_input && (cfa_pattern < 0 || cfa_pattern > 3)) ||
         (run_measure_moire &&
-         (!run_chroma || cfa_pattern < 0 || cfa_pattern > 3)) ||
+         ((!run_chroma && !export_chroma_strength) || cfa_pattern < 0 || cfa_pattern > 3)) ||
         (apply_bayer_lens_shading && !bayer_input) ||
         (lens_shading != nullptr && (lens_width <= 0 || lens_height <= 0)) ||
         (spatial_strength_q8 != nullptr &&
@@ -1153,6 +1155,15 @@ int RunFullResolutionDenoise(const FullResolutionDenoiseRequest& request) {
             }
             chroma_strength_q8 = demoire_strength.data();
             demoire_ms = elapsed_ms(demoire_start);
+        }
+        if (export_chroma_strength) {
+            uint16_t* dst = request.chroma_strength_rgba16ui;
+            for (size_t index = 0; index < strength_count; ++index) {
+                dst[index * 4 + 0] = chroma_strength_q8[index];
+                dst[index * 4 + 1] = chroma_strength_q8[strength_count + index];
+                dst[index * 4 + 2] = chroma_strength_q8[2 * strength_count + index];
+                dst[index * 4 + 3] = 0;
+            }
         }
 
         // GCam ProcessRaw order: Pecan denoises luma first, its Y is copied back into

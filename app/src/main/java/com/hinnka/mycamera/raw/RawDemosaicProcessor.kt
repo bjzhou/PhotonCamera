@@ -1004,10 +1004,11 @@ class RawDemosaicProcessor {
         var completed = false
         var borrowedTexture = false
         var workingFloatTexture = 0
+        var transientChromaTargetTexture = 0
         var demosaicNoiseTransfer: DemosaicNoiseTransfer? = null
         val totalStartNs = System.nanoTime()
         try {
-            if (applyDefaultDenoise) denoiseTransfer.prepare(width, height)
+            if (applyDefaultDenoise && resolvedLumaStrength > 0f) denoiseTransfer.prepare(width, height)
             val hasDirectFloatSource =
                 gpuLinearRgbSource?.storage == GpuLinearRgbStorage.RGBA16F
             if (!hasDirectFloatSource) {
@@ -1217,72 +1218,180 @@ class RawDemosaicProcessor {
             var blackBoxMapWaitMs = 0L
             var blackBoxUploadSubmitMs = 0L
             var nativeMs = 0L
+            var chromaGpuMs = 0L
             if (applyDefaultDenoise) {
-                lateinit var defaultDenoiseMetadata: RawMetadata
-                lateinit var defaultDenoisePass: MgcFullResolutionDenoise.Pass
-                var tuningSnr = 0f
-                val readTiming = denoiseTransfer.read(
-                    workingFloatTexture, width, height, label = "MGC $mode default denoise",
-                    beforeMap = {
-                        val parameterStartNs = System.nanoTime()
-                        defaultDenoiseMetadata = when (mode) {
-                            MgcSpatialGpuDenoiseMode.SPATIAL_DEFAULT ->
-                                spatialOutputNoiseMetadata(denoiseMetadata)
-                            MgcSpatialGpuDenoiseMode.SABRE_DEFAULT ->
-                                sabreOutputNoiseMetadata(denoiseMetadata)
-                            MgcSpatialGpuDenoiseMode.BYPASS_DEFAULT_DENOISE ->
-                                error("Bypass mode entered the MGC default-denoise boundary")
-                        }
-                        defaultDenoisePass = when (mode) {
-                            MgcSpatialGpuDenoiseMode.SPATIAL_DEFAULT ->
-                                MgcFullResolutionDenoise.Pass.SPATIAL_DEFAULT
-                            MgcSpatialGpuDenoiseMode.SABRE_DEFAULT ->
-                                MgcFullResolutionDenoise.Pass.SABRE_DEFAULT
-                            MgcSpatialGpuDenoiseMode.BYPASS_DEFAULT_DENOISE ->
-                                error("Bypass mode has no MGC full-resolution pass")
-                        }
-                        tuningSnr = checkNotNull(metadata.mgcDenoiseTuningSnr?.takeIf {
-                            it.isFinite() && it >= 0f
-                        }) {
-                            "MGC $mode default denoise is missing output-frame SNR"
-                        }
-                        blackBoxParameterMs =
-                            (System.nanoTime() - parameterStartNs) / 1_000_000L
-                    },
-                ) { mapped ->
-                    val nativeStartNs = System.nanoTime()
-                    check(
-                        MgcFullResolutionDenoise.denoise(
-                            rgba16f = mapped,
-                            width = width,
-                            height = height,
-                            globalOriginX = 0,
-                            globalOriginY = 0,
+                val lumaEnabled = resolvedLumaStrength > 0f
+                val chromaEnabled = resolvedChromaStrength > 0f
+                val preparedTransfer = demosaicNoiseTransfer.takeIf {
+                    mode == MgcSpatialGpuDenoiseMode.SPATIAL_DEFAULT
+                }
+                val applyLscStrength = mode == MgcSpatialGpuDenoiseMode.SABRE_DEFAULT
+                val defaultDenoiseMetadata: RawMetadata
+                val defaultDenoisePass: MgcFullResolutionDenoise.Pass
+                val tuningSnr: Float
+                var precomputedStrength: ByteBuffer? = null
+                var precomputedStrengthW = 0
+                var precomputedStrengthH = 0
+
+                if (lumaEnabled) {
+                    lateinit var meta: RawMetadata
+                    lateinit var pass: MgcFullResolutionDenoise.Pass
+                    var snr = 0f
+                    if (chromaEnabled) {
+                        precomputedStrengthW = ((width + 127) / 128) * 32
+                        precomputedStrengthH = ((height + 15) / 16) * 4
+                        precomputedStrength = ByteBuffer.allocateDirect(
+                            precomputedStrengthW * precomputedStrengthH * 4 * 2,
+                        ).order(ByteOrder.nativeOrder())
+                    }
+                    val readTiming = denoiseTransfer.read(
+                        workingFloatTexture, width, height, label = "MGC $mode default denoise",
+                        beforeMap = {
+                            val parameterStartNs = System.nanoTime()
+                            meta = when (mode) {
+                                MgcSpatialGpuDenoiseMode.SPATIAL_DEFAULT ->
+                                    spatialOutputNoiseMetadata(denoiseMetadata)
+                                MgcSpatialGpuDenoiseMode.SABRE_DEFAULT ->
+                                    sabreOutputNoiseMetadata(denoiseMetadata)
+                                MgcSpatialGpuDenoiseMode.BYPASS_DEFAULT_DENOISE ->
+                                    error("Bypass mode entered the MGC default-denoise boundary")
+                            }
+                            pass = when (mode) {
+                                MgcSpatialGpuDenoiseMode.SPATIAL_DEFAULT ->
+                                    MgcFullResolutionDenoise.Pass.SPATIAL_DEFAULT
+                                MgcSpatialGpuDenoiseMode.SABRE_DEFAULT ->
+                                    MgcFullResolutionDenoise.Pass.SABRE_DEFAULT
+                                MgcSpatialGpuDenoiseMode.BYPASS_DEFAULT_DENOISE ->
+                                    error("Bypass mode has no MGC full-resolution pass")
+                            }
+                            snr = checkNotNull(metadata.mgcDenoiseTuningSnr?.takeIf {
+                                it.isFinite() && it >= 0f
+                            }) {
+                                "MGC $mode default denoise is missing output-frame SNR"
+                            }
+                            blackBoxParameterMs =
+                                (System.nanoTime() - parameterStartNs) / 1_000_000L
+                        },
+                    ) { mapped ->
+                        val nativeStartNs = System.nanoTime()
+                        check(
+                            MgcFullResolutionDenoise.denoise(
+                                rgba16f = mapped,
+                                width = width,
+                                height = height,
+                                globalOriginX = 0,
+                                globalOriginY = 0,
+                                fullWidth = width,
+                                fullHeight = height,
+                                outputScale = 1f,
+                                metadata = meta,
+                                preparedYuvNoiseModel = preparedTransfer,
+                                applyLensShadingToDenoiseStrength = applyLscStrength,
+                                tuningSnr = snr,
+                                pass = pass,
+                                lumaStrengthScale = resolvedLumaStrength,
+                                chromaStrengthScale = 0f,
+                                exportChromaStrength = chromaEnabled,
+                                measureMoireForExport = chromaEnabled,
+                                chromaStrengthOut = precomputedStrength,
+                            )
+                        ) { "MGC $mode luma denoise failed" }
+                        nativeMs = (System.nanoTime() - nativeStartNs) / 1_000_000L
+                    }
+                    defaultDenoiseMetadata = meta
+                    defaultDenoisePass = pass
+                    tuningSnr = snr
+                    blackBoxReadSubmitMs = readTiming.submitMs.toLong()
+                    blackBoxMapWaitMs = readTiming.mapMs.toLong()
+
+                    val returnStartNs = System.nanoTime()
+                    GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, 0)
+                    denoiseTransfer.upload(workingFloatTexture, width, height)
+                    blackBoxUploadSubmitMs =
+                        (System.nanoTime() - returnStartNs) / 1_000_000L
+                } else {
+                    val parameterStartNs = System.nanoTime()
+                    defaultDenoiseMetadata = when (mode) {
+                        MgcSpatialGpuDenoiseMode.SPATIAL_DEFAULT ->
+                            spatialOutputNoiseMetadata(denoiseMetadata)
+                        MgcSpatialGpuDenoiseMode.SABRE_DEFAULT ->
+                            sabreOutputNoiseMetadata(denoiseMetadata)
+                        MgcSpatialGpuDenoiseMode.BYPASS_DEFAULT_DENOISE ->
+                            error("Bypass mode entered the MGC default-denoise boundary")
+                    }
+                    defaultDenoisePass = when (mode) {
+                        MgcSpatialGpuDenoiseMode.SPATIAL_DEFAULT ->
+                            MgcFullResolutionDenoise.Pass.SPATIAL_DEFAULT
+                        MgcSpatialGpuDenoiseMode.SABRE_DEFAULT ->
+                            MgcFullResolutionDenoise.Pass.SABRE_DEFAULT
+                        MgcSpatialGpuDenoiseMode.BYPASS_DEFAULT_DENOISE ->
+                            error("Bypass mode has no MGC full-resolution pass")
+                    }
+                    tuningSnr = checkNotNull(metadata.mgcDenoiseTuningSnr?.takeIf {
+                        it.isFinite() && it >= 0f
+                    }) {
+                        "MGC $mode default denoise is missing output-frame SNR"
+                    }
+                    blackBoxParameterMs =
+                        (System.nanoTime() - parameterStartNs) / 1_000_000L
+                }
+
+                if (chromaEnabled) {
+                    val chromaStartNs = System.nanoTime()
+                    val chromaConfig = checkNotNull(
+                        MgcFullResolutionDenoise.prepareRawChromaConfig(
                             fullWidth = width,
                             fullHeight = height,
                             outputScale = 1f,
                             metadata = defaultDenoiseMetadata,
-                            preparedYuvNoiseModel = demosaicNoiseTransfer.takeIf {
-                                mode == MgcSpatialGpuDenoiseMode.SPATIAL_DEFAULT
-                            },
-                            applyLensShadingToDenoiseStrength =
-                                mode == MgcSpatialGpuDenoiseMode.SABRE_DEFAULT,
+                            preparedYuvNoiseModel = preparedTransfer,
+                            applyLensShadingToDenoiseStrength = applyLscStrength,
                             tuningSnr = tuningSnr,
                             pass = defaultDenoisePass,
-                            lumaStrengthScale = resolvedLumaStrength,
                             chromaStrengthScale = resolvedChromaStrength,
-                        )
-                    ) { "MGC $mode luma/chroma denoise failed" }
-                    nativeMs = (System.nanoTime() - nativeStartNs) / 1_000_000L
+                        ),
+                    ) { "MGC $mode chroma config failed" }
+                    transientChromaTargetTexture = MgcGlesSurfaces.texture(
+                        GLES30.GL_RGBA16F,
+                        width,
+                        height,
+                        "MGC default chroma target",
+                    )
+                    mgcChromaDenoise.render(
+                        source = workingFloatTexture,
+                        target = transientChromaTargetTexture,
+                        width = width,
+                        height = height,
+                        globalOriginX = 0,
+                        globalOriginY = 0,
+                        fullWidth = width,
+                        fullHeight = height,
+                        whiteBalance = chromaConfig.whiteBalance,
+                        q14Noise = chromaConfig.q14Noise,
+                        responseOffset = chromaConfig.responseOffset,
+                        responseCosineOffset = chromaConfig.responseCosineOffset,
+                        chromaStrength = chromaConfig.chromaStrength,
+                        chromaOutlier = chromaConfig.chromaOutlier,
+                        lowFrequencyLog2 = chromaConfig.lowFrequencyLog2,
+                        chromaMedianFilterType = chromaConfig.chromaMedianFilterType,
+                        spatialStrengthQ8 = chromaConfig.spatialStrengthQ8,
+                        spatialStrengthWidth = chromaConfig.spatialStrengthWidth,
+                        spatialStrengthHeight = chromaConfig.spatialStrengthHeight,
+                        lensShadingMap = chromaConfig.lensShadingMap,
+                        lensWidth = chromaConfig.lensWidth,
+                        lensHeight = chromaConfig.lensHeight,
+                        precomputedStrengthRgba16ui = precomputedStrength,
+                        precomputedStrengthWidth = precomputedStrengthW,
+                        precomputedStrengthHeight = precomputedStrengthH,
+                        measureMoireCallback = if (!lumaEnabled && chromaConfig.measureMoireEnabled) {
+                            MgcFullResolutionDenoise::measureMoire
+                        } else {
+                            null
+                        },
+                    )
+                    workingFloatTexture = transientChromaTargetTexture
+                    chromaGpuMs = (System.nanoTime() - chromaStartNs) / 1_000_000L
                 }
-                blackBoxReadSubmitMs = readTiming.submitMs.toLong()
-                blackBoxMapWaitMs = readTiming.mapMs.toLong()
-
-                val returnStartNs = System.nanoTime()
-                GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, 0)
-                denoiseTransfer.upload(workingFloatTexture, width, height)
-                blackBoxUploadSubmitMs =
-                    (System.nanoTime() - returnStartNs) / 1_000_000L
             } else {
                 PLog.i(
                     TAG,
@@ -1341,7 +1450,7 @@ class RawDemosaicProcessor {
                     "blackBoxParameterMs=$blackBoxParameterMs " +
                     "blackBoxMapWaitMs=$blackBoxMapWaitMs " +
                     "blackBoxUploadSubmitMs=$blackBoxUploadSubmitMs " +
-                    "nativeMs=$nativeMs gpuReturnSubmitMs=$gpuReturnSubmitMs " +
+                    "nativeMs=$nativeMs chromaGpuMs=$chromaGpuMs gpuReturnSubmitMs=$gpuReturnSubmitMs " +
                     "cpuPackMs=0 textureReuse=${!createdExportedTexture} " +
                     "result=RGBA16UI_GPU " +
                     "totalMs=${(System.nanoTime() - totalStartNs) / 1_000_000L}",
@@ -1361,6 +1470,9 @@ class RawDemosaicProcessor {
             PLog.e(TAG, "Failed to process MGC Spatial GPU output", error)
             null
         } finally {
+            if (transientChromaTargetTexture != 0) {
+                MgcGlesSurfaces.deleteTextures(transientChromaTargetTexture)
+            }
             GLES30.glPixelStorei(GLES30.GL_PACK_ALIGNMENT, 1)
             GLES30.glPixelStorei(GLES30.GL_UNPACK_ALIGNMENT, 1)
             denoiseTransfer.releaseBuffers()
@@ -1410,6 +1522,7 @@ class RawDemosaicProcessor {
     private val srgbPass = RawSrgbPass(fullscreenQuad)
     private val sharpenPass = RawSharpenPass(fullscreenQuad)
     private val mgcSharpen = MgcSharpen()
+    private val mgcChromaDenoise = GlesMgcChromaDenoise()
     private val denoiseTransfer = RawFloatTextureTransfer(RawFloatTextureTransfer.Layout.HALF)
     /** Final SDR/HDR pixels keep the RGBA16F layout all the way into the Bitmap. */
     private val outputTransfer = RawFloatTextureTransfer(RawFloatTextureTransfer.Layout.HALF)
@@ -5556,44 +5669,123 @@ class RawDemosaicProcessor {
         )
 
         try {
-            denoiseTransfer.prepare(width, height)
-            renderPassthroughToTexture(sourceTextureId, width, height, gfFboId[0])
+            val useLscStrength = hasValidLensShadingMap(metadata)
+            var transferSubmitMs = 0L
+            var mapMs = 0L
             var nativeMs = 0L
-            var succeeded = false
-            val timing = denoiseTransfer.read(
-                gfTexId[0], width, height, label = "MGC USER_ADJUSTMENT denoise",
-            ) { readback ->
-                val nativeStartNs = System.nanoTime()
-                succeeded = MgcFullResolutionDenoise.denoise(
-                    rgba16f = readback,
+            var chromaGpuMs = 0L
+            var precomputedStrength: ByteBuffer? = null
+            var precomputedStrengthW = 0
+            var precomputedStrengthH = 0
+            val chromaSourceTexture: Int
+
+            if (lumaEnabled) {
+                denoiseTransfer.prepare(width, height)
+                renderPassthroughToTexture(sourceTextureId, width, height, gfFboId[0])
+                if (chromaEnabled) {
+                    precomputedStrengthW = ((width + 127) / 128) * 32
+                    precomputedStrengthH = ((height + 15) / 16) * 4
+                    precomputedStrength = ByteBuffer.allocateDirect(
+                        precomputedStrengthW * precomputedStrengthH * 4 * 2,
+                    ).order(ByteOrder.nativeOrder())
+                }
+                var succeeded = false
+                val timing = denoiseTransfer.read(
+                    gfTexId[0], width, height, label = "MGC USER_ADJUSTMENT denoise",
+                ) { readback ->
+                    val nativeStartNs = System.nanoTime()
+                    succeeded = MgcFullResolutionDenoise.denoise(
+                        rgba16f = readback,
+                        width = width,
+                        height = height,
+                        globalOriginX = globalOriginX,
+                        globalOriginY = globalOriginY,
+                        fullWidth = fullImageWidth,
+                        fullHeight = fullImageHeight,
+                        metadata = metadata,
+                        preparedYuvNoiseModel = demosaicNoiseTransfer,
+                        applyLensShadingToDenoiseStrength = useLscStrength,
+                        tuningSnr = tuningSnr,
+                        pass = MgcFullResolutionDenoise.Pass.USER_ADJUSTMENT,
+                        lumaStrengthScale = lumaStrength,
+                        chromaStrengthScale = 0f,
+                        exportChromaStrength = chromaEnabled,
+                        measureMoireForExport = chromaEnabled,
+                        chromaStrengthOut = precomputedStrength,
+                    )
+                    nativeMs = (System.nanoTime() - nativeStartNs) / 1_000_000L
+                }
+                transferSubmitMs = timing.submitMs.toLong()
+                mapMs = timing.mapMs.toLong()
+                check(succeeded) {
+                    "MGC USER_ADJUSTMENT luma denoise failed: size=${width}x$height " +
+                        "origin=($globalOriginX,$globalOriginY)"
+                }
+                GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, 0)
+                denoiseTransfer.upload(gfTexId[0], width, height)
+                chromaSourceTexture = gfTexId[0]
+            } else {
+                chromaSourceTexture = sourceTextureId
+            }
+
+            if (chromaEnabled) {
+                val chromaStartNs = System.nanoTime()
+                val chromaConfig = checkNotNull(
+                    MgcFullResolutionDenoise.prepareRawChromaConfig(
+                        fullWidth = fullImageWidth,
+                        fullHeight = fullImageHeight,
+                        metadata = metadata,
+                        preparedYuvNoiseModel = demosaicNoiseTransfer,
+                        applyLensShadingToDenoiseStrength = useLscStrength,
+                        tuningSnr = tuningSnr,
+                        pass = MgcFullResolutionDenoise.Pass.USER_ADJUSTMENT,
+                        chromaStrengthScale = chromaStrength,
+                    ),
+                ) {
+                    "MGC USER_ADJUSTMENT chroma config failed: size=${width}x$height " +
+                        "origin=($globalOriginX,$globalOriginY)"
+                }
+                mgcChromaDenoise.render(
+                    source = chromaSourceTexture,
+                    target = gfTexId[1],
                     width = width,
                     height = height,
                     globalOriginX = globalOriginX,
                     globalOriginY = globalOriginY,
                     fullWidth = fullImageWidth,
                     fullHeight = fullImageHeight,
-                    metadata = metadata,
-                    preparedYuvNoiseModel = demosaicNoiseTransfer,
-                    applyLensShadingToDenoiseStrength = hasValidLensShadingMap(metadata),
-                    tuningSnr = tuningSnr,
-                    pass = MgcFullResolutionDenoise.Pass.USER_ADJUSTMENT,
-                    lumaStrengthScale = lumaStrength,
-                    chromaStrengthScale = chromaStrength,
+                    whiteBalance = chromaConfig.whiteBalance,
+                    q14Noise = chromaConfig.q14Noise,
+                    responseOffset = chromaConfig.responseOffset,
+                    responseCosineOffset = chromaConfig.responseCosineOffset,
+                    chromaStrength = chromaConfig.chromaStrength,
+                    chromaOutlier = chromaConfig.chromaOutlier,
+                    lowFrequencyLog2 = chromaConfig.lowFrequencyLog2,
+                    chromaMedianFilterType = chromaConfig.chromaMedianFilterType,
+                    spatialStrengthQ8 = chromaConfig.spatialStrengthQ8,
+                    spatialStrengthWidth = chromaConfig.spatialStrengthWidth,
+                    spatialStrengthHeight = chromaConfig.spatialStrengthHeight,
+                    lensShadingMap = chromaConfig.lensShadingMap,
+                    lensWidth = chromaConfig.lensWidth,
+                    lensHeight = chromaConfig.lensHeight,
+                    precomputedStrengthRgba16ui = precomputedStrength,
+                    precomputedStrengthWidth = precomputedStrengthW,
+                    precomputedStrengthHeight = precomputedStrengthH,
+                    measureMoireCallback = if (!lumaEnabled && chromaConfig.measureMoireEnabled) {
+                        MgcFullResolutionDenoise::measureMoire
+                    } else {
+                        null
+                    },
                 )
-                nativeMs = (System.nanoTime() - nativeStartNs) / 1_000_000L
+                chromaGpuMs = (System.nanoTime() - chromaStartNs) / 1_000_000L
+            } else {
+                renderPassthroughToTexture(
+                    gfTexId[0],
+                    width,
+                    height,
+                    gfFboId[1],
+                )
             }
-            check(succeeded) {
-                "MGC USER_ADJUSTMENT denoise failed: size=${width}x$height " +
-                    "origin=($globalOriginX,$globalOriginY)"
-            }
-            GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, 0)
-            denoiseTransfer.upload(gfTexId[0], width, height)
-            renderPassthroughToTexture(
-                gfTexId[0],
-                width,
-                height,
-                gfFboId[1],
-            )
             GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, 0)
             GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, 0)
             checkGlError("MGC denoise output RGB")
@@ -5611,8 +5803,8 @@ class RawDemosaicProcessor {
                         }
                     } ?: "identity"} " +
                     "lscStrength=${lensShadingLogString(metadata)} " +
-                    "transferSubmitMs=${timing.submitMs} mapMs=${timing.mapMs} " +
-                    "nativeMs=$nativeMs",
+                    "transferSubmitMs=$transferSubmitMs mapMs=$mapMs " +
+                    "nativeMs=$nativeMs chromaGpuMs=$chromaGpuMs",
             )
             return gfTexId[1]
         } finally {
@@ -9396,6 +9588,7 @@ class RawDemosaicProcessor {
         srgbPass.release()
         sharpenPass.release()
         mgcSharpen.release()
+        mgcChromaDenoise.release()
         denoiseTransfer.release()
         raisrTransfer.release()
         outputPass.release()

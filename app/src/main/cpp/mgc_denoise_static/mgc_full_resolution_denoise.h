@@ -53,6 +53,11 @@ struct FullResolutionDenoiseRequest {
     bool diagnostics_enabled = false;
     int low_frequency_log2_downsample = 0;
     int chroma_median_filter_type = 0;
+    // Optional output for GPU chroma denoise: when true and non-null, packs the 3-plane Q8
+    // strength map (after MeasureMoire if enabled) into interleaved RGBA16UI (s0, s1, s2, 0)
+    // of dimensions (RoundUp(width, 128) / 4) x (RoundUp(height, 16) / 4).
+    bool export_chroma_strength = false;
+    uint16_t* chroma_strength_rgba16ui = nullptr;
 };
 
 /** Returns 0 on success, a negative stage code otherwise. */
