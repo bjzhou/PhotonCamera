@@ -4,7 +4,7 @@ import android.content.Context
 import android.opengl.GLES30
 import android.util.Half
 import com.hinnka.mycamera.processor.DenoiseStrength
-import com.hinnka.mycamera.raw.GlesMgcChromaDenoise
+import com.hinnka.mycamera.raw.GlesMgcDenoise
 import com.hinnka.mycamera.raw.MgcBitmapNoiseModel
 import com.hinnka.mycamera.raw.MgcFullResolutionDenoise
 import com.hinnka.mycamera.raw.RawFloatTextureTransfer
@@ -12,8 +12,6 @@ import com.hinnka.mycamera.raw.RawFullscreenQuad
 import com.hinnka.mycamera.raw.RawGlesProgram
 import com.hinnka.mycamera.utils.PLog
 import kotlin.math.ceil
-import kotlin.math.min
-import kotlin.math.roundToInt
 
 /**
  * MGC luma/chroma denoise for ISP-rendered bitmaps on the caller's GL context.
@@ -26,20 +24,18 @@ import kotlin.math.roundToInt
  *     map lowers MGC's spatial strength (a Q8 noise scale), so Pecan and ChromaDenoise keep
  *     texture; in noise it stays 1. At low SNR structure cannot be told from noise and the map
  *     stays near 1;
- *  3. when luma denoise is enabled, tiles with [TILE_SUPPORT_PX] overlap are decoded to linear
- *     RGBA16F, luma-denoised by [MgcFullResolutionDenoise.denoiseLinearBitmap] and their cores
- *     written to a full linear image; when luma is off, the full image is decoded directly on GPU;
- *  4. when chroma denoise is enabled, [GlesMgcChromaDenoise] runs both the full-resolution chroma
- *     pyramid and GCam's 2^[LOW_FREQUENCY_LOG2] low-frequency chroma branch directly on the GPU;
- *  5. the linear result is encoded into the output, keeping source alpha.
+ *  3. the full image is decoded to linear RGBA16F on GPU and denoised in one unified
+ *     [GlesMgcDenoise] pass sequence (Pecan luma pyramid and/or full-resolution + 2^[LOW_FREQUENCY_LOG2]
+ *     low-frequency chroma pyramids, sharing YUV conversion and the GPU strength map);
+ *  4. the linear result is encoded into the output, keeping source alpha.
  */
 internal class BitmapMgcDenoiser {
     private val quad = RawFullscreenQuad()
     private val transfer = RawFloatTextureTransfer(RawFloatTextureTransfer.Layout.HALF)
-    private val mgcChromaDenoise = GlesMgcChromaDenoise()
+    private val mgcDenoise = GlesMgcDenoise()
     private val programs = HashMap<String, Int>()
 
-    /** An immutable RGBA16F texture with its framebuffer (the transfer's upload requires immutability). */
+    /** An immutable RGBA16F texture with its framebuffer (the transfer's read requires immutability). */
     private class Surface(val label: String) {
         var texture = 0
         var framebuffer = 0
@@ -48,28 +44,13 @@ internal class BitmapMgcDenoiser {
     }
 
     private val linear = Surface("bitmap MGC linear")
-    private val chromaLinear = Surface("bitmap MGC chroma linear")
+    private val denoisedLinear = Surface("bitmap MGC denoised linear")
     private val output = Surface("bitmap MGC output")
-    private val tile = Surface("bitmap MGC tile")
     private val half = Surface("bitmap MGC half")
     private val quarter = Surface("bitmap MGC quarter")
     private val map = Surface("bitmap MGC detail map")
     private val mean = Surface("bitmap MGC mean")
     private val outputTexture get() = output.texture
-
-    private data class Tile(
-        val coreLeft: Int,
-        val coreTop: Int,
-        val coreRight: Int,
-        val coreBottom: Int,
-        val workLeft: Int,
-        val workTop: Int,
-        val workRight: Int,
-        val workBottom: Int,
-    ) {
-        val workWidth get() = workRight - workLeft
-        val workHeight get() = workBottom - workTop
-    }
 
     /**
      * Returns a texture owned by this denoiser holding the denoised, re-encoded image, or
@@ -90,105 +71,46 @@ internal class BitmapMgcDenoiser {
         if (luma <= 0f && chroma <= 0f) return sourceTextureId
         require(width > 0 && height > 0)
         check(MgcFullResolutionDenoise.ensureInitialized(context)) {
-            "MGC RunFullResolutionDenoise is not initialized"
+            "MGC denoise tuning is unavailable"
         }
         val startNs = System.nanoTime()
         ensureFullTextures(width, height)
         val noiseModel = MgcBitmapNoiseModel.forIso(sensorIso)
         val snr = noiseModel.tuningSnr(meanLinearLuma(sourceTextureId, width, height))
-        val strengthMap = detailStrengthMap(sourceTextureId, width, height, noiseModel)
-        val tileCount: Int
-        if (luma > 0f) {
-            val tiles = planTiles(width, height)
-            tileCount = tiles.size
-            val maxWorkWidth = tiles.maxOf { it.workWidth }
-            val maxWorkHeight = tiles.maxOf { it.workHeight }
-            ensureTile(maxWorkWidth, maxWorkHeight)
-            try {
-                transfer.prepare(maxWorkWidth, maxWorkHeight)
-                for (tile in tiles) {
-                    decodeTile(sourceTextureId, tile)
-                    var succeeded = false
-                    transfer.read(
-                        texture = this.tile.texture,
-                        width = tile.workWidth,
-                        height = tile.workHeight,
-                        capacityPixels = maxWorkWidth.toLong() * maxWorkHeight,
-                        label = "MGC bitmap tile",
-                    ) { mapped ->
-                        succeeded = MgcFullResolutionDenoise.denoiseLinearBitmap(
-                            rgba16f = mapped,
-                            width = tile.workWidth,
-                            height = tile.workHeight,
-                            globalOriginX = tile.workLeft,
-                            globalOriginY = tile.workTop,
-                            fullWidth = width,
-                            fullHeight = height,
-                            noiseModel = noiseModel.denoiserModel,
-                            spatialStrengthQ8 = strengthMap,
-                            tuningSnr = snr,
-                            lumaStrengthScale = luma,
-                            chromaStrengthScale = 0f,
-                        )
-                    }
-                    check(succeeded) { "MGC bitmap denoise failed for tile $tile of ${width}x$height" }
-                    GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, 0)
-                    transfer.upload(this.tile.texture, tile.workWidth, tile.workHeight)
-                    copyTileCore(tile)
-                }
-            } finally {
-                transfer.releaseBuffers()
-            }
-        } else {
-            tileCount = 0
-            decodeFull(sourceTextureId, width, height)
-        }
-        val finalLinearTexture = if (chroma > 0f) {
-            val chromaConfig = checkNotNull(
-                MgcFullResolutionDenoise.prepareBitmapChromaConfig(
-                    fullWidth = width,
-                    fullHeight = height,
-                    lowFrequencyLog2 = LOW_FREQUENCY_LOG2,
-                    noiseModel = noiseModel.denoiserModel,
-                    spatialStrengthQ8 = strengthMap,
-                    tuningSnr = snr,
-                    chromaStrengthScale = chroma,
-                ),
-            ) { "MGC bitmap chroma config failed for ${width}x$height" }
-            ensureSurface(chromaLinear, width, height)
-            mgcChromaDenoise.render(
-                source = linear.texture,
-                target = chromaLinear.texture,
-                width = width,
-                height = height,
-                globalOriginX = 0,
-                globalOriginY = 0,
+        renderDetailStrengthMap(sourceTextureId, width, height, noiseModel)
+        decodeFull(sourceTextureId, width, height)
+        val denoiseConfig = checkNotNull(
+            MgcFullResolutionDenoise.prepareBitmapGpuDenoiseConfig(
                 fullWidth = width,
                 fullHeight = height,
-                whiteBalance = chromaConfig.whiteBalance,
-                q14Noise = chromaConfig.q14Noise,
-                responseOffset = chromaConfig.responseOffset,
-                responseCosineOffset = chromaConfig.responseCosineOffset,
-                chromaStrength = chromaConfig.chromaStrength,
-                chromaOutlier = chromaConfig.chromaOutlier,
-                lowFrequencyLog2 = chromaConfig.lowFrequencyLog2,
-                chromaMedianFilterType = chromaConfig.chromaMedianFilterType,
-                spatialStrengthQ8 = chromaConfig.spatialStrengthQ8,
-                spatialStrengthWidth = chromaConfig.spatialStrengthWidth,
-                spatialStrengthHeight = chromaConfig.spatialStrengthHeight,
-            )
-            chromaLinear.texture
-        } else {
-            linear.texture
-        }
-        encodeOutput(sourceTextureId, finalLinearTexture, width, height)
+                lowFrequencyLog2 = LOW_FREQUENCY_LOG2,
+                noiseModel = noiseModel.denoiserModel,
+                spatialStrengthQ8 = null,
+                tuningSnr = snr,
+                lumaStrengthScale = luma,
+                chromaStrengthScale = chroma,
+            ),
+        ) { "MGC bitmap GPU denoise config failed for ${width}x$height" }
+        mgcDenoise.render(
+            source = linear.texture,
+            target = denoisedLinear.texture,
+            width = width,
+            height = height,
+            globalOriginX = 0,
+            globalOriginY = 0,
+            fullWidth = width,
+            fullHeight = height,
+            config = denoiseConfig,
+            bitmapStrengthTexture = map.texture,
+        )
+        encodeOutput(sourceTextureId, denoisedLinear.texture, width, height)
         GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, 0)
         RawGlesProgram.logErrors("BitmapMgcDenoiser")
         PLog.i(
             TAG,
-            "MGC bitmap denoise ${width}x$height tiles=$tileCount iso=$sensorIso " +
+            "MGC bitmap GPU denoise ${width}x$height iso=$sensorIso " +
                 "modelIso=${noiseModel.iso} snr=$snr luma=$luma chroma=$chroma " +
-                "detailMap=${strengthMap.averageQ8()} lowFrequency=${chroma > 0f} " +
+                "lowFrequency=${chroma > 0f} " +
                 "took=${(System.nanoTime() - startNs) / 1_000_000}ms",
         )
         return outputTexture
@@ -197,36 +119,9 @@ internal class BitmapMgcDenoiser {
     fun release() {
         programs.values.forEach { program -> if (program != 0) GLES30.glDeleteProgram(program) }
         programs.clear()
-        mgcChromaDenoise.release()
-        listOf(linear, chromaLinear, output, tile, half, quarter, map, mean).forEach(::releaseSurface)
+        mgcDenoise.release()
+        listOf(linear, denoisedLinear, output, half, quarter, map, mean).forEach(::releaseSurface)
         transfer.release()
-    }
-
-    private fun planTiles(width: Int, height: Int): List<Tile> {
-        val columns = ceil(width / TILE_CORE_PX.toDouble()).toInt()
-        val rows = ceil(height / TILE_CORE_PX.toDouble()).toInt()
-        return buildList {
-            for (row in 0 until rows) {
-                val coreTop = row * height / rows
-                val coreBottom = (row + 1) * height / rows
-                for (column in 0 until columns) {
-                    val coreLeft = column * width / columns
-                    val coreRight = (column + 1) * width / columns
-                    add(
-                        Tile(
-                            coreLeft = coreLeft,
-                            coreTop = coreTop,
-                            coreRight = coreRight,
-                            coreBottom = coreBottom,
-                            workLeft = (coreLeft - TILE_SUPPORT_PX).coerceAtLeast(0),
-                            workTop = (coreTop - TILE_SUPPORT_PX).coerceAtLeast(0),
-                            workRight = min(coreRight + TILE_SUPPORT_PX, width),
-                            workBottom = min(coreBottom + TILE_SUPPORT_PX, height),
-                        ),
-                    )
-                }
-            }
-        }
     }
 
     /** Mean linear MGC luma of the whole image: a GPU cell reduction read back as halves. */
@@ -256,16 +151,16 @@ internal class BitmapMgcDenoiser {
     }
 
     /**
-     * Q8 spatial strength over the ((width + 3) / 4) x ((height + 3) / 4) grid MGC expects:
-     * 256 where the local luma variance is explained by noise, down to [DETAIL_MIN_STRENGTH] where
-     * structure exceeds it by [DETAIL_HIGH_EXCESS] at both the 2x and 4x box scales.
+     * Renders the detail scale over the quarter-resolution grid. The MGC strength pass smooths
+     * it and converts it to Q8. Values range from 1 where noise explains the local luma variance
+     * to [DETAIL_MIN_STRENGTH] where structure dominates at both the 2x and 4x box scales.
      */
-    private fun detailStrengthMap(
+    private fun renderDetailStrengthMap(
         sourceTextureId: Int,
         width: Int,
         height: Int,
         model: MgcBitmapNoiseModel.Calibration,
-    ): ShortArray {
+    ) {
         val halfWidth = (width + 1) / 2
         val halfHeight = (height + 1) / 2
         val gridWidth = (width + 3) / 4
@@ -303,46 +198,12 @@ internal class BitmapMgcDenoiser {
                 kotlin.math.ln(DETAIL_HIGH_EXCESS),
             )
         }
-        val strength = FloatArray(gridWidth * gridHeight)
-        readHalves(map, "MGC bitmap detail map") { halves ->
-            for (index in strength.indices) strength[index] = Half.toFloat(halves.get(index * 4))
-        }
-        // 3x3 box with edge clamp: no block-shaped steps between neighbouring map cells.
-        return ShortArray(strength.size) { index ->
-            val x = index % gridWidth
-            val y = index / gridWidth
-            var sum = 0f
-            for (dy in -1..1) {
-                val yy = (y + dy).coerceIn(0, gridHeight - 1)
-                for (dx in -1..1) {
-                    sum += strength[yy * gridWidth + (x + dx).coerceIn(0, gridWidth - 1)]
-                }
-            }
-            (sum / 9f * 256f).roundToInt().coerceIn(0, 256).toShort()
-        }
     }
 
     private fun decodeFull(sourceTextureId: Int, width: Int, height: Int) {
         draw("decode", DECODE_SHADER, linear, 0, 0, width, height) { program ->
             bindTexture(program, "uSource", 0, sourceTextureId)
             GLES30.glUniform2i(location(program, "uSourceOffset"), 0, 0)
-        }
-    }
-
-    private fun decodeTile(sourceTextureId: Int, tile: Tile) {
-        draw("decode", DECODE_SHADER, this.tile, 0, 0, tile.workWidth, tile.workHeight) { program ->
-            bindTexture(program, "uSource", 0, sourceTextureId)
-            GLES30.glUniform2i(location(program, "uSourceOffset"), tile.workLeft, tile.workTop)
-        }
-    }
-
-    private fun copyTileCore(tile: Tile) {
-        draw(
-            "copyCore", COPY_CORE_SHADER, linear,
-            tile.coreLeft, tile.coreTop, tile.coreRight - tile.coreLeft, tile.coreBottom - tile.coreTop,
-        ) { program ->
-            bindTexture(program, "uTile", 0, this.tile.texture)
-            GLES30.glUniform2i(location(program, "uTileOrigin"), tile.workLeft, tile.workTop)
         }
     }
 
@@ -396,10 +257,9 @@ internal class BitmapMgcDenoiser {
 
     private fun ensureFullTextures(width: Int, height: Int) {
         ensureSurface(linear, width, height)
+        ensureSurface(denoisedLinear, width, height)
         ensureSurface(output, width, height)
     }
-
-    private fun ensureTile(width: Int, height: Int) = ensureSurface(tile, width, height)
 
     private fun ensureSurface(surface: Surface, width: Int, height: Int) {
         if (surface.texture != 0 && surface.width == width && surface.height == height) return
@@ -438,15 +298,8 @@ internal class BitmapMgcDenoiser {
         surface.height = 0
     }
 
-    private fun ShortArray.averageQ8(): String =
-        "%.3f".format(if (isEmpty()) 1.0 else sumOf { it.toInt() } / (size * 256.0))
-
     companion object {
         private const val TAG = "BitmapMgcDenoiser"
-        /** Tile core edge; with its apron a tile stays near 2.3k px (about 40 MiB of PBO). */
-        private const val TILE_CORE_PX = 2048
-        /** MGC pyramid reach, the same apron RAW tiles give the full-resolution denoise. */
-        private const val TILE_SUPPORT_PX = 112
         private const val MEAN_GRID = 64
         /** GCam's low-frequency chroma branch factor (2x): 4x drains small saturated detail. */
         private const val LOW_FREQUENCY_LOG2 = 1
@@ -496,15 +349,6 @@ internal class BitmapMgcDenoiser {
             void main() {
                 ivec2 p = ivec2(gl_FragCoord.xy) + uSourceOffset;
                 fragColor = vec4(srgbDecode(texelFetch(uSource, p, 0).rgb), 1.0);
-            }
-        """.trimIndent()
-
-        private val COPY_CORE_SHADER = PREAMBLE + """
-            uniform highp sampler2D uTile;
-            uniform ivec2 uTileOrigin;
-
-            void main() {
-                fragColor = vec4(texelFetch(uTile, ivec2(gl_FragCoord.xy) - uTileOrigin, 0).rgb, 1.0);
             }
         """.trimIndent()
 

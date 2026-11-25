@@ -6,9 +6,10 @@ package com.hinnka.mycamera.raw
  * with the surrounding YUV conversion, strength map, box downsample, chroma median filter and
  * low-frequency correction passes.
  *
- * The core pyramid passes (`downsample`, `reconstruct`, `blf`) operate in signed 16-bit integer
- * Q14 YUV packed into `RGBA16I` (`ivec4(Y, Cb, Cr, 0)`) and match the original ARM64 Halide AOT
- * bit-for-bit, verified by `tools/mgc_chroma_denoise`.
+ * The core pyramid operates on signed Q14 YUV in `RGBA16I` and stores coarse UV corrections
+ * in `RG16I`. The final low-frequency correction uses `RG32I` to preserve the full difference
+ * between two signed 16-bit samples. The output matches the original ARM64 Halide AOT in
+ * the core comparisons in `tools/mgc_chroma_denoise`.
  */
 internal object GlesMgcChromaDenoiseShaders {
     const val RECON_HALO = 3
@@ -23,28 +24,33 @@ internal object GlesMgcChromaDenoiseShaders {
         precision highp usampler2D;
     """.trimIndent()
 
+    private val rgbToQ14Yuv = """
+        ivec3 rgbToQ14Yuv(vec3 source, vec3 whiteBalance) {
+            vec3 rgb = clamp(max(source, vec3(0.0)) * whiteBalance, 0.0, 1.0);
+            vec3 scaled = rgb * 16383.0;
+            vec3 whole = floor(scaled);
+            ivec3 q14 = ivec3(whole + step(vec3(0.5), scaled - whole));
+            // RgbRawToYuv1xS16 uses a Q13 matrix and SQRSHRN #13.
+            ivec3 sum = ivec3(1742, -1331, 8192) * q14.r
+                + ivec3(5859, -4477, -7441) * q14.g
+                + ivec3(591, 5808, -751) * q14.b;
+            return (sum + ivec3(4096)) >> 13;
+        }
+    """.trimIndent()
+
     /**
      * Converts white-balanced linear camera RGB (`RGBA16F`) to padded Q14 S16 YUV (`RGBA16I`),
      * replicating source borders into the alignment padding.
      */
-    val rgbToYuvShader = join(header, """
+    val rgbToYuvShader = join(header, rgbToQ14Yuv, """
         uniform highp sampler2D uSource;
         uniform ivec2 uSourceMax;
         uniform vec3 uWhiteBalance;
         layout(location = 0) out ivec4 oYuv;
 
-        const vec3 Y_ROW = vec3(0.2125999927520752, 0.7152000069618225, 0.07219959795475006);
-        const vec3 U_ROW = vec3(-0.16245023906230927, -0.5464943051338196, 0.7089447379112244);
-        const vec3 V_ROW = vec3(0.9999967217445374, -0.9083024859428406, -0.09169333428144455);
-
         void main() {
             ivec2 p = min(ivec2(gl_FragCoord.xy), uSourceMax);
-            vec3 rgb = clamp(max(texelFetch(uSource, p, 0).rgb, vec3(0.0)) * uWhiteBalance, 0.0, 1.0);
-            vec3 q14 = round(rgb * 16383.0);
-            int y = clamp(int(round(dot(q14, Y_ROW))), -32768, 32767);
-            int u = clamp(int(round(dot(q14, U_ROW))), -32768, 32767);
-            int v = clamp(int(round(dot(q14, V_ROW))), -32768, 32767);
-            oYuv = ivec4(y, u, v, 0);
+            oYuv = ivec4(rgbToQ14Yuv(texelFetch(uSource, p, 0).rgb, uWhiteBalance), 0);
         }
     """.trimIndent())
 
@@ -89,36 +95,10 @@ internal object GlesMgcChromaDenoiseShaders {
             vec4 gains = mix(mix(c00, c10, f.x), mix(c01, c11, f.x), f.y);
             float lumaGain = 0.2126 * gains.r + 0.3576 * (gains.g + gains.b) + 0.0722 * gains.a;
             float s = float(baseStrength);
-            uint s1 = uint(clamp(round(s * lumaGain), 0.0, 65535.0));
-            uint s2 = uint(clamp(round(s * lumaGain * lumaGain), 0.0, 65535.0));
+            float lumaGainSquared = lumaGain * lumaGain;
+            uint s1 = uint(clamp(roundEven(s * lumaGain), 0.0, 65535.0));
+            uint s2 = uint(clamp(roundEven(s * lumaGainSquared), 0.0, 65535.0));
             oStrength = uvec4(baseStrength, s1, s2, 0u);
-        }
-    """.trimIndent())
-
-    /**
-     * Packs 8 consecutive Q14 S16 Y samples per `RGBA32I` texel (2 little-endian int16s per int32)
-     * so `MeasureMoireS16` can read back only the 1-channel Y plane using GLES 3.0's mandatory
-     * `GL_RGBA_INTEGER + GL_INT` format.
-     */
-    val packYShader = join(header, """
-        uniform highp isampler2D uYuv;
-        layout(location = 0) out ivec4 oPacked;
-
-        int packPair(int x0, int y) {
-            int a = texelFetch(uYuv, ivec2(x0, y), 0).r;
-            int b = texelFetch(uYuv, ivec2(x0 + 1, y), 0).r;
-            return (a & 0xffff) | (b << 16);
-        }
-
-        void main() {
-            ivec2 p = ivec2(gl_FragCoord.xy);
-            int x = p.x * 8;
-            oPacked = ivec4(
-                packPair(x, p.y),
-                packPair(x + 2, p.y),
-                packPair(x + 4, p.y),
-                packPair(x + 6, p.y)
-            );
         }
     """.trimIndent())
 
@@ -160,34 +140,32 @@ internal object GlesMgcChromaDenoiseShaders {
 
     /**
      * `reconstructed` stage of `ChromaDenoisePyramidLevelS16Halide`:
-     * adds `[9, 3, 3, 1] / 16` bilinearly upsampled `(prev_output - downsampled)` onto `input`
-     * over the padded `[-3, W+2] x [-3, H+2]` domain using exact NEON `sqsub`/`hadd`/`rhadd`/`sqadd`.
+     * Adds the `[9, 3, 3, 1] / 16` upsampled signed UV correction onto the input
+     * over the padded `[-3, W+2] x [-3, H+2]` domain. The coarse BLF already computed
+     * the saturated difference. Luma always passes through the chroma pyramid.
      */
     val reconstructShader = join(header, """
         uniform highp isampler2D uInput;
-        uniform highp isampler2D uDownsampled;
-        uniform highp isampler2D uPrevOutput;
+        uniform highp isampler2D uCorrection;
         uniform ivec2 uInputMax;
         uniform ivec2 uCoarseMax;
         layout(location = 0) out ivec4 oReconstructed;
 
-        ivec3 sat16(ivec3 v) {
-            return clamp(v, ivec3(-32768), ivec3(32767));
+        ivec2 sat16(ivec2 v) {
+            return clamp(v, ivec2(-32768), ivec2(32767));
         }
 
-        ivec3 hadd(ivec3 a, ivec3 b) {
+        ivec2 hadd(ivec2 a, ivec2 b) {
             return (a + b) >> 1;
         }
 
-        ivec3 rhadd(ivec3 a, ivec3 b) {
-            return (a + b + ivec3(1)) >> 1;
+        ivec2 rhadd(ivec2 a, ivec2 b) {
+            return (a + b + ivec2(1)) >> 1;
         }
 
-        ivec3 coarseDiff(int cx, int cy) {
+        ivec2 coarseDiff(int cx, int cy) {
             ivec2 q = clamp(ivec2(cx, cy), ivec2(0), uCoarseMax);
-            ivec3 prev = texelFetch(uPrevOutput, q, 0).rgb;
-            ivec3 down = texelFetch(uDownsampled, q, 0).rgb;
-            return sat16(prev - down);
+            return texelFetch(uCorrection, q, 0).rg;
         }
 
         void main() {
@@ -197,17 +175,17 @@ internal object GlesMgcChromaDenoiseShaders {
             int gy = g.y >> 1;
             int nx = (g.x & 1) == 0 ? (gx - 1) : (gx + 1);
             int ny = (g.y & 1) == 0 ? (gy - 1) : (gy + 1);
-            ivec3 a = coarseDiff(gx, gy);
-            ivec3 b = coarseDiff(nx, gy);
-            ivec3 c = coarseDiff(gx, ny);
-            ivec3 d = coarseDiff(nx, ny);
-            ivec3 m1 = hadd(c, b);
-            ivec3 m2 = rhadd(c, b);
-            ivec3 m3 = rhadd(a, d);
-            ivec3 m4 = rhadd(m1, m3);
-            ivec3 m5 = rhadd(m2, m4);
-            ivec3 up = hadd(a, m5);
-            oReconstructed = ivec4(sat16(inVal + up), 0);
+            ivec2 a = coarseDiff(gx, gy);
+            ivec2 b = coarseDiff(nx, gy);
+            ivec2 c = coarseDiff(gx, ny);
+            ivec2 d = coarseDiff(nx, ny);
+            ivec2 m1 = hadd(c, b);
+            ivec2 m2 = rhadd(c, b);
+            ivec2 m3 = rhadd(a, d);
+            ivec2 m4 = rhadd(m1, m3);
+            ivec2 m5 = rhadd(m2, m4);
+            ivec2 up = hadd(a, m5);
+            oReconstructed = ivec4(inVal.r, sat16(ivec2(inVal.g, inVal.b) + up), 0);
         }
     """.trimIndent())
 
@@ -219,6 +197,7 @@ internal object GlesMgcChromaDenoiseShaders {
      */
     val blfShader = join(header, """
         uniform highp isampler2D uSrc;
+        uniform highp isampler2D uReference;
         uniform highp usampler2D uStrength;
         uniform ivec2 uSrcOrigin;
         uniform ivec2 uDstOrigin;
@@ -232,6 +211,7 @@ internal object GlesMgcChromaDenoiseShaders {
         uniform int uQuadCoeff;
         uniform uvec2 uScaleUV;
         uniform uint uOutlierThreshold;
+        uniform int uOutputMode;
         layout(location = 0) out ivec4 oBlf;
 
         const uint RECIP_LUT[16] = uint[16](
@@ -272,6 +252,18 @@ internal object GlesMgcChromaDenoiseShaders {
             return texelFetch(uSrc, q, 0).rgb;
         }
 
+        void accumulateTap(ivec3 center, ivec3 sampleValue, int threshold, int weight,
+                inout ivec3 tight, inout ivec3 loose) {
+            ivec3 delta = abs(center - sampleValue);
+            uint dY = min(uint(delta.r), 37837u);
+            uint dU = min((uint(delta.g) * uScaleUV.x) >> 8u, 37837u);
+            uint dV = min((uint(delta.b) * uScaleUV.y) >> 8u, 37837u);
+            uint dist2 = dY * dY + dU * dU + dV * dV;
+            ivec3 weighted = weight * ivec3(sampleValue.g, sampleValue.b, 1);
+            if (int(dist2) <= threshold) tight += weighted;
+            if (int(dist2 >> 2u) <= threshold) loose += weighted;
+        }
+
         void main() {
             ivec2 g = ivec2(gl_FragCoord.xy) + uDstOrigin;
             ivec2 sc = clamp(
@@ -292,50 +284,32 @@ internal object GlesMgcChromaDenoiseShaders {
             int termQuad = int(uint(quadY2) * strength.r) >> 8;
             int threshold = satAdd32(satAdd32(termRead, termShot), termQuad);
 
-            int sumU1 = 0;
-            int sumV1 = 0;
-            int sumU2 = 0;
-            int sumV2 = 0;
-            uint w1 = 0u;
-            uint w2 = 0u;
+            // The center has zero distance and is already loaded for the noise threshold.
+            ivec3 tight = threshold >= 0 ? 4 * ivec3(center.g, center.b, 1) : ivec3(0);
+            ivec3 loose = tight;
+            int d = uStep;
+            accumulateTap(center, fetchSrc(g + ivec2(-d, -d)), threshold, 1, tight, loose);
+            accumulateTap(center, fetchSrc(g + ivec2(0, -d)), threshold, 2, tight, loose);
+            accumulateTap(center, fetchSrc(g + ivec2(d, -d)), threshold, 1, tight, loose);
+            accumulateTap(center, fetchSrc(g + ivec2(-d, 0)), threshold, 2, tight, loose);
+            accumulateTap(center, fetchSrc(g + ivec2(d, 0)), threshold, 2, tight, loose);
+            accumulateTap(center, fetchSrc(g + ivec2(-d, d)), threshold, 1, tight, loose);
+            accumulateTap(center, fetchSrc(g + ivec2(0, d)), threshold, 2, tight, loose);
+            accumulateTap(center, fetchSrc(g + ivec2(d, d)), threshold, 1, tight, loose);
 
-            for (int iy = -1; iy <= 1; ++iy) {
-                int dy = iy * uStep;
-                int wy = (iy == 0) ? 2 : 1;
-                for (int ix = -1; ix <= 1; ++ix) {
-                    int dx = ix * uStep;
-                    int wx = (ix == 0) ? 2 : 1;
-                    int wsp = wx * wy;
-                    uint uwsp = uint(wsp);
-
-                    ivec3 n = fetchSrc(g + ivec2(dx, dy));
-                    uint dY = min(uint(abs(center.r - n.r)), 37837u);
-                    uint dU = min((uint(abs(center.g - n.g)) * uScaleUV.x) >> 8u, 37837u);
-                    uint dV = min((uint(abs(center.b - n.b)) * uScaleUV.y) >> 8u, 37837u);
-                    uint dist2 = dY * dY + dU * dU + dV * dV;
-
-                    if (int(dist2) <= threshold) {
-                        w1 += uwsp;
-                        sumU1 += n.g * wsp;
-                        sumV1 += n.b * wsp;
-                    }
-                    if (int(dist2 >> 2u) <= threshold) {
-                        w2 += uwsp;
-                        sumU2 += n.g * wsp;
-                        sumV2 += n.b * wsp;
-                    }
+            ivec3 selected = uint(tight.b) > uOutlierThreshold ? tight : loose;
+            int inv = int(RECIP_LUT[clamp(selected.b, 1, 16) - 1]);
+            ivec2 sum = ivec2(selected.r, selected.g);
+            ivec2 filtered = clamp((sum * inv + ivec2(16384)) >> 15, ivec2(-32768), ivec2(32767));
+            if (uOutputMode == 0) {
+                oBlf = ivec4(center.r, filtered, 0);
+            } else {
+                ivec2 correction = filtered - texelFetch(uReference, g, 0).gb;
+                if (uOutputMode == 1) {
+                    correction = clamp(correction, ivec2(-32768), ivec2(32767));
                 }
+                oBlf = ivec4(correction, 0, 0);
             }
-
-            bool use1 = w1 > uOutlierThreshold;
-            uint wSel = use1 ? w1 : w2;
-            uint wClamped = max(min(wSel, 16u), 1u);
-            int inv = int(RECIP_LUT[wClamped - 1u]);
-            int su = use1 ? sumU1 : sumU2;
-            int sv = use1 ? sumV1 : sumV2;
-            int outU = clamp((su * inv + 16384) >> 15, -32768, 32767);
-            int outV = clamp((sv * inv + 16384) >> 15, -32768, 32767);
-            oBlf = ivec4(center.r, outU, outV, 0);
         }
     """.trimIndent())
 
@@ -345,6 +319,7 @@ internal object GlesMgcChromaDenoiseShaders {
      */
     val boxDownsampleShader = join(header, """
         uniform highp isampler2D uInput;
+        uniform ivec2 uInputMax;
         uniform int uLog2Factor;
         layout(location = 0) out ivec4 oBox;
 
@@ -352,7 +327,7 @@ internal object GlesMgcChromaDenoiseShaders {
             int factor = 1 << uLog2Factor;
             int shift = 2 * uLog2Factor;
             int rounding = 1 << (shift - 1);
-            ivec2 origin = ivec2(gl_FragCoord.xy) * factor;
+            ivec2 origin = min(ivec2(gl_FragCoord.xy), uInputMax) * factor;
             ivec3 sum = ivec3(0);
             for (int dy = 0; dy < factor; ++dy) {
                 for (int dx = 0; dx < factor; ++dx) {
@@ -404,7 +379,7 @@ internal object GlesMgcChromaDenoiseShaders {
         }
 
         void main() {
-            ivec2 p = ivec2(gl_FragCoord.xy);
+            ivec2 p = min(ivec2(gl_FragCoord.xy), uMax);
             ivec3 c = texelFetch(uInput, p, 0).rgb;
             int xm = max(p.x - 1, 0);
             int xp = min(p.x + 1, uMax.x);
@@ -462,47 +437,52 @@ internal object GlesMgcChromaDenoiseShaders {
     """.trimIndent())
 
     /**
-     * Applies the full-resolution chroma change (plus optional bilinearly upsampled low-frequency
-     * chroma correction) onto the linear camera RGB source texture (`RGBA16F`), leaving luma and
-     * extended-range highlights untouched.
+     * Applies the full-resolution luma and/or chroma change (plus optional bilinearly upsampled
+     * low-frequency chroma correction) onto the linear camera RGB source texture (`RGBA16F`),
+     * leaving untouched channels and extended-range highlights intact.
      */
-    val applyChromaDeltaShader = join(header, """
+    val applyDenoiseDeltaShader = join(header, rgbToQ14Yuv, """
         uniform highp sampler2D uSource;
-        uniform highp isampler2D uInitYuv;
-        uniform highp isampler2D uDenoisedYuv;
-        uniform highp isampler2D uLowInput;
-        uniform highp isampler2D uLowOutput;
+        uniform highp isampler2D uFinalYuv;
+        uniform highp isampler2D uLowCorrection;
+        uniform int uApplyLuma;
+        uniform int uApplyChroma;
         uniform int uApplyLowFreq;
         uniform ivec2 uLowMax;
         uniform float uLowFactor;
+        uniform vec3 uWhiteBalance;
         uniform vec3 uInvWhiteBalance;
         layout(location = 0) out vec4 oColor;
 
         void main() {
             ivec2 p = ivec2(gl_FragCoord.xy);
             vec4 src = texelFetch(uSource, p, 0);
-            ivec2 initUv = texelFetch(uInitYuv, p, 0).gb;
-            ivec2 denUv = texelFetch(uDenoisedYuv, p, 0).gb;
-            vec2 finalUv = vec2(denUv);
-            if (uApplyLowFreq != 0) {
-                vec2 l = clamp((vec2(p) + 0.5) / uLowFactor - 0.5, vec2(0.0), vec2(uLowMax));
-                ivec2 p0 = ivec2(l);
-                ivec2 p1 = min(p0 + ivec2(1), uLowMax);
-                vec2 f = l - vec2(p0);
-                vec2 d00 = vec2(texelFetch(uLowOutput, p0, 0).gb - texelFetch(uLowInput, p0, 0).gb);
-                vec2 d10 = vec2(texelFetch(uLowOutput, ivec2(p1.x, p0.y), 0).gb
-                    - texelFetch(uLowInput, ivec2(p1.x, p0.y), 0).gb);
-                vec2 d01 = vec2(texelFetch(uLowOutput, ivec2(p0.x, p1.y), 0).gb
-                    - texelFetch(uLowInput, ivec2(p0.x, p1.y), 0).gb);
-                vec2 d11 = vec2(texelFetch(uLowOutput, p1, 0).gb - texelFetch(uLowInput, p1, 0).gb);
-                vec2 corr = mix(mix(d00, d10, f.x), mix(d01, d11, f.x), f.y);
-                finalUv = roundEven(clamp(finalUv + corr, vec2(-32768.0), vec2(32767.0)));
+            ivec3 initYuv = rgbToQ14Yuv(src.rgb, uWhiteBalance);
+            ivec3 finalYuv = texelFetch(uFinalYuv, p, 0).rgb;
+            float deltaY = (uApplyLuma != 0)
+                ? float(finalYuv.r - initYuv.r) * (1.0 / 16383.0)
+                : 0.0;
+            vec2 deltaUv = vec2(0.0);
+            if (uApplyChroma != 0) {
+                vec2 finalUv = vec2(finalYuv.gb);
+                if (uApplyLowFreq != 0) {
+                    vec2 l = clamp((vec2(p) + 0.5) / uLowFactor - 0.5, vec2(0.0), vec2(uLowMax));
+                    ivec2 p0 = ivec2(l);
+                    ivec2 p1 = min(p0 + ivec2(1), uLowMax);
+                    vec2 f = l - vec2(p0);
+                    vec2 d00 = vec2(texelFetch(uLowCorrection, p0, 0).rg);
+                    vec2 d10 = vec2(texelFetch(uLowCorrection, ivec2(p1.x, p0.y), 0).rg);
+                    vec2 d01 = vec2(texelFetch(uLowCorrection, ivec2(p0.x, p1.y), 0).rg);
+                    vec2 d11 = vec2(texelFetch(uLowCorrection, p1, 0).rg);
+                    vec2 corr = mix(mix(d00, d10, f.x), mix(d01, d11, f.x), f.y);
+                    finalUv = roundEven(clamp(finalUv + corr, vec2(-32768.0), vec2(32767.0)));
+                }
+                deltaUv = (finalUv - vec2(initYuv.gb)) * (1.0 / 16383.0);
             }
-            vec2 deltaUv = (finalUv - vec2(initUv)) * (1.0 / 16383.0);
             vec3 deltaRgb = vec3(
-                0.787402654 * deltaUv.y,
-                -0.132114176 * deltaUv.x - 0.234062875 * deltaUv.y,
-                1.308706174 * deltaUv.x
+                deltaY + 0.787402654 * deltaUv.y,
+                deltaY - 0.132114176 * deltaUv.x - 0.234062875 * deltaUv.y,
+                deltaY + 1.308706174 * deltaUv.x
             );
             oColor = vec4(src.rgb + deltaRgb * uInvWhiteBalance, src.a);
         }

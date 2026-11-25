@@ -21,6 +21,7 @@ import com.hinnka.mycamera.utils.LargeDirectBuffer
 import com.hinnka.mycamera.utils.PLog
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
+import java.nio.FloatBuffer
 import kotlin.math.ceil
 import kotlin.math.exp
 import kotlin.math.max
@@ -168,7 +169,7 @@ internal class GlesMgcRawSpatialStacker(
         val gpuTexture: Int,
         val completionTimeline: GpuStackCompletionTimeline?,
         /** Null when the merge feeds no multi-frame Spatial noise model. */
-        val strengthReadback: QueuedStrengthReadback?,
+        val strengthReadback: SpatialNoiseReadback?,
     )
 
     private data class TextureSpec(
@@ -287,51 +288,13 @@ internal class GlesMgcRawSpatialStacker(
         val rejectionHeight: Int get() = geometry.rejectionHeight
     }
 
-    private data class PixelPackBuffer(
+    private data class SpatialNoiseReadback(
         val buffer: Int,
         val byteCount: Int,
+        val width: Int,
+        val height: Int,
+        val packedWidth: Int,
     )
-
-    private data class QueuedTextureReadback(
-        val storage: PixelPackBuffer,
-        val mode: String,
-        val targetBindMs: Long,
-        val readSubmitMs: Long,
-        val totalSubmitMs: Long,
-    )
-
-    private data class QueuedStrengthReadback(
-        val alignment: PreparedTextureReadback,
-        val rejection: PreparedTextureReadback,
-        val fusedFixed16: PreparedTextureReadback,
-        val fusedFixed16PrepareSubmitMs: Long,
-    )
-
-    private data class PreparedTextureReadback(
-        val byteCount: Int,
-        val queuedGpuReadback: QueuedTextureReadback?,
-        val cpuBuffer: ByteBuffer?,
-        val mode: String,
-        val targetBindMs: Long,
-        val readSubmitMs: Long,
-        val totalSubmitMs: Long,
-    ) {
-        init {
-            require(byteCount > 0)
-            require((queuedGpuReadback == null) != (cpuBuffer == null)) {
-                "Fixed16 readback must own exactly one GPU or CPU storage"
-            }
-            require(queuedGpuReadback?.storage?.byteCount == null ||
-                queuedGpuReadback.storage.byteCount == byteCount)
-            require(cpuBuffer?.capacity() == null || cpuBuffer.capacity() >= byteCount)
-        }
-    }
-
-    private enum class StrengthReadbackEncoding {
-        FLOAT32,
-        UNORM8,
-        SINT16,
-    }
 
     private data class BayerKernelTuning(
         val referenceSignal: Float,
@@ -492,9 +455,12 @@ internal class GlesMgcRawSpatialStacker(
     private var rgbOutputAssembler: GlesMgcSpatialRgbOutputAssembler? = null
     private var packBayerFixed16Program = 0
     private var packRgbFixed16Program = 0
-    private var strengthFloatPackProgram = 0
-    private var strengthUnorm8PackProgram = 0
-    private var strengthSint16PackProgram = 0
+    private var spatialNoiseSignalProgram = 0
+    private var spatialNoiseFootprintsProgram = 0
+    private var spatialNoiseMomentsProgram = 0
+    private var spatialNoiseReductionProgram = 0
+    private var spatialNoiseStrengthProgram = 0
+    private var spatialNoisePackProgram = 0
     private var hotPixelDetectProgram = 0
     private var hotPixelResolveProgram = 0
     private var hotPixelSuppressProgram = 0
@@ -1806,14 +1772,14 @@ internal class GlesMgcRawSpatialStacker(
                         "expected=${capture.frameCount}"
                 }
             }
-            var strengthQueueElapsedMs = 0L
             var queuedStrengthReadback = if (
                 readyStrengthCapture?.outputMode == MgcSpatialOutputMode.BAYER
             ) {
-                val startNs = System.nanoTime()
-                queueStrengthReadback(readyStrengthCapture, accumulatorColor).also {
-                    strengthQueueElapsedMs = (System.nanoTime() - startNs) / 1_000_000L
-                }
+                val geometry = readyStrengthCapture.geometry
+                val layout = MgcSpatialStrengthAtlasLayout(
+                    geometry.fixed16Width, geometry.fixed16Height, planeCount = 4, columns = 1,
+                )
+                queueSpatialNoise(readyStrengthCapture, renderBayerFixed16Planes(accumulatorColor), layout)
             } else {
                 null
             }
@@ -1884,27 +1850,6 @@ internal class GlesMgcRawSpatialStacker(
                 }
                 lensShadingCorrectionApplied = false
             }
-            if (queuedStrengthReadback != null) {
-                PLog.i(
-                    TAG,
-                    "MGC Spatial strength readback queued mode=${outputMode.name} bytes=" +
-                        "${queuedStrengthReadback.alignment.byteCount.toLong() +
-                            queuedStrengthReadback.rejection.byteCount.toLong() +
-                            queuedStrengthReadback.fusedFixed16.byteCount.toLong()} " +
-                        "fixed16PrepareSubmit=" +
-                        "${queuedStrengthReadback.fusedFixed16PrepareSubmitMs}ms " +
-                        "modes=${queuedStrengthReadback.alignment.mode}/" +
-                        "${queuedStrengthReadback.rejection.mode}/" +
-                        "${queuedStrengthReadback.fusedFixed16.mode} " +
-                        "alignmentSubmit=${queuedStrengthReadback.alignment.totalSubmitMs}ms " +
-                        "rejectionSubmit=${queuedStrengthReadback.rejection.totalSubmitMs}ms " +
-                        "fixed16Submit=${queuedStrengthReadback.fusedFixed16.totalSubmitMs}ms " +
-                        "enqueue=${strengthQueueElapsedMs}ms",
-                )
-            }
-            // Bayer queues all three diagnostics before output materialization. RGB packs the
-            // exact merged camera-RGB signal during tiled reconstruction, then queues the two
-            // matching RGB-resolution temporal atlases before resolving the RGB AOT.
             val strengthResolveStartNs = System.nanoTime()
             val spatialDenoiseEnabled =
                 MultiFrameConfig.ENABLE_MGC_SPATIAL_DEFAULT_DENOISE && !referenceOnly
@@ -1912,15 +1857,10 @@ internal class GlesMgcRawSpatialStacker(
                 if (spatialNoiseFrameCount == 1) {
                     createIdentitySpatialNoiseModel(referenceCalibration)
                 } else {
-                    val capture = checkNotNull(strengthCapture) {
-                        "MGC Spatial multi-frame noise capture is unavailable"
-                    }
                     val readback = checkNotNull(queuedStrengthReadback) {
                         "MGC Spatial multi-frame noise readback is unavailable"
                     }
-                    checkNotNull(resolveSpatialNoiseModel(capture, readback)) {
-                        "MGC Spatial multi-frame AOT noise model failed"
-                    }
+                    resolveSpatialNoise(readback)
                 }
             } else {
                 null
@@ -1973,7 +1913,7 @@ internal class GlesMgcRawSpatialStacker(
             if (spatialNoiseModel != null && denoiseModel != null) {
                 PLog.i(
                     TAG,
-                    "MGC Spatial denoise model aotMode=${outputMode.name} " +
+                    "MGC Spatial denoise model mode=${outputMode.name} " +
                         "captureFrames=${strengthCapture?.frameCount} " +
                         "diag0=${spatialNoiseModel.outputWeightsSumTotalDiag0.contentToString()} " +
                         "diag1=${spatialNoiseModel.outputWeightsSumTotalDiag1.contentToString()} " +
@@ -1983,7 +1923,7 @@ internal class GlesMgcRawSpatialStacker(
                         "read=${outputReadNoise?.contentToString()} " +
                         "shot=${outputShotNoise?.contentToString()} " +
                         "outputExposureScale=${outputExposure.normalizationScale} " +
-                        "strength=spatial-aot readback=atlas-pbo-deferred",
+                        "strength=spatial-gles readback=result-pbo-deferred",
                 )
             }
             checkGlError("MGC Spatial ${outputMode.name} merge")
@@ -3293,26 +3233,25 @@ internal class GlesMgcRawSpatialStacker(
             GlesMgcSpatialRgbMergeShaders.packFixed16,
             "mgc_spatial_rgb_fixed16",
         )
-        if (supportsComputeReadback) {
-            runCatching {
-                strengthFloatPackProgram = linkComputeProgram(
-                    MgcStrengthReadbackShaders.FLOAT32,
-                    "mgc_strength_pack_float32",
-                )
-                strengthUnorm8PackProgram = linkComputeProgram(
-                    MgcStrengthReadbackShaders.UNORM8,
-                    "mgc_strength_pack_unorm8",
-                )
-                strengthSint16PackProgram = linkComputeProgram(
-                    MgcStrengthReadbackShaders.SINT16,
-                    "mgc_strength_pack_sint16",
-                )
-            }.onFailure { error ->
-                strengthFloatPackProgram = 0
-                strengthUnorm8PackProgram = 0
-                strengthSint16PackProgram = 0
-                PLog.w(TAG, "MGC strength SSBO pack unavailable; using framebuffer readback", error)
-            }
+        if (MultiFrameConfig.ENABLE_MGC_SPATIAL_DEFAULT_DENOISE) {
+            spatialNoiseSignalProgram = linkProgram(
+                GlesMgcSpatialSignalShaders.downsample, "mgc_spatial_noise_signal",
+            )
+            spatialNoiseFootprintsProgram = linkProgram(
+                GlesMgcSpatialNoiseModelShaders.footprints, "mgc_spatial_noise_footprints",
+            )
+            spatialNoiseMomentsProgram = linkProgram(
+                GlesMgcSpatialNoiseModelShaders.moments, "mgc_spatial_noise_moments",
+            )
+            spatialNoiseReductionProgram = linkProgram(
+                GlesMgcSpatialNoiseReductionShaders.reduce, "mgc_spatial_noise_reduce",
+            )
+            spatialNoiseStrengthProgram = linkProgram(
+                GlesMgcSpatialNoiseStrengthShader.fragment, "mgc_spatial_noise_strength",
+            )
+            spatialNoisePackProgram = linkProgram(
+                GlesMgcSpatialNoiseReductionShaders.packStrength, "mgc_spatial_noise_pack",
+            )
         }
     }
 
@@ -5672,7 +5611,7 @@ internal class GlesMgcRawSpatialStacker(
 
     private fun createIdentitySpatialNoiseModel(
         referenceCalibration: FrameCalibration,
-    ): MgcSpatialStrengthMapGenerator.Result {
+    ): MgcSpatialNoiseStatistics {
         val geometry = mgcSpatialDiagnosticGeometry(
             outputMode = outputMode,
             imageWidth = width,
@@ -5685,7 +5624,7 @@ internal class GlesMgcRawSpatialStacker(
                 "strengthQ8=$SPATIAL_IDENTITY_STRENGTH_Q8 " +
                 "read=${noise.read.contentToString()} shot=${noise.shot.contentToString()}",
         )
-        return MgcSpatialStrengthMapGenerator.Result(
+        return MgcSpatialNoiseStatistics(
             strengthMap = MgcSpatialStrengthMap(
                 width = geometry.rejectionWidth,
                 height = geometry.rejectionHeight,
@@ -5700,647 +5639,320 @@ internal class GlesMgcRawSpatialStacker(
         )
     }
 
-    private fun queueStrengthReadback(
+    private fun queueSpatialNoise(
         capture: StrengthCapture,
-        accumulator: Int = 0,
-        preparedFusedFixed16: PreparedTextureReadback? = null,
-    ): QueuedStrengthReadback {
-        check(capture.captured.all { it }) {
-            "MGC Spatial noise capture incomplete: ${capture.captured.contentToString()}"
+        fixed16: Int,
+        fixed16Layout: MgcSpatialStrengthAtlasLayout,
+    ): SpatialNoiseReadback {
+        check(capture.captured.all { it }) { "Incomplete Spatial noise capture" }
+        if (RawStackRuntimeDebug.mgcSpatialInputDiagnosticsEnabled) {
+            logSpatialNoiseInputs(capture)
         }
-        val allocationStartNs = System.nanoTime()
-        val alignment = queuePreparedTextureReadback(
-                texture = capture.alignmentAtlas,
-                textureWidth = capture.alignmentLayout.atlasWidth,
-                textureHeight = capture.alignmentLayout.atlasHeight,
-                encoding = StrengthReadbackEncoding.FLOAT32,
-                byteCount = strengthAlignmentReadbackByteCount(capture),
-                label = "MGC Spatial strength alignment atlas",
-                atlasLayout = capture.alignmentLayout,
-            )
-        val rejection = queuePreparedTextureReadback(
-                texture = capture.rejectionAtlas,
-                textureWidth = capture.rejectionLayout.atlasWidth,
-                textureHeight = capture.rejectionLayout.atlasHeight,
-                encoding = StrengthReadbackEncoding.UNORM8,
-                byteCount = strengthRejectionReadbackByteCount(capture),
-                label = "MGC Spatial strength rejection atlas",
-                atlasLayout = capture.rejectionLayout,
-            )
-        val fusedFixed16: PreparedTextureReadback
-        val fusedFixed16PrepareSubmitMs: Long
-        if (capture.outputMode == MgcSpatialOutputMode.BAYER) {
-            check(accumulator != 0 && preparedFusedFixed16 == null)
-            val fusedFixed16Readback = allocatePixelPackBuffer(
-                strengthFixed16ReadbackByteCount(capture),
-                "MGC Spatial Bayer Fixed16 noise source",
-            )
-            val quadWidth = ceilDiv(capture.geometry.imageWidth, 16) * 8
-            val quadHeight = ceilDiv(capture.geometry.imageHeight, 16) * 8
-            val fusedFixed16StartNs = System.nanoTime()
-            val fusedFixed16Texture = renderBayerFixed16Planes(accumulator)
-            fusedFixed16PrepareSubmitMs =
-                (System.nanoTime() - fusedFixed16StartNs) / 1_000_000L
-            val queued = queueTextureReadback(
-                texture = fusedFixed16Texture,
-                textureWidth = quadWidth,
-                textureHeight = quadHeight * 4,
-                encoding = StrengthReadbackEncoding.SINT16,
-                storage = fusedFixed16Readback,
-                label = "MGC Spatial Bayer Fixed16 noise source",
-            )
-            fusedFixed16 = PreparedTextureReadback(
-                byteCount = queued.storage.byteCount,
-                queuedGpuReadback = queued,
-                cpuBuffer = null,
-                mode = queued.mode,
-                targetBindMs = queued.targetBindMs,
-                readSubmitMs = queued.readSubmitMs,
-                totalSubmitMs = queued.totalSubmitMs,
-            )
-        } else {
-            check(accumulator == 0)
-            fusedFixed16 = checkNotNull(preparedFusedFixed16) {
-                "MGC Spatial RGB Fixed16 diagnostic signal was not prepared"
-            }
-            check(
-                fusedFixed16.byteCount == strengthFixed16ReadbackByteCount(capture)
-            ) {
-                "MGC Spatial RGB Fixed16 readback size=${fusedFixed16.byteCount}, " +
-                    "expected=${strengthFixed16ReadbackByteCount(capture)}"
-            }
-            fusedFixed16PrepareSubmitMs = fusedFixed16.totalSubmitMs
+        val startNs = System.nanoTime()
+        val scratch = LinkedHashSet<Int>()
+        scratch += fixed16
+        fun texture(w: Int, h: Int, format: Int): Int =
+            createTexture(w, h, format, GLES30.GL_NEAREST).also { scratch += it }
+
+        fun release(texture: Int) {
+            releaseOwnedTexture(texture, "MGC Spatial noise scratch")
+            scratch.remove(texture)
         }
-        PLog.i(
-            TAG,
-            "MGC Spatial strength PBOs prepared mode=${capture.outputMode.name} " +
-                "image=${capture.geometry.imageWidth}x${capture.geometry.imageHeight} bytes=" +
-                "${alignment.byteCount.toLong() + rejection.byteCount +
-                    fusedFixed16.byteCount} " +
-                "took=${(System.nanoTime() - allocationStartNs) / 1_000_000L}ms",
-        )
-        return QueuedStrengthReadback(
-            alignment = alignment,
-            rejection = rejection,
-            fusedFixed16 = fusedFixed16,
-            fusedFixed16PrepareSubmitMs = fusedFixed16PrepareSubmitMs,
-        )
+
+        fun bindMoments(program: Int, values: IntArray) {
+            bindTexture(program, "uRead", 0, values[0])
+            bindTexture(program, "uShot", 1, values[1])
+            bindTexture(program, "uWeight", 2, values[2])
+        }
+
+        try {
+            val isBayer = capture.outputMode == MgcSpatialOutputMode.BAYER
+            val mode = if (isBayer) 1 else 0
+            val tileWidth = ceilDiv(capture.geometry.imageWidth, 16)
+            val tileHeight = ceilDiv(capture.geometry.imageHeight, 16)
+            val signal = texture(tileWidth, tileHeight, GLES30.GL_RGBA32F)
+            var program = spatialNoiseSignalProgram
+            GLES30.glUseProgram(program)
+            bindTexture(program, "uFixed16", 0, fixed16)
+            uniform1i(program, "uCfaPattern", cfaPattern)
+            uniform1i(program, "uIsBayer", mode)
+            val origins = IntArray(8)
+            for (plane in 0 until fixed16Layout.planeCount) {
+                origins[plane * 2] = fixed16Layout.originX(plane)
+                origins[plane * 2 + 1] = fixed16Layout.originY(plane)
+            }
+            GLES30.glUniform2iv(uniformLocation(program, "uPlaneOrigin[0]"), 4, origins, 0)
+            draw(program, tileWidth, tileHeight, intArrayOf(signal))
+            release(fixed16)
+
+            val frameParams = texture(3, capture.frameCount, GLES30.GL_RGBA32F)
+            uploadSpatialNoiseFrameParams(capture, frameParams)
+            val limits = IntArray(1)
+            GLES30.glGetIntegerv(GLES30.GL_MAX_TEXTURE_SIZE, limits, 0)
+            val footprintLayout = createMgcSpatialStrengthAtlasLayout(
+                tileWidth, tileHeight, capture.frameCount, limits[0],
+            )
+            val footprints = texture(
+                footprintLayout.atlasWidth, footprintLayout.atlasHeight, GLES30.GL_RGBA32F,
+            )
+            program = spatialNoiseFootprintsProgram
+            GLES30.glUseProgram(program)
+            bindTexture(program, "uAlignment", 0, capture.alignmentAtlas)
+            bindTexture(program, "uFrameParams", 1, frameParams)
+            uniform1i(program, "uFrames", capture.frameCount)
+            uniform1i(program, "uIsBayer", mode)
+            uniform2i(program, "uAlignmentSize", capture.alignmentWidth, capture.alignmentHeight)
+            uniform1i(program, "uAlignmentColumns", capture.alignmentLayout.columns)
+            uniform2i(program, "uFootprintSize", tileWidth, tileHeight)
+            uniform1i(program, "uFootprintColumns", footprintLayout.columns)
+            draw(
+                program, footprintLayout.atlasWidth, footprintLayout.atlasHeight, intArrayOf(footprints),
+            )
+
+            val gridWidth = capture.rejectionWidth
+            val gridHeight = capture.rejectionHeight
+            val moments = IntArray(4) { texture(gridWidth, gridHeight, GLES30.GL_RGBA32F) }
+            program = spatialNoiseMomentsProgram
+            GLES30.glUseProgram(program)
+            bindTexture(program, "uFootprints", 0, footprints)
+            bindTexture(program, "uRejection", 1, capture.rejectionAtlas)
+            bindTexture(program, "uFrameParams", 2, frameParams)
+            uniform1i(program, "uFrames", capture.frameCount)
+            uniform1i(program, "uIsBayer", mode)
+            uniform2i(program, "uRejectionSize", gridWidth, gridHeight)
+            uniform2i(program, "uFootprintSize", tileWidth, tileHeight)
+            uniform1i(program, "uFootprintColumns", footprintLayout.columns)
+            uniform1i(program, "uRejectionColumns", capture.rejectionLayout.columns)
+            draw(program, gridWidth, gridHeight, moments)
+            release(frameParams)
+            release(footprints)
+
+            program = spatialNoiseReductionProgram
+            var summary = moments
+            var inputWidth = gridWidth
+            var inputHeight = gridHeight
+            do {
+                val outputWidth = ceilDiv(inputWidth, 4)
+                val outputHeight = ceilDiv(inputHeight, 4)
+                val last = outputWidth == 1 && outputHeight == 1
+                val next = IntArray(4) { texture(outputWidth, outputHeight, GLES30.GL_RGBA32F) }
+                GLES30.glUseProgram(program)
+                bindMoments(program, summary)
+                bindTexture(program, "uDiag1", 3, summary[3])
+                uniform2i(program, "uInputSize", inputWidth, inputHeight)
+                uniform1i(program, "uNormalizeMoments", if (summary === moments) 1 else 0)
+                uniform1f(program, "uOutputScale", if (last) 1f / (gridWidth * gridHeight) else 1f)
+                draw(program, outputWidth, outputHeight, next)
+                if (summary !== moments) summary.forEach(::release)
+                summary = next
+                inputWidth = outputWidth
+                inputHeight = outputHeight
+            } while (inputWidth > 1 || inputHeight > 1)
+
+            val strength = texture(gridWidth, gridHeight, GLES30.GL_R16UI)
+            program = spatialNoiseStrengthProgram
+            GLES30.glUseProgram(program)
+            bindMoments(program, moments)
+            bindTexture(program, "uSignal", 3, signal)
+            bindTexture(program, "uGlobalRead", 4, summary[0])
+            bindTexture(program, "uGlobalShot", 5, summary[1])
+            uniform1f(program, "uRejectedDenoiseMultiplier", 1f)
+            draw(program, gridWidth, gridHeight, intArrayOf(strength))
+            moments.forEach(::release)
+            release(signal)
+
+            val packedWidth = ceilDiv(gridWidth, 8)
+            val packed = texture(packedWidth, gridHeight, GLES30.GL_RGBA32UI)
+            program = spatialNoisePackProgram
+            GLES30.glUseProgram(program)
+            bindTexture(program, "uStrength", 0, strength)
+            uniform1i(program, "uWidth", gridWidth)
+            draw(program, packedWidth, gridHeight, intArrayOf(packed))
+            release(strength)
+
+            val packedBytes = packedWidth * gridHeight * 4 * Int.SIZE_BYTES
+            val byteCount = packedBytes + 16 * Float.SIZE_BYTES
+            val buffer = allocateSpatialNoiseReadback(byteCount)
+            try {
+                GLES30.glBindBuffer(GLES30.GL_PIXEL_PACK_BUFFER, buffer)
+                GLES30.glPixelStorei(GLES30.GL_PACK_ALIGNMENT, 4)
+                GLES30.glPixelStorei(GLES30.GL_PACK_ROW_LENGTH, 0)
+                GLES30.glPixelStorei(GLES30.GL_PACK_SKIP_ROWS, 0)
+                GLES30.glPixelStorei(GLES30.GL_PACK_SKIP_PIXELS, 0)
+                bindRenderTargets(intArrayOf(packed), "MGC Spatial Q8 result")
+                GLES30.glReadBuffer(GLES30.GL_COLOR_ATTACHMENT0)
+                GLES30.glReadPixels(
+                    0, 0, packedWidth, gridHeight, GLES30.GL_RGBA_INTEGER, GLES30.GL_UNSIGNED_INT, 0,
+                )
+                bindRenderTargets(summary, "MGC Spatial noise statistics")
+                for (index in summary.indices) {
+                    GLES30.glReadBuffer(GLES30.GL_COLOR_ATTACHMENT0 + index)
+                    GLES30.glReadPixels(
+                        0, 0, 1, 1, GLES30.GL_RGBA, GLES30.GL_FLOAT,
+                        packedBytes + index * 4 * Float.SIZE_BYTES,
+                    )
+                }
+                GLES30.glReadBuffer(GLES30.GL_COLOR_ATTACHMENT0)
+                checkGlError("queue MGC Spatial result")
+            } finally {
+                GLES30.glBindBuffer(GLES30.GL_PIXEL_PACK_BUFFER, 0)
+            }
+            PLog.i(
+                TAG,
+                "MGC Spatial noise submitted mode=${capture.outputMode.name} frames=${capture.frameCount} " +
+                    "signal=${tileWidth}x$tileHeight strength=${gridWidth}x$gridHeight " +
+                    "resultBytes=$byteCount submitMs=${elapsedMs(startNs)}",
+            )
+            return SpatialNoiseReadback(buffer, byteCount, gridWidth, gridHeight, packedWidth)
+        } finally {
+            detachRenderTargets()
+            scratch.forEach { releaseOwnedTexture(it, "MGC Spatial noise scratch") }
+        }
     }
 
-    private fun strengthAlignmentReadbackByteCount(capture: StrengthCapture): Int =
-        (
-            capture.alignmentWidth.toLong() * capture.alignmentHeight *
-                capture.frameCount * 2L * Float.SIZE_BYTES
-            ).also { bytes -> require(bytes in 1..Int.MAX_VALUE.toLong()) }
-            .toInt()
-
-    private fun strengthRejectionReadbackByteCount(capture: StrengthCapture): Int =
-        (
-            capture.rejectionWidth.toLong() * capture.rejectionHeight * capture.frameCount
-            ).also { bytes -> require(bytes in 1..Int.MAX_VALUE.toLong()) }
-            .toInt()
-
-    private fun strengthFixed16ReadbackByteCount(capture: StrengthCapture): Int =
-        (capture.geometry.fixed16SampleCount * Short.SIZE_BYTES)
-            .also { bytes -> require(bytes in 1..Int.MAX_VALUE.toLong()) }
-            .toInt()
-
-    private fun allocatePixelPackBuffer(
-        byteCount: Int,
-        label: String,
-    ): PixelPackBuffer {
-        require(byteCount > 0)
-        val ids = IntArray(1)
-        GLES30.glGenBuffers(1, ids, 0)
-        val buffer = ids[0]
-        check(buffer != 0) { "$label glGenBuffers returned 0" }
-        buffers += buffer
-        GLES30.glBindBuffer(GLES30.GL_PIXEL_PACK_BUFFER, buffer)
-        val allocationByteCount = ((byteCount.toLong() + 3L) and -4L)
-            .also { bytes -> require(bytes <= Int.MAX_VALUE) }
-            .toInt()
-        GLES30.glBufferData(
-            GLES30.GL_PIXEL_PACK_BUFFER,
-            allocationByteCount,
-            null,
-            GLES30.GL_STREAM_READ,
+    private fun uploadSpatialNoiseFrameParams(capture: StrengthCapture, texture: Int) {
+        val frames = capture.frameCount
+        val parameters = FloatArray(12 * frames)
+        for (frame in 0 until frames) {
+            val base = frame * 12
+            for (channel in 0..2) {
+                parameters[base + channel] = capture.inputReadNoise[channel * frames + frame]
+                parameters[base + 4 + channel] = capture.inputShotNoise[channel * frames + frame]
+            }
+            parameters[base + 8] = capture.frameWeights[frame]
+            parameters[base + 9] = capture.kernelSigmas[frame]
+        }
+        GLES30.glActiveTexture(GLES30.GL_TEXTURE0)
+        GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, texture)
+        GLES30.glBindBuffer(GLES30.GL_PIXEL_UNPACK_BUFFER, 0)
+        GLES30.glPixelStorei(GLES30.GL_UNPACK_ALIGNMENT, 4)
+        GLES30.glTexSubImage2D(
+            GLES30.GL_TEXTURE_2D, 0, 0, 0, 3, frames,
+            GLES30.GL_RGBA, GLES30.GL_FLOAT, FloatBuffer.wrap(parameters),
         )
+        GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, 0)
+        checkGlError("upload MGC Spatial frame parameters")
+    }
+
+    private fun logSpatialNoiseInputs(capture: StrengthCapture) {
+        val alignmentLayout = capture.alignmentLayout
+        val rejectionLayout = capture.rejectionLayout
+        val alignmentPixels = (alignmentLayout.planeWidth * alignmentLayout.planeHeight)
+        val rejectionPixels = (rejectionLayout.planeWidth * rejectionLayout.planeHeight)
+        val alignment = ByteBuffer.allocateDirect(alignmentPixels * Float.SIZE_BYTES)
+            .order(ByteOrder.nativeOrder()).asFloatBuffer()
+        val rejection = ByteBuffer.allocateDirect(rejectionPixels)
+        val alignmentMean = DoubleArray(capture.frameCount)
+        val alignmentMax = FloatArray(capture.frameCount)
+        val acceptanceMean = FloatArray(capture.frameCount)
         GLES30.glBindBuffer(GLES30.GL_PIXEL_PACK_BUFFER, 0)
-        checkGlError("allocate $label PBO")
-        return PixelPackBuffer(buffer, byteCount)
-    }
-
-    private fun releasePixelPackBuffer(storage: PixelPackBuffer, label: String) {
-        if (!buffers.remove(storage.buffer)) return
-        GLES30.glDeleteBuffers(1, intArrayOf(storage.buffer), 0)
-        checkGlError("release $label")
-    }
-
-    private fun queueTextureReadback(
-        texture: Int,
-        textureWidth: Int,
-        textureHeight: Int,
-        encoding: StrengthReadbackEncoding,
-        storage: PixelPackBuffer,
-        label: String,
-        atlasLayout: MgcSpatialStrengthAtlasLayout? = null,
-    ): QueuedTextureReadback {
-        atlasLayout?.let { layout ->
-            require(layout.atlasWidth == textureWidth && layout.atlasHeight == textureHeight)
-        }
-        val bytesPerValue = when (encoding) {
-            StrengthReadbackEncoding.FLOAT32 -> Float.SIZE_BYTES
-            StrengthReadbackEncoding.UNORM8 -> Byte.SIZE_BYTES
-            StrengthReadbackEncoding.SINT16 -> Short.SIZE_BYTES
-        }
-        val logicalValueCount = atlasLayout?.logicalValueCount
-            ?: textureWidth.toLong() * textureHeight
-        require(logicalValueCount * bytesPerValue == storage.byteCount.toLong()) {
-            "$label logical readback size does not match storage: " +
-                "values=$logicalValueCount bytesPerValue=$bytesPerValue " +
-                "storage=${storage.byteCount}"
-        }
-        val packProgram = when (encoding) {
-            StrengthReadbackEncoding.FLOAT32 -> strengthFloatPackProgram
-            StrengthReadbackEncoding.UNORM8 -> strengthUnorm8PackProgram
-            StrengthReadbackEncoding.SINT16 -> strengthSint16PackProgram
-        }
-        val invocationCount = when (encoding) {
-            StrengthReadbackEncoding.FLOAT32 -> logicalValueCount
-            StrengthReadbackEncoding.UNORM8 -> (logicalValueCount + 3L) / 4L
-            StrengthReadbackEncoding.SINT16 -> (logicalValueCount + 1L) / 2L
-        }
-        val requiredGroupCount =
-            (invocationCount + GlesComputeWorkGroup.LINEAR_SIZE - 1L) /
-                GlesComputeWorkGroup.LINEAR_SIZE
-        val packedStorageBytes = (storage.byteCount.toLong() + 3L) and -4L
-        val hasComputeDispatchCapacity =
-            requiredGroupCount <= maxComputePackGroupsX.toLong() * maxComputePackGroupsY
-        if (packProgram != 0 &&
-            packedStorageBytes <= maxShaderStorageBlockBytes &&
-            hasComputeDispatchCapacity
-        ) {
-            val dispatch = createMgcSpatialStrengthPackDispatch(
-                invocationCount = invocationCount,
-                localSize = GlesComputeWorkGroup.LINEAR_SIZE,
-                maximumGroupsX = maxComputePackGroupsX,
-                maximumGroupsY = maxComputePackGroupsY,
-            )
-            return queueTextureSsboPack(
-                texture = texture,
-                textureWidth = textureWidth,
-                textureHeight = textureHeight,
-                encoding = encoding,
-                storage = storage,
-                program = packProgram,
-                label = label,
-                atlasLayout = atlasLayout,
-                invocationCount = invocationCount,
-                dispatch = dispatch,
-            )
-        }
-        if (packProgram != 0 && packedStorageBytes > maxShaderStorageBlockBytes) {
-            PLog.w(
-                TAG,
-                "MGC Spatial strength SSBO pack exceeds device block limit; " +
-                    "label=$label bytes=$packedStorageBytes " +
-                    "max=$maxShaderStorageBlockBytes, using framebuffer readback",
-            )
-        }
-        if (packProgram != 0 && !hasComputeDispatchCapacity) {
-            PLog.w(
-                TAG,
-                "MGC Spatial strength SSBO pack exceeds device dispatch grid; " +
-                    "label=$label groups=$requiredGroupCount " +
-                    "max=${maxComputePackGroupsX}x$maxComputePackGroupsY, " +
-                    "using framebuffer readback",
-            )
-        }
-        val totalStartNs = System.nanoTime()
-        val targetBindStartNs = System.nanoTime()
-        bindRenderTargets(intArrayOf(texture), label)
-        val targetBindMs = (System.nanoTime() - targetBindStartNs) / 1_000_000L
-        GLES30.glBindBuffer(GLES30.GL_PIXEL_PACK_BUFFER, storage.buffer)
         GLES30.glPixelStorei(GLES30.GL_PACK_ALIGNMENT, 1)
         GLES30.glPixelStorei(GLES30.GL_PACK_ROW_LENGTH, 0)
-        val readSubmitStartNs = System.nanoTime()
-        val readFormat = when (encoding) {
-            StrengthReadbackEncoding.FLOAT32,
-            StrengthReadbackEncoding.UNORM8 -> GLES30.GL_RED
-            StrengthReadbackEncoding.SINT16 -> GLES30.GL_RED_INTEGER
-        }
-        val readType = when (encoding) {
-            StrengthReadbackEncoding.FLOAT32 -> GLES30.GL_FLOAT
-            StrengthReadbackEncoding.UNORM8 -> GLES30.GL_UNSIGNED_BYTE
-            StrengthReadbackEncoding.SINT16 -> GLES30.GL_SHORT
-        }
-        if (atlasLayout == null || atlasLayout.columns == 1) {
-            GLES30.glReadPixels(
-                0,
-                0,
-                textureWidth,
-                textureHeight,
-                readFormat,
-                readType,
-                0,
-            )
-        } else {
-            for (plane in 0 until atlasLayout.planeCount) {
-                val byteOffset = (atlasLayout.planeValueCount * plane * bytesPerValue)
-                    .also { offset -> require(offset <= Int.MAX_VALUE) }
-                    .toInt()
-                GLES30.glReadPixels(
-                    atlasLayout.originX(plane),
-                    atlasLayout.originY(plane),
-                    atlasLayout.planeWidth,
-                    atlasLayout.planeHeight,
-                    readFormat,
-                    readType,
-                    byteOffset,
-                )
-            }
-        }
-        val readSubmitMs = (System.nanoTime() - readSubmitStartNs) / 1_000_000L
-        GLES30.glBindBuffer(GLES30.GL_PIXEL_PACK_BUFFER, 0)
-        GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, 0)
-        checkGlError("queue $label")
-        return QueuedTextureReadback(
-            storage = storage,
-            mode = if (atlasLayout == null || atlasLayout.columns == 1) {
-                "framebuffer-readpixels"
-            } else {
-                "framebuffer-readpixels-atlas"
-            },
-            targetBindMs = targetBindMs,
-            readSubmitMs = readSubmitMs,
-            totalSubmitMs = (System.nanoTime() - totalStartNs) / 1_000_000L,
-        ).also { queued ->
-            PLog.i(
-                TAG,
-                "MGC Spatial strength PBO submit label=$label " +
-                    "mode=${queued.mode} bytes=${storage.byteCount} " +
-                    "setup=${queued.targetBindMs}ms submit=${queued.readSubmitMs}ms " +
-                    "total=${queued.totalSubmitMs}ms",
-            )
-        }
-    }
-
-    private fun queuePreparedTextureReadback(
-        texture: Int,
-        textureWidth: Int,
-        textureHeight: Int,
-        encoding: StrengthReadbackEncoding,
-        byteCount: Int,
-        label: String,
-        atlasLayout: MgcSpatialStrengthAtlasLayout? = null,
-    ): PreparedTextureReadback {
-        val storage = allocatePixelPackBuffer(byteCount, label)
-        val queued = queueTextureReadback(
-            texture = texture,
-            textureWidth = textureWidth,
-            textureHeight = textureHeight,
-            encoding = encoding,
-            storage = storage,
-            label = label,
-            atlasLayout = atlasLayout,
-        )
-        return PreparedTextureReadback(
-            byteCount = queued.storage.byteCount,
-            queuedGpuReadback = queued,
-            cpuBuffer = null,
-            mode = queued.mode,
-            targetBindMs = queued.targetBindMs,
-            readSubmitMs = queued.readSubmitMs,
-            totalSubmitMs = queued.totalSubmitMs,
-        )
-    }
-
-    private fun queueTextureSsboPack(
-        texture: Int,
-        textureWidth: Int,
-        textureHeight: Int,
-        encoding: StrengthReadbackEncoding,
-        storage: PixelPackBuffer,
-        program: Int,
-        label: String,
-        atlasLayout: MgcSpatialStrengthAtlasLayout?,
-        invocationCount: Long,
-        dispatch: MgcSpatialStrengthPackDispatch,
-    ): QueuedTextureReadback {
-        val totalStartNs = System.nanoTime()
-        val setupStartNs = System.nanoTime()
-        GLES31.glUseProgram(program)
-        GLES31.glActiveTexture(GLES31.GL_TEXTURE0)
-        GLES31.glBindTexture(GLES31.GL_TEXTURE_2D, texture)
-        GLES31.glUniform1i(GLES31.glGetUniformLocation(program, "uSource"), 0)
-        val planeWidth = atlasLayout?.planeWidth ?: textureWidth
-        val planeHeight = atlasLayout?.planeHeight ?: textureHeight
-        val planeCount = atlasLayout?.planeCount ?: 1
-        val atlasColumns = atlasLayout?.columns ?: 1
-        GLES31.glUniform2i(
-            GLES31.glGetUniformLocation(program, "uPlaneSize"),
-            planeWidth,
-            planeHeight,
-        )
-        GLES31.glUniform1i(
-            GLES31.glGetUniformLocation(program, "uPlaneCount"),
-            planeCount,
-        )
-        GLES31.glUniform1i(
-            GLES31.glGetUniformLocation(program, "uAtlasColumns"),
-            atlasColumns,
-        )
-        GLES31.glBindBufferBase(GLES31.GL_SHADER_STORAGE_BUFFER, 0, storage.buffer)
-        val setupMs = (System.nanoTime() - setupStartNs) / 1_000_000L
-        val valueCount = planeWidth.toLong() * planeHeight * planeCount
-        val expectedInvocationCount = when (encoding) {
-            StrengthReadbackEncoding.FLOAT32 -> valueCount
-            StrengthReadbackEncoding.UNORM8 -> (valueCount + 3L) / 4L
-            StrengthReadbackEncoding.SINT16 -> (valueCount + 1L) / 2L
-        }
-        check(invocationCount == expectedInvocationCount)
-        require(invocationCount in 1..Int.MAX_VALUE.toLong()) {
-            "$label pack invocation count is invalid: $invocationCount"
-        }
-        val submitStartNs = System.nanoTime()
-        GLES31.glDispatchCompute(
-            dispatch.groupsX,
-            dispatch.groupsY,
-            1,
-        )
-        GLES31.glMemoryBarrier(
-            GLES31.GL_SHADER_STORAGE_BARRIER_BIT or GLES31.GL_BUFFER_UPDATE_BARRIER_BIT,
-        )
-        val submitMs = (System.nanoTime() - submitStartNs) / 1_000_000L
-        GLES31.glBindBufferBase(GLES31.GL_SHADER_STORAGE_BUFFER, 0, 0)
-        GLES31.glBindTexture(GLES31.GL_TEXTURE_2D, 0)
-        GLES31.glUseProgram(0)
-        checkGlError("queue $label SSBO pack")
-        return QueuedTextureReadback(
-            storage = storage,
-            mode = "compute-ssbo-pack-${dispatch.groupsX}x${dispatch.groupsY}",
-            targetBindMs = setupMs,
-            readSubmitMs = submitMs,
-            totalSubmitMs = (System.nanoTime() - totalStartNs) / 1_000_000L,
-        ).also { queued ->
-            PLog.i(
-                TAG,
-                "MGC Spatial strength PBO submit label=$label mode=${queued.mode} " +
-                    "bytes=${storage.byteCount} setup=${queued.targetBindMs}ms " +
-                    "submit=${queued.readSubmitMs}ms total=${queued.totalSubmitMs}ms",
-            )
-        }
-    }
-
-    private fun mapPixelPackBuffer(
-        buffer: Int,
-        byteCount: Int,
-        label: String,
-    ): ByteBuffer {
-        val startNs = System.nanoTime()
-        GLES30.glBindBuffer(GLES30.GL_PIXEL_PACK_BUFFER, buffer)
-        val mapped = GLES30.glMapBufferRange(
-            GLES30.GL_PIXEL_PACK_BUFFER,
-            0,
-            byteCount,
-            GLES30.GL_MAP_READ_BIT,
-        ) as? ByteBuffer ?: error("Unable to map $label")
-        GLES30.glBindBuffer(GLES30.GL_PIXEL_PACK_BUFFER, 0)
-        PLog.i(
-            TAG,
-            "MGC Spatial strength PBO mapped label=$label bytes=$byteCount " +
-                "wait=${(System.nanoTime() - startNs) / 1_000_000L}ms",
-        )
-        return mapped.order(ByteOrder.nativeOrder()).apply {
-            position(0)
-            limit(byteCount)
-        }
-    }
-
-    private fun unmapPixelPackBuffer(buffer: Int) {
-        GLES30.glBindBuffer(GLES30.GL_PIXEL_PACK_BUFFER, buffer)
-        check(GLES30.glUnmapBuffer(GLES30.GL_PIXEL_PACK_BUFFER)) {
-            "MGC Spatial readback buffer contents became invalid"
-        }
-        GLES30.glBindBuffer(GLES30.GL_PIXEL_PACK_BUFFER, 0)
-    }
-
-    private fun materializePreparedReadbackToHost(
-        prepared: PreparedTextureReadback,
-        label: String,
-    ): PreparedTextureReadback {
-        val queued = checkNotNull(prepared.queuedGpuReadback) {
-            "$label is already host-resident"
-        }
-        check(prepared.cpuBuffer == null)
-        val host = LargeDirectBuffer.allocate(prepared.byteCount.toLong(), label)
-            ?.order(ByteOrder.nativeOrder()) ?: run {
-                releasePixelPackBuffer(queued.storage, label)
-                error("Unable to allocate $label")
-            }
-        var mapped: ByteBuffer? = null
-        val materializeStartNs = System.nanoTime()
+        GLES30.glPixelStorei(GLES30.GL_PACK_SKIP_ROWS, 0)
+        GLES30.glPixelStorei(GLES30.GL_PACK_SKIP_PIXELS, 0)
         try {
-            try {
-                mapped = mapPixelPackBuffer(
-                    queued.storage.buffer,
-                    prepared.byteCount,
-                    label,
-                )
-                host.clear()
-                host.put(checkNotNull(mapped).duplicate())
-                host.rewind()
-            } finally {
-                try {
-                    if (mapped != null) {
-                        unmapPixelPackBuffer(queued.storage.buffer)
+            bindRenderTargets(intArrayOf(capture.alignmentAtlas), "MGC Spatial alignment diagnostics")
+            for (frame in 0 until capture.frameCount) {
+                for (component in 0..1) {
+                    val plane = component * capture.frameCount + frame
+                    GLES30.glReadPixels(
+                        alignmentLayout.originX(plane), alignmentLayout.originY(plane),
+                        alignmentLayout.planeWidth, alignmentLayout.planeHeight,
+                        GLES30.GL_RED, GLES30.GL_FLOAT, alignment,
+                    )
+                    for (pixel in 0 until alignmentPixels) {
+                        val magnitude = kotlin.math.abs(alignment.get(pixel))
+                        alignmentMean[frame] += magnitude.toDouble()
+                        alignmentMax[frame] = max(alignmentMax[frame], magnitude)
                     }
-                } finally {
-                    releasePixelPackBuffer(queued.storage, label)
                 }
+                alignmentMean[frame] /= alignmentPixels * 2.0
             }
-        } catch (throwable: Throwable) {
-            LargeDirectBuffer.free(host)
-            throw throwable
-        }
-        val materializeMs = (System.nanoTime() - materializeStartNs) / 1_000_000L
-        return PreparedTextureReadback(
-            byteCount = prepared.byteCount,
-            queuedGpuReadback = null,
-            cpuBuffer = host,
-            mode = "${prepared.mode}-host",
-            targetBindMs = prepared.targetBindMs,
-            readSubmitMs = prepared.readSubmitMs,
-            totalSubmitMs = prepared.totalSubmitMs + materializeMs,
-        ).also {
-            PLog.i(
-                TAG,
-                "MGC Spatial diagnostic host materialized label=$label " +
-                    "bytes=${prepared.byteCount} took=${materializeMs}ms",
-            )
-        }
-    }
-
-    private fun resolveSpatialNoiseModel(
-        capture: StrengthCapture,
-        queued: QueuedStrengthReadback,
-    ): MgcSpatialStrengthMapGenerator.Result? {
-        val totalStartNs = System.nanoTime()
-        var diagnosticsMs = 0L
-        var aotMs = 0L
-        var alignment: ByteBuffer? = null
-        var rejection: ByteBuffer? = null
-        var fusedFixed16: ByteBuffer? = null
-        var alignmentGpuMapped = false
-        var rejectionGpuMapped = false
-        var fusedFixed16GpuMapped = false
-        return try {
-            alignment = queued.alignment.queuedGpuReadback?.let { gpuReadback ->
-                mapPixelPackBuffer(
-                    gpuReadback.storage.buffer,
-                    gpuReadback.storage.byteCount,
-                    "MGC Spatial strength alignment atlas",
-                ).also { alignmentGpuMapped = true }
-            } ?: checkNotNull(queued.alignment.cpuBuffer).duplicate()
-                .order(ByteOrder.nativeOrder())
-                .apply {
-                    position(0)
-                    limit(queued.alignment.byteCount)
-                }
-            rejection = queued.rejection.queuedGpuReadback?.let { gpuReadback ->
-                mapPixelPackBuffer(
-                    gpuReadback.storage.buffer,
-                    gpuReadback.storage.byteCount,
-                    "MGC Spatial strength rejection atlas",
-                ).also { rejectionGpuMapped = true }
-            } ?: checkNotNull(queued.rejection.cpuBuffer).duplicate()
-                .order(ByteOrder.nativeOrder())
-                .apply {
-                    position(0)
-                    limit(queued.rejection.byteCount)
-                }
-            fusedFixed16 = queued.fusedFixed16.queuedGpuReadback?.let { gpuReadback ->
-                mapPixelPackBuffer(
-                    gpuReadback.storage.buffer,
-                    gpuReadback.storage.byteCount,
-                    "MGC Spatial ${capture.outputMode.name} Fixed16 noise source",
-                ).also { fusedFixed16GpuMapped = true }
-            } ?: checkNotNull(queued.fusedFixed16.cpuBuffer).duplicate()
-                .order(ByteOrder.nativeOrder())
-                .apply {
-                    position(0)
-                    limit(queued.fusedFixed16.byteCount)
-                }
-            val mappedAlignment = checkNotNull(alignment)
-            val mappedRejection = checkNotNull(rejection)
-            val mappedFusedFixed16 = checkNotNull(fusedFixed16)
-            if (RawStackRuntimeDebug.mgcSpatialInputDiagnosticsEnabled) {
-                val diagnosticsStartNs = System.nanoTime()
-                logSpatialNoiseInputs(capture, mappedAlignment, mappedRejection)
-                diagnosticsMs = (System.nanoTime() - diagnosticsStartNs) / 1_000_000L
+            bindRenderTargets(intArrayOf(capture.rejectionAtlas), "MGC Spatial rejection diagnostics")
+            for (frame in 0 until capture.frameCount) {
+                GLES30.glReadPixels(
+                    rejectionLayout.originX(frame), rejectionLayout.originY(frame),
+                    rejectionLayout.planeWidth, rejectionLayout.planeHeight,
+                    GLES30.GL_RED, GLES30.GL_UNSIGNED_BYTE, rejection,
+                )
+                var sum = 0L
+                for (pixel in 0 until rejectionPixels) sum += rejection.get(pixel).toInt() and 0xff
+                acceptanceMean[frame] = sum.toFloat() / (rejectionPixels * 255f)
             }
-            val aotStartNs = System.nanoTime()
-            MgcSpatialStrengthMapGenerator.compute(
-                outputMode = capture.outputMode,
-                fusedFixed16 = mappedFusedFixed16,
-                width = capture.geometry.imageWidth,
-                height = capture.geometry.imageHeight,
-                cfaPattern = cfaPattern,
-                alignment = mappedAlignment,
-                alignmentWidth = capture.alignmentWidth,
-                alignmentHeight = capture.alignmentHeight,
-                rejection = mappedRejection,
-                rejectionWidth = capture.rejectionWidth,
-                rejectionHeight = capture.rejectionHeight,
-                frameCount = capture.frameCount,
-                inputReadNoise = capture.inputReadNoise,
-                inputShotNoise = capture.inputShotNoise,
-                frameWeights = capture.frameWeights,
-                kernelSigmas = capture.kernelSigmas,
-            ).also {
-                aotMs = (System.nanoTime() - aotStartNs) / 1_000_000L
-            }
+            checkGlError("read MGC Spatial noise diagnostics")
         } finally {
-            val unmapStartNs = System.nanoTime()
-            if (fusedFixed16GpuMapped) {
-                unmapPixelPackBuffer(
-                    checkNotNull(queued.fusedFixed16.queuedGpuReadback).storage.buffer,
-                )
-            }
-            if (rejectionGpuMapped) {
-                unmapPixelPackBuffer(
-                    checkNotNull(queued.rejection.queuedGpuReadback).storage.buffer,
-                )
-            }
-            if (alignmentGpuMapped) {
-                unmapPixelPackBuffer(
-                    checkNotNull(queued.alignment.queuedGpuReadback).storage.buffer,
-                )
-            }
-            PLog.i(
-                TAG,
-                "MGC Spatial strength resolve mode=${capture.outputMode.name} " +
-                    "diagnostics=${diagnosticsMs}ms " +
-                    "aot=${aotMs}ms " +
-                    "unmap=${(System.nanoTime() - unmapStartNs) / 1_000_000L}ms " +
-                    "total=${(System.nanoTime() - totalStartNs) / 1_000_000L}ms",
-            )
+            GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, 0)
         }
-    }
-
-    private fun logSpatialNoiseInputs(
-        capture: StrengthCapture,
-        alignmentStorage: ByteBuffer,
-        rejectionStorage: ByteBuffer,
-    ) {
-        val alignmentPlane = capture.alignmentWidth * capture.alignmentHeight
-        val alignment = alignmentStorage.duplicate()
-            .order(ByteOrder.nativeOrder())
-            .asFloatBuffer()
-        val alignmentMeanAbs = FloatArray(capture.frameCount)
-        val alignmentMaxAbs = FloatArray(capture.frameCount)
-        for (frame in 0 until capture.frameCount) {
-            var sum = 0.0
-            var maximum = 0f
-            for (component in 0 until 2) {
-                val base = (component * capture.frameCount + frame) * alignmentPlane
-                for (pixel in 0 until alignmentPlane) {
-                    val absolute = kotlin.math.abs(alignment.get(base + pixel))
-                    sum += absolute.toDouble()
-                    maximum = max(maximum, absolute)
-                }
-            }
-            alignmentMeanAbs[frame] =
-                (sum / (alignmentPlane * 2).toDouble()).toFloat()
-            alignmentMaxAbs[frame] = maximum
-        }
-
-        val rejectionPlane = capture.rejectionWidth * capture.rejectionHeight
-        val rejection = rejectionStorage.duplicate()
-        val acceptedWeightMean = FloatArray(capture.frameCount)
-        for (frame in 0 until capture.frameCount) {
-            var sum = 0L
-            val base = frame * rejectionPlane
-            for (pixel in 0 until rejectionPlane) {
-                sum += rejection.get(base + pixel).toInt() and 0xff
-            }
-            acceptedWeightMean[frame] =
-                sum.toFloat() / (rejectionPlane.toFloat() * 255f)
-        }
-
         PLog.i(
             TAG,
-            "MGC Spatial noise inputs mode=${capture.outputMode.name} " +
-                "image=${capture.geometry.imageWidth}x${capture.geometry.imageHeight} " +
-                "frames=${capture.frameCount} " +
-                "alignmentMeanAbs=${alignmentMeanAbs.contentToString()} " +
-                "alignmentMaxAbs=${alignmentMaxAbs.contentToString()} " +
-                "acceptedWeightMean=${acceptedWeightMean.contentToString()} " +
+            "MGC Spatial noise inputs mode=${capture.outputMode.name} frames=${capture.frameCount} " +
+                "alignmentMeanAbs=${alignmentMean.contentToString()} " +
+                "alignmentMaxAbs=${alignmentMax.contentToString()} " +
+                "acceptedWeightMean=${acceptanceMean.contentToString()} " +
                 "read(channel-major)=${capture.inputReadNoise.contentToString()} " +
                 "shot(channel-major)=${capture.inputShotNoise.contentToString()} " +
                 "frameWeight=${capture.frameWeights.contentToString()} " +
                 "kernelSigma=${capture.kernelSigmas.contentToString()}",
         )
+    }
+
+    private fun allocateSpatialNoiseReadback(byteCount: Int): Int {
+        val ids = IntArray(1)
+        GLES30.glGenBuffers(1, ids, 0)
+        val buffer = ids[0]
+        check(buffer != 0) { "Could not allocate MGC Spatial result buffer" }
+        buffers += buffer
+        GLES30.glBindBuffer(GLES30.GL_PIXEL_PACK_BUFFER, buffer)
+        try {
+            GLES30.glBufferData(GLES30.GL_PIXEL_PACK_BUFFER, byteCount, null, GLES30.GL_STREAM_READ)
+            checkGlError("allocate MGC Spatial result")
+        } finally {
+            GLES30.glBindBuffer(GLES30.GL_PIXEL_PACK_BUFFER, 0)
+        }
+        return buffer
+    }
+
+    private fun resolveSpatialNoise(readback: SpatialNoiseReadback): MgcSpatialNoiseStatistics {
+        GLES30.glBindBuffer(GLES30.GL_PIXEL_PACK_BUFFER, readback.buffer)
+        try {
+            val result = GLES30.glMapBufferRange(
+                GLES30.GL_PIXEL_PACK_BUFFER, 0, readback.byteCount, GLES30.GL_MAP_READ_BIT,
+            ) as? ByteBuffer ?: error("Could not map MGC Spatial result")
+            try {
+                result.order(ByteOrder.nativeOrder())
+                val strengths = ShortArray(readback.width * readback.height)
+                val shortBuffer = result.asShortBuffer()
+                val rowStride = readback.packedWidth * 8
+                for (row in 0 until readback.height) {
+                    shortBuffer.position(row * rowStride)
+                    shortBuffer.get(strengths, row * readback.width, readback.width)
+                }
+                val summaryStart = rowStride * readback.height * Short.SIZE_BYTES
+                val summary = Array(4) { index ->
+                    FloatArray(3) { channel ->
+                        result.getFloat(summaryStart + (index * 4 + channel) * Float.SIZE_BYTES)
+                    }
+                }
+                check(summary.all { tuple -> tuple.all { it.isFinite() && it >= 0f } } &&
+                    (0..2).all { channel -> summary[0][channel] > 0f || summary[1][channel] > 0f }
+                ) { "Invalid MGC Spatial noise statistics: ${summary.contentDeepToString()}" }
+                return MgcSpatialNoiseStatistics(
+                    MgcSpatialStrengthMap(readback.width, readback.height, strengths),
+                    outputReadNoise = summary[0],
+                    outputShotNoise = summary[1],
+                    outputWeightsSumTotalDiag0 = summary[2],
+                    outputWeightsSumTotalDiag1 = summary[3],
+                )
+            } finally {
+                check(GLES30.glUnmapBuffer(GLES30.GL_PIXEL_PACK_BUFFER)) {
+                    "Invalidated MGC Spatial result buffer"
+                }
+            }
+        } finally {
+            GLES30.glBindBuffer(GLES30.GL_PIXEL_PACK_BUFFER, 0)
+            GLES30.glDeleteBuffers(1, intArrayOf(readback.buffer), 0)
+            buffers.remove(readback.buffer)
+        }
     }
 
     private fun logLinearKernelMask(
@@ -6724,7 +6336,7 @@ internal class GlesMgcRawSpatialStacker(
         cameraWhite: FloatArray,
         referenceWhite: Float,
         ultrashortWeight: Int,
-    ): QueuedStrengthReadback? {
+    ): SpatialNoiseReadback? {
         require(referenceBlack.size == 4)
         // Offset of the red site; the AOT merges in a virtual RGGB frame anchored there.
         val (redX, redY) = when (cfaPattern) {
@@ -6877,35 +6489,9 @@ internal class GlesMgcRawSpatialStacker(
             )
             checkGlError("MGC Spatial RGB merge resolve")
             if (!queueNoiseSignal) return null
-            // The noise-model AOT reads the unnormalized merge; queue it with the temporal
-            // atlases before the fusion arena (sums and atlases) is released.
-            val fixed16StartNs = System.nanoTime()
+            // The noise model reads the unnormalized merge before the fusion textures are released.
             val (fixed16, fixed16Layout) = renderRgbFixed16Planes(sums, referenceWhite)
-            val fixed16PrepareMs = elapsedMs(fixed16StartNs)
-            val queued = queueTextureReadback(
-                texture = fixed16,
-                textureWidth = fixed16Layout.atlasWidth,
-                textureHeight = fixed16Layout.atlasHeight,
-                atlasLayout = fixed16Layout,
-                encoding = StrengthReadbackEncoding.SINT16,
-                storage = allocatePixelPackBuffer(
-                    strengthFixed16ReadbackByteCount(capture),
-                    "MGC Spatial RGB Fixed16 noise source",
-                ),
-                label = "MGC Spatial RGB Fixed16 noise source",
-            )
-            return queueStrengthReadback(
-                capture = capture,
-                preparedFusedFixed16 = PreparedTextureReadback(
-                    byteCount = queued.storage.byteCount,
-                    queuedGpuReadback = queued,
-                    cpuBuffer = null,
-                    mode = queued.mode,
-                    targetBindMs = queued.targetBindMs,
-                    readSubmitMs = queued.readSubmitMs,
-                    totalSubmitMs = queued.totalSubmitMs + fixed16PrepareMs,
-                ),
-            )
+            return queueSpatialNoise(capture, fixed16, fixed16Layout)
         } finally {
             GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, 0)
             (intArrayOf(raw, converted, balanced, green) + sums).forEach { texture ->
@@ -7850,7 +7436,8 @@ internal class GlesMgcRawSpatialStacker(
             GLES30.GL_RGB16UI -> 6
             GLES30.GL_RGBA16F,
             GLES30.GL_RGBA16UI -> 8
-            GLES30.GL_RGBA32F -> 16
+            GLES30.GL_RGBA32F,
+            GLES30.GL_RGBA32UI -> 16
             else -> error(
                 "Missing MGC texture byte size for format=0x" +
                     spec.internalFormat.toString(16),

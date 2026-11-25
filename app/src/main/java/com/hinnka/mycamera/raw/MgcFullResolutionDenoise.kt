@@ -7,23 +7,14 @@ import com.hinnka.mycamera.processor.PhotonCoreImagingTuning
 import com.hinnka.mycamera.processor.DenoiseStrength
 import com.hinnka.mycamera.processor.PhotonSabreLumaTuningNodes
 import com.hinnka.mycamera.processor.RawNoiseModel
-import com.hinnka.mycamera.processor.RawStackRuntimeDebug
 import com.hinnka.mycamera.utils.PLog
-import java.nio.ByteBuffer
 
 /**
  * Host bridge for the non-AI MGC 9.6.080 V24 full-resolution denoise chain.
  *
- * RGB→YUV, ChromaDenoisePyramidComplete, Pecan luma, YUV→RGB and
- * ComputeDenoiseStrengthMaps execute the mechanically lifted static kernels.
- * The recovered MGC boundary keeps chroma as a sibling stage immediately
- * before RunFullResolutionDenoise/Pecan.
- *
- * This class owns luma/chroma protobuf tuning selection and normalized
- * noise-model preparation. Spatial consumes its propagated correlation/coefficient/strength
- * outputs; classic Sabre consumes its dedicated luma tuning and the variance propagated by
- * MgcSabreMergedNoiseModel from per-frame models and V25's SNR correction. The native bridge
- * converts normalized read/shot/quadratic coefficients once at the Q14 S16 kernel boundary.
+ * Owns luma/chroma protobuf tuning selection and prepares the Q14 noise model for
+ * [GlesMgcDenoise]. Spatial uses its propagated noise and strength map. Classic
+ * Sabre uses dedicated luma tuning and the variance from MgcSabreMergedNoiseModel.
  */
 internal object MgcFullResolutionDenoise {
     private const val TAG = "MgcFullResolutionDenoise"
@@ -52,11 +43,6 @@ internal object MgcFullResolutionDenoise {
         USER_ADJUSTMENT,
     }
 
-    enum class InputLayout {
-        CAMERA_RGBA16F,
-        NORMALIZED_BAYER16,
-    }
-
     data class NormalizedCameraRgbNoise(
         val read: FloatArray,
         val shot: FloatArray,
@@ -67,8 +53,8 @@ internal object MgcFullResolutionDenoise {
      *
      * ChromaDenoisePyramidComplete keeps per-channel read variance, but its generated ABI
      * accepts only one shared shot/quadratic curve. The measured VGN path stores its fitted
-     * shared chroma curve here; the ordinary MGC NoiseModel path instead reproduces the
-     * original builder's channel-0 slice directly in native code.
+     * shared chroma curve here. The ordinary MGC noise model derives the curve from
+     * the original builder's channel-0 slice.
      */
     data class PreparedYuvNoiseModel(
         val normalizedRead: FloatArray,
@@ -80,15 +66,25 @@ internal object MgcFullResolutionDenoise {
         val chromaCorrelation: FloatArray,
     )
 
+    data class LumaDenoiseConfig(
+        val q14Noise: MgcLumaNoiseModel.Q14LumaNoise,
+        val strength: FloatArray,
+        val outlierDistance: FloatArray,
+        val revertFactor: FloatArray,
+    )
+
     data class ChromaDenoiseConfig(
-        val whiteBalance: FloatArray,
         val q14Noise: MgcChromaNoiseModel.Q14ChromaNoise,
-        val responseOffset: Float,
-        val responseCosineOffset: Float,
-        val chromaStrength: FloatArray,
-        val chromaOutlier: FloatArray,
+        val strength: FloatArray,
+        val outlierThreshold: FloatArray,
         val lowFrequencyLog2: Int,
         val chromaMedianFilterType: Int,
+    )
+
+    data class GpuDenoiseConfig(
+        val whiteBalance: FloatArray,
+        val responseOffset: Float,
+        val responseCosineOffset: Float,
         val measureMoireEnabled: Boolean,
         val spatialStrengthQ8: ShortArray?,
         val spatialStrengthWidth: Int,
@@ -96,6 +92,8 @@ internal object MgcFullResolutionDenoise {
         val lensShadingMap: FloatArray?,
         val lensWidth: Int,
         val lensHeight: Int,
+        val luma: LumaDenoiseConfig?,
+        val chroma: ChromaDenoiseConfig?,
     )
 
     internal data class TuningPoint(
@@ -138,7 +136,7 @@ internal object MgcFullResolutionDenoise {
             initialized = true
             PLog.i(
                 TAG,
-                "MGC RunFullResolutionDenoise static kernels ready: " +
+                "MGC denoise tuning ready: " +
                     "lumaSnr=${lumaTuningPoints.map { it.snr }} " +
                     "sabreLumaSnr=${sabreLumaTuningPoints.map { it.snr }} " +
                     "chromaSnr=${chromaTuningPoints.map { it.snr }}",
@@ -146,27 +144,18 @@ internal object MgcFullResolutionDenoise {
             true
         }.onFailure { error ->
             initializationFailed = true
-            PLog.e(TAG, "Unable to initialize MGC RunFullResolutionDenoise", error)
+            PLog.e(TAG, "Unable to load MGC denoise tuning", error)
         }.getOrDefault(false)
     }
 
     /**
-     * Runs MGC RunFullResolutionDenoise in place. CAMERA_RGBA16F is the
-     * existing camera-RGB boundary. NORMALIZED_BAYER16 consumes one unsigned
-     * normalized Bayer plane from the beginning of the buffer and overwrites
-     * it with RGBA16F after MGC's own BayerRawToYuv path.
+     * Prepares all parameters needed to run [GlesMgcDenoise] (luma and/or chroma) for a RAW pass
+     * (`SPATIAL_DEFAULT`, `SABRE_DEFAULT`, or `USER_ADJUSTMENT`).
      */
-    fun denoise(
-        rgba16f: ByteBuffer,
-        width: Int,
-        height: Int,
-        globalOriginX: Int,
-        globalOriginY: Int,
+    fun prepareRawGpuDenoiseConfig(
         fullWidth: Int,
         fullHeight: Int,
         outputScale: Float = 1f,
-        inputLayout: InputLayout = InputLayout.CAMERA_RGBA16F,
-        applyLensShadingInBayerAot: Boolean = false,
         metadata: RawMetadata,
         preparedYuvNoiseModel: PreparedYuvNoiseModel? = null,
         applyLensShadingToDenoiseStrength: Boolean = false,
@@ -174,43 +163,26 @@ internal object MgcFullResolutionDenoise {
         pass: Pass,
         lumaStrengthScale: Float,
         chromaStrengthScale: Float,
-        exportChromaStrength: Boolean = false,
-        measureMoireForExport: Boolean = false,
-        chromaStrengthOut: ByteBuffer? = null,
-    ): Boolean {
+    ): GpuDenoiseConfig? {
         val finiteLumaScale = DenoiseStrength.clamp(lumaStrengthScale)
         val finiteChromaScale = DenoiseStrength.clamp(chromaStrengthScale)
         val lumaEnabled = finiteLumaScale > 0f
         val chromaEnabled = finiteChromaScale > 0f
-        if (!initialized || !rgba16f.isDirect || width <= 0 || height <= 0 ||
-            !outputScale.isFinite() || outputScale <= 0f ||
-            (!lumaEnabled && !chromaEnabled)
+        if (!initialized || (!lumaEnabled && !chromaEnabled) ||
+            !outputScale.isFinite() || outputScale <= 0f
         ) {
-            return false
+            return null
         }
         val useSpatialModel = pass == Pass.SPATIAL_DEFAULT
         val useSabreModel = pass == Pass.SABRE_DEFAULT
-        if (preparedYuvNoiseModel != null &&
-            (inputLayout != InputLayout.CAMERA_RGBA16F ||
-                !validPreparedYuvNoise(preparedYuvNoiseModel))
-        ) {
-            PLog.e(
-                TAG,
-                "MGC denoise rejected malformed prepared VGN YUV model: " +
-                    "read=${preparedYuvNoiseModel.normalizedRead.contentToString()} " +
-                    "lumaShot=${preparedYuvNoiseModel.normalizedLumaShot} " +
-                    "lumaQuadratic=${preparedYuvNoiseModel.normalizedLumaQuadratic} " +
-                    "chromaShot=${preparedYuvNoiseModel.normalizedChromaShot} " +
-                    "chromaQuadratic=${preparedYuvNoiseModel.normalizedChromaQuadratic}",
-            )
-            return false
+        if (preparedYuvNoiseModel != null && !validPreparedYuvNoise(preparedYuvNoiseModel)) {
+            PLog.e(TAG, "MGC denoise config rejected malformed prepared VGN YUV model")
+            return null
         }
         val mergedCorrelation = if (useSpatialModel || useSabreModel) {
             metadata.mgcDenoiseCorrelation
         } else null
         val coreTuning = PhotonCoreImagingTuning
-        // Only a newly constructed single-frame model uses the seed. Fused models must
-        // supply their spectrum; measured/prepared spectra retain their own amplitude.
         val defaultCorrelation = if (!useSpatialModel && !useSabreModel) {
             FloatArray(128) { coreTuning.denoise.noiseSpectrumSeed }
         } else null
@@ -225,387 +197,10 @@ internal object MgcFullResolutionDenoise {
             enabled = useSabreModel,
         )
         if ((useSpatialModel || useSabreModel) &&
-            (!validCorrelation(lumaCorrelation) || !validCorrelation(chromaCorrelation))
+            ((lumaEnabled && !validCorrelation(lumaCorrelation)) ||
+                (chromaEnabled && !validCorrelation(chromaCorrelation)))
         ) {
-            PLog.e(
-                TAG,
-                "MGC denoise rejected missing/malformed $pass Y/C correlation spectrum",
-            )
-            return false
-        }
-        val spatialStrengthMap = metadata.mgcSpatialStrengthMap.takeIf {
-            useSpatialModel
-        }
-        if (useSpatialModel && spatialStrengthMap?.let {
-                it.width == (fullWidth + 3) / 4 &&
-                    it.height == (fullHeight + 3) / 4 &&
-                    it.q8.size == it.width * it.height
-            } != true
-        ) {
-            PLog.e(
-                TAG,
-                "MGC denoise rejected Spatial strength map: " +
-                    "full=${fullWidth}x$fullHeight map=${spatialStrengthMap?.let {
-                        "${it.width}x${it.height}/${it.q8.size}"
-                    } ?: "none"}",
-            )
-            return false
-        }
-
-        val rgbRead: FloatArray
-        val rgbShot: FloatArray
-        if (useSpatialModel || useSabreModel) {
-            rgbRead = metadata.mgcDenoiseReadNoise?.copyOf()
-                ?: run {
-                    PLog.e(TAG, "MGC denoise rejected missing $pass read coefficients")
-                    return false
-                }
-            rgbShot = metadata.mgcDenoiseShotNoise?.copyOf()
-                ?: run {
-                    PLog.e(TAG, "MGC denoise rejected missing $pass shot coefficients")
-                    return false
-                }
-            if (!validRgbNoise(rgbRead) || !validRgbNoise(rgbShot) ||
-                (rgbRead.none { it > 0f } && rgbShot.none { it > 0f })
-            ) {
-                PLog.e(
-                    TAG,
-                    "MGC denoise rejected malformed $pass noise coefficients: " +
-                        "read=${rgbRead.contentToString()} shot=${rgbShot.contentToString()}",
-                )
-                return false
-            }
-        } else {
-            val resolvedNoise = resolveUserAdjustmentCameraRgbNoise(metadata) ?: run {
-                PLog.e(
-                    TAG,
-                    "MGC denoise rejected missing RAW noise model: " +
-                        "layout=${metadata.noiseProfileLayout}",
-                )
-                return false
-            }
-            rgbShot = resolvedNoise.shot
-            rgbRead = resolvedNoise.read
-        }
-        val useLensShadingForStrength =
-            (useSpatialModel || useSabreModel || applyLensShadingToDenoiseStrength) &&
-                hasValidLensShadingMap(metadata)
-        val rgbWhiteBalance = normalizedRgbWhiteBalance(metadata.whiteBalanceGains)
-        val selectedLumaTuningPoints = if (useSabreModel) {
-            sabreLumaTuningPoints.map { point ->
-                point.copy(
-                    tuning = applySabreLumaNodeOverrides(
-                        tuning = point.tuning,
-                        snr = point.snr,
-                        nodes = coreTuning.denoise.sabreLumaNodes,
-                        revertNodes = coreTuning.denoise.sabreLumaRevertNodes,
-                        outlierNodes = coreTuning.denoise.sabreLumaOutlierNodes,
-                    ),
-                )
-            }
-        } else {
-            lumaTuningPoints
-        }
-        val lumaTuning = applyCoreDenoiseScales(
-            tuning = interpolateTuning(tuningSnr, selectedLumaTuningPoints),
-            globalStrengthScale = finiteLumaScale,
-            strengthLevelScales = coreTuning.denoise.lumaStrengthScale.toFloatArray(),
-            revertLevelScales = coreTuning.denoise.detailReconstructionScale.toFloatArray(),
-            outlierLevelScales = coreTuning.denoise.outlierRejectionScale.toFloatArray(),
-        )
-        val chromaTuning = applyCoreDenoiseScales(
-            tuning = interpolateTuning(tuningSnr, chromaTuningPoints),
-            globalStrengthScale = finiteChromaScale,
-            strengthLevelScales = coreTuning.denoise.chromaStrengthScale.toFloatArray(),
-            revertLevelScales = FloatArray(5) { 1f },
-            outlierLevelScales = FloatArray(5) { 1f },
-        )
-        // MGC process_raw enables MeasureMoire only for a standard Bayer
-        // capture at exact 1x output. The AOT consumes RawToYuv's Y plane, so
-        // this remains valid when the current handoff already contains RGB.
-        val measureMoireEnabled = (chromaEnabled || (exportChromaStrength && measureMoireForExport)) &&
-            metadata.cfaPattern in RawMetadata.CFA_RGGB..RawMetadata.CFA_BGGR &&
-            outputScale == 1f
-        rgba16f.clear()
-        chromaStrengthOut?.clear()
-        val result = nativeDenoiseRgba16f(
-            rgbaBuffer = rgba16f,
-            width = width,
-            height = height,
-            globalOriginX = globalOriginX,
-            globalOriginY = globalOriginY,
-            fullWidth = fullWidth,
-            fullHeight = fullHeight,
-            inputIsBayer = inputLayout == InputLayout.NORMALIZED_BAYER16,
-            cfaPattern = metadata.cfaPattern,
-            measureMoireEnabled = measureMoireEnabled,
-            applyLensShadingInBayerAot = applyLensShadingInBayerAot,
-            lensShading = metadata.lensShadingMap.takeIf { useLensShadingForStrength },
-            lensWidth = if (useLensShadingForStrength) metadata.lensShadingMapWidth else 0,
-            lensHeight = if (useLensShadingForStrength) metadata.lensShadingMapHeight else 0,
-            normalizedRgbShot = rgbShot,
-            normalizedRgbRead = rgbRead,
-            normalizedRgbWhiteBalance = rgbWhiteBalance,
-            preparedNormalizedYuvRead = preparedYuvNoiseModel?.normalizedRead,
-            preparedNormalizedLumaShot = preparedYuvNoiseModel?.normalizedLumaShot ?: 0f,
-            preparedNormalizedLumaQuadratic =
-                preparedYuvNoiseModel?.normalizedLumaQuadratic ?: 0f,
-            preparedNormalizedChromaShot = preparedYuvNoiseModel?.normalizedChromaShot ?: 0f,
-            preparedNormalizedChromaQuadratic =
-                preparedYuvNoiseModel?.normalizedChromaQuadratic ?: 0f,
-            lumaCorrelation = lumaCorrelation,
-            chromaCorrelation = chromaCorrelation,
-            denoiseResponseOffset = coreTuning.denoise.frequencyResponse.responseOffset,
-            denoiseResponseCosineOffset = coreTuning.denoise.frequencyResponse.cosineOffset,
-            spatialStrengthQ8 = spatialStrengthMap?.q8,
-            spatialStrengthWidth = spatialStrengthMap?.width ?: 0,
-            spatialStrengthHeight = spatialStrengthMap?.height ?: 0,
-            lumaEnabled = lumaEnabled,
-            chromaEnabled = chromaEnabled,
-            lumaStrength = lumaTuning.strength,
-            lumaOutlierDistance = lumaTuning.outlierDistance,
-            lumaRevertFactor = lumaTuning.revertFactor,
-            chromaStrength = chromaTuning.strength,
-            chromaOutlierThreshold = chromaTuning.outlierDistance,
-            diagnosticsEnabled = RawStackRuntimeDebug.mgcFullResolutionDenoiseDiagnosticsEnabled,
-            // GCam ProcessRaw's low-frequency branch box-downsamples by the FinishRaw level of
-            // this output scale and runs ChromaDenoise again there (see the JNI).
-            lowFrequencyLog2Downsample = MgcFinishResolution.resolve(
-                cropWidth = fullWidth,
-                cropHeight = fullHeight,
-                outputWidth = maxOf(1, (fullWidth * outputScale).roundToInt()),
-                outputHeight = maxOf(1, (fullHeight * outputScale).roundToInt()),
-            ).log2Downsample,
-            chromaMedianFilterType = coreTuning.denoise.chromaMedianFilterType,
-            exportChromaStrength = exportChromaStrength && chromaStrengthOut != null,
-            chromaStrengthOut = chromaStrengthOut,
-        )
-        rgba16f.position(0)
-        chromaStrengthOut?.position(0)
-        if (result != 0) {
-            PLog.e(
-                TAG,
-                "MGC static denoise kernel failed: " +
-                    "result=0x${result.toString(16)} size=${width}x$height " +
-                    "origin=($globalOriginX,$globalOriginY) " +
-                    "input=$inputLayout " +
-                    "luma=$lumaEnabled chroma=$chromaEnabled " +
-                    "measureMoire=$measureMoireEnabled outputScale=$outputScale",
-            )
-            return false
-        }
-        PLog.d(
-            TAG,
-            "MGC static denoise complete: size=${width}x$height " +
-                "origin=($globalOriginX,$globalOriginY) input=$inputLayout " +
-                "snr=$tuningSnr pass=$pass " +
-                "luma=$lumaEnabled($finiteLumaScale) " +
-                "chroma=$chromaEnabled($finiteChromaScale) " +
-                "measureMoire=$measureMoireEnabled outputScale=$outputScale " +
-                "rgbShot=${rgbShot.contentToString()} " +
-                "rgbRead=${rgbRead.contentToString()} " +
-                "rgbWb=${rgbWhiteBalance.contentToString()} " +
-                "tuningInterpolation=linear " +
-                "lumaScales=${coreTuning.denoise.lumaStrengthScale} " +
-                "detailReconstructionScales=${coreTuning.denoise.detailReconstructionScale} " +
-                "outlierRejectionScales=${coreTuning.denoise.outlierRejectionScale} " +
-                "chromaScales=${coreTuning.denoise.chromaStrengthScale} " +
-                "frequencyResponse=${coreTuning.denoise.frequencyResponse} " +
-                "noiseCorrelationScale=${coreTuning.fusion.noiseCorrelationScale} " +
-                "lumaStrength=${lumaTuning.strength.contentToString()} " +
-                "lumaOutlier=${lumaTuning.outlierDistance.contentToString()} " +
-                "lumaRevert=${lumaTuning.revertFactor.contentToString()} " +
-                "chromaStrength=${chromaTuning.strength.contentToString()} " +
-                "chromaOutlier=${chromaTuning.outlierDistance.contentToString()} " +
-                "preparedYuvRead=${preparedYuvNoiseModel?.normalizedRead?.contentToString()} " +
-                "preparedLumaShot=${preparedYuvNoiseModel?.normalizedLumaShot} " +
-                "preparedLumaQuadratic=${preparedYuvNoiseModel?.normalizedLumaQuadratic} " +
-                "preparedChromaShot=${preparedYuvNoiseModel?.normalizedChromaShot} " +
-                "preparedChromaQuadratic=${preparedYuvNoiseModel?.normalizedChromaQuadratic} " +
-                "strengthMap=${spatialStrengthMap?.let {
-                    "${it.width}x${it.height}"
-                } ?: "identity"} " +
-                "lsc=${if (useLensShadingForStrength) {
-                    "${metadata.lensShadingMapWidth}x${metadata.lensShadingMapHeight}"
-                } else {
-                    "identity"
-                }} " +
-                "lumaCorrelation=${if (lumaCorrelation == null) "identity" else "propagated"} " +
-                "chromaCorrelation=${if (chromaCorrelation == null) {
-                    "identity"
-                } else {
-                    "propagated"
-                }}",
-        )
-        return true
-    }
-
-    /**
-     * Denoises linear RGBA16F produced from an ISP-rendered bitmap (white balance 1, 1, 1) with
-     * the [MgcBitmapNoiseModel] calibration for its ISO. Tunings follow the USER_ADJUSTMENT pass; there is no CFA
-     * (no MeasureMoire) and no lens shading. [spatialStrengthQ8] is the bitmap detail map over the
-     * whole image ((full + 3) / 4 Q8 noise scale), or null. The low-frequency chroma branch runs
-     * separately over the whole image ([lowFrequencyChromaBitmap]).
-     */
-    fun denoiseLinearBitmap(
-        rgba16f: ByteBuffer,
-        width: Int,
-        height: Int,
-        globalOriginX: Int,
-        globalOriginY: Int,
-        fullWidth: Int,
-        fullHeight: Int,
-        noiseModel: PreparedYuvNoiseModel,
-        spatialStrengthQ8: ShortArray?,
-        tuningSnr: Float,
-        lumaStrengthScale: Float,
-        chromaStrengthScale: Float,
-    ): Boolean {
-        val finiteLumaScale = DenoiseStrength.clamp(lumaStrengthScale)
-        val finiteChromaScale = DenoiseStrength.clamp(chromaStrengthScale)
-        val lumaEnabled = finiteLumaScale > 0f
-        val chromaEnabled = finiteChromaScale > 0f
-        if (!initialized || !rgba16f.isDirect || width <= 0 || height <= 0 ||
-            (!lumaEnabled && !chromaEnabled)
-        ) {
-            return false
-        }
-        val model = noiseModel
-        check(validPreparedYuvNoise(model) && validCorrelation(model.lumaCorrelation) &&
-            validCorrelation(model.chromaCorrelation)) { "Malformed bitmap MGC noise model" }
-        val strengthWidth = (fullWidth + 3) / 4
-        val strengthHeight = (fullHeight + 3) / 4
-        check(spatialStrengthQ8 == null || spatialStrengthQ8.size == strengthWidth * strengthHeight) {
-            "Bitmap strength map does not cover ${fullWidth}x$fullHeight"
-        }
-        val coreTuning = PhotonCoreImagingTuning
-        val lumaTuning = bitmapLumaTuning(tuningSnr, finiteLumaScale)
-        val chromaTuning = bitmapChromaTuning(tuningSnr, finiteChromaScale)
-        rgba16f.clear()
-        val result = nativeDenoiseRgba16f(
-            rgbaBuffer = rgba16f,
-            width = width,
-            height = height,
-            globalOriginX = globalOriginX,
-            globalOriginY = globalOriginY,
-            fullWidth = fullWidth,
-            fullHeight = fullHeight,
-            inputIsBayer = false,
-            cfaPattern = 0,
-            measureMoireEnabled = false,
-            applyLensShadingInBayerAot = false,
-            lensShading = null,
-            lensWidth = 0,
-            lensHeight = 0,
-            // The prepared YUV model replaces the analytic RGB model in the native bridge.
-            normalizedRgbShot = FloatArray(3),
-            normalizedRgbRead = FloatArray(3),
-            normalizedRgbWhiteBalance = floatArrayOf(1f, 1f, 1f),
-            preparedNormalizedYuvRead = model.normalizedRead,
-            preparedNormalizedLumaShot = model.normalizedLumaShot,
-            preparedNormalizedLumaQuadratic = model.normalizedLumaQuadratic,
-            preparedNormalizedChromaShot = model.normalizedChromaShot,
-            preparedNormalizedChromaQuadratic = model.normalizedChromaQuadratic,
-            lumaCorrelation = model.lumaCorrelation,
-            chromaCorrelation = model.chromaCorrelation,
-            denoiseResponseOffset = coreTuning.denoise.frequencyResponse.responseOffset,
-            denoiseResponseCosineOffset = coreTuning.denoise.frequencyResponse.cosineOffset,
-            spatialStrengthQ8 = spatialStrengthQ8,
-            spatialStrengthWidth = if (spatialStrengthQ8 != null) strengthWidth else 0,
-            spatialStrengthHeight = if (spatialStrengthQ8 != null) strengthHeight else 0,
-            lumaEnabled = lumaEnabled,
-            chromaEnabled = chromaEnabled,
-            lumaStrength = lumaTuning.strength,
-            lumaOutlierDistance = lumaTuning.outlierDistance,
-            lumaRevertFactor = lumaTuning.revertFactor,
-            chromaStrength = chromaTuning.strength,
-            chromaOutlierThreshold = chromaTuning.outlierDistance,
-            diagnosticsEnabled = RawStackRuntimeDebug.mgcFullResolutionDenoiseDiagnosticsEnabled,
-            lowFrequencyLog2Downsample = 0,
-            chromaMedianFilterType = coreTuning.denoise.chromaMedianFilterType,
-            exportChromaStrength = false,
-            chromaStrengthOut = null,
-        )
-        rgba16f.position(0)
-        if (result != 0) {
-            PLog.e(
-                TAG,
-                "MGC bitmap denoise kernel failed: result=0x${result.toString(16)} " +
-                    "size=${width}x$height origin=($globalOriginX,$globalOriginY)",
-            )
-            return false
-        }
-        PLog.d(
-            TAG,
-            "MGC bitmap denoise complete: size=${width}x$height " +
-                "origin=($globalOriginX,$globalOriginY) full=${fullWidth}x$fullHeight " +
-                "snr=$tuningSnr luma=$lumaEnabled($finiteLumaScale) " +
-                "chroma=$chromaEnabled($finiteChromaScale) " +
-                "lumaStrength=${lumaTuning.strength.contentToString()} " +
-                "chromaStrength=${chromaTuning.strength.contentToString()}",
-        )
-        return true
-    }
-
-    private fun bitmapLumaTuning(tuningSnr: Float, scale: Float): Tuning {
-        val coreTuning = PhotonCoreImagingTuning
-        return applyCoreDenoiseScales(
-            tuning = interpolateTuning(tuningSnr, lumaTuningPoints),
-            globalStrengthScale = scale,
-            strengthLevelScales = coreTuning.denoise.lumaStrengthScale.toFloatArray(),
-            revertLevelScales = coreTuning.denoise.detailReconstructionScale.toFloatArray(),
-            outlierLevelScales = coreTuning.denoise.outlierRejectionScale.toFloatArray(),
-        )
-    }
-
-    private fun bitmapChromaTuning(tuningSnr: Float, scale: Float): Tuning =
-        applyCoreDenoiseScales(
-            tuning = interpolateTuning(tuningSnr, chromaTuningPoints),
-            globalStrengthScale = scale,
-            strengthLevelScales = PhotonCoreImagingTuning.denoise.chromaStrengthScale.toFloatArray(),
-            revertLevelScales = FloatArray(5) { 1f },
-            outlierLevelScales = FloatArray(5) { 1f },
-        )
-
-    /**
-     * Prepares all parameters needed to run [GlesMgcChromaDenoise] for a RAW pass
-     * (`SPATIAL_DEFAULT`, `SABRE_DEFAULT`, or `USER_ADJUSTMENT`).
-     */
-    fun prepareRawChromaConfig(
-        fullWidth: Int,
-        fullHeight: Int,
-        outputScale: Float = 1f,
-        metadata: RawMetadata,
-        preparedYuvNoiseModel: PreparedYuvNoiseModel? = null,
-        applyLensShadingToDenoiseStrength: Boolean = false,
-        tuningSnr: Float,
-        pass: Pass,
-        chromaStrengthScale: Float,
-    ): ChromaDenoiseConfig? {
-        val finiteChromaScale = DenoiseStrength.clamp(chromaStrengthScale)
-        if (!initialized || finiteChromaScale <= 0f || !outputScale.isFinite() || outputScale <= 0f) {
-            return null
-        }
-        val useSpatialModel = pass == Pass.SPATIAL_DEFAULT
-        val useSabreModel = pass == Pass.SABRE_DEFAULT
-        if (preparedYuvNoiseModel != null && !validPreparedYuvNoise(preparedYuvNoiseModel)) {
-            PLog.e(TAG, "MGC chroma config rejected malformed prepared VGN YUV model")
-            return null
-        }
-        val mergedCorrelation = if (useSpatialModel || useSabreModel) {
-            metadata.mgcDenoiseCorrelation
-        } else null
-        val coreTuning = PhotonCoreImagingTuning
-        val defaultCorrelation = if (!useSpatialModel && !useSabreModel) {
-            FloatArray(128) { coreTuning.denoise.noiseSpectrumSeed }
-        } else null
-        val chromaCorrelation = applyFusionCorrelationScale(
-            correlation = preparedYuvNoiseModel?.chromaCorrelation ?: mergedCorrelation ?: defaultCorrelation,
-            scale = coreTuning.fusion.noiseCorrelationScale,
-            enabled = useSabreModel,
-        )
-        if ((useSpatialModel || useSabreModel) && !validCorrelation(chromaCorrelation)) {
-            PLog.e(TAG, "MGC chroma config rejected missing/malformed $pass correlation spectrum")
+            PLog.e(TAG, "MGC denoise config rejected missing/malformed $pass correlation spectrum")
             return null
         }
         val spatialStrengthMap = metadata.mgcSpatialStrengthMap.takeIf { useSpatialModel }
@@ -615,7 +210,7 @@ internal object MgcFullResolutionDenoise {
                     it.q8.size == it.width * it.height
             } != true
         ) {
-            PLog.e(TAG, "MGC chroma config rejected Spatial strength map")
+            PLog.e(TAG, "MGC denoise config rejected Spatial strength map")
             return null
         }
         val rgbRead: FloatArray
@@ -640,38 +235,81 @@ internal object MgcFullResolutionDenoise {
             (useSpatialModel || useSabreModel || applyLensShadingToDenoiseStrength) &&
                 hasValidLensShadingMap(metadata)
         val rgbWhiteBalance = normalizedRgbWhiteBalance(metadata.whiteBalanceGains)
-        val chromaTuning = applyCoreDenoiseScales(
-            tuning = interpolateTuning(tuningSnr, chromaTuningPoints),
-            globalStrengthScale = finiteChromaScale,
-            strengthLevelScales = coreTuning.denoise.chromaStrengthScale.toFloatArray(),
-            revertLevelScales = FloatArray(5) { 1f },
-            outlierLevelScales = FloatArray(5) { 1f },
-        )
-        val q14Noise = MgcChromaNoiseModel.prepareQ14Noise(
-            normalizedRgbRead = rgbRead,
-            normalizedRgbShot = rgbShot,
-            whiteBalance = rgbWhiteBalance,
-            preparedYuv = preparedYuvNoiseModel,
-            chromaCorrelation = chromaCorrelation,
-        )
-        val lowFrequencyLog2 = MgcFinishResolution.resolve(
-            cropWidth = fullWidth,
-            cropHeight = fullHeight,
-            outputWidth = maxOf(1, (fullWidth * outputScale).roundToInt()),
-            outputHeight = maxOf(1, (fullHeight * outputScale).roundToInt()),
-        ).log2Downsample
-        val measureMoireEnabled =
+
+        val lumaConfig = if (lumaEnabled) {
+            val selectedLumaPoints = if (useSabreModel) {
+                sabreLumaTuningPoints.map { point ->
+                    point.copy(
+                        tuning = applySabreLumaNodeOverrides(
+                            tuning = point.tuning,
+                            snr = point.snr,
+                            nodes = coreTuning.denoise.sabreLumaNodes,
+                            revertNodes = coreTuning.denoise.sabreLumaRevertNodes,
+                            outlierNodes = coreTuning.denoise.sabreLumaOutlierNodes,
+                        ),
+                    )
+                }
+            } else {
+                lumaTuningPoints
+            }
+            val lumaTuning = applyCoreDenoiseScales(
+                tuning = interpolateTuning(tuningSnr, selectedLumaPoints),
+                globalStrengthScale = finiteLumaScale,
+                strengthLevelScales = coreTuning.denoise.lumaStrengthScale.toFloatArray(),
+                revertLevelScales = coreTuning.denoise.detailReconstructionScale.toFloatArray(),
+                outlierLevelScales = coreTuning.denoise.outlierRejectionScale.toFloatArray(),
+            )
+            LumaDenoiseConfig(
+                q14Noise = MgcLumaNoiseModel.prepareQ14Noise(
+                    normalizedRgbRead = rgbRead,
+                    normalizedRgbShot = rgbShot,
+                    whiteBalance = rgbWhiteBalance,
+                    preparedYuv = preparedYuvNoiseModel,
+                    lumaCorrelation = lumaCorrelation,
+                ),
+                strength = lumaTuning.strength,
+                outlierDistance = lumaTuning.outlierDistance,
+                revertFactor = lumaTuning.revertFactor,
+            )
+        } else null
+
+        val chromaConfig = if (chromaEnabled) {
+            val chromaTuning = applyCoreDenoiseScales(
+                tuning = interpolateTuning(tuningSnr, chromaTuningPoints),
+                globalStrengthScale = finiteChromaScale,
+                strengthLevelScales = coreTuning.denoise.chromaStrengthScale.toFloatArray(),
+                revertLevelScales = FloatArray(5) { 1f },
+                outlierLevelScales = FloatArray(5) { 1f },
+            )
+            val lowFrequencyLog2 = MgcFinishResolution.resolve(
+                cropWidth = fullWidth,
+                cropHeight = fullHeight,
+                outputWidth = maxOf(1, (fullWidth * outputScale).roundToInt()),
+                outputHeight = maxOf(1, (fullHeight * outputScale).roundToInt()),
+            ).log2Downsample
+            ChromaDenoiseConfig(
+                q14Noise = MgcChromaNoiseModel.prepareQ14Noise(
+                    normalizedRgbRead = rgbRead,
+                    normalizedRgbShot = rgbShot,
+                    whiteBalance = rgbWhiteBalance,
+                    preparedYuv = preparedYuvNoiseModel,
+                    chromaCorrelation = chromaCorrelation,
+                ),
+                strength = chromaTuning.strength,
+                outlierThreshold = chromaTuning.outlierDistance,
+                lowFrequencyLog2 = lowFrequencyLog2,
+                chromaMedianFilterType = coreTuning.denoise.chromaMedianFilterType,
+            )
+        } else null
+
+        val measureMoireEnabled = chromaEnabled &&
             metadata.cfaPattern in RawMetadata.CFA_RGGB..RawMetadata.CFA_BGGR &&
-                outputScale == 1f
-        return ChromaDenoiseConfig(
+            outputScale == 1f
+
+        return GpuDenoiseConfig(
             whiteBalance = rgbWhiteBalance,
-            q14Noise = q14Noise,
             responseOffset = coreTuning.denoise.frequencyResponse.responseOffset,
             responseCosineOffset = coreTuning.denoise.frequencyResponse.cosineOffset,
-            chromaStrength = chromaTuning.strength,
-            chromaOutlier = chromaTuning.outlierDistance,
-            lowFrequencyLog2 = lowFrequencyLog2,
-            chromaMedianFilterType = coreTuning.denoise.chromaMedianFilterType,
             measureMoireEnabled = measureMoireEnabled,
             spatialStrengthQ8 = spatialStrengthMap?.q8,
             spatialStrengthWidth = spatialStrengthMap?.width ?: 0,
@@ -679,22 +317,30 @@ internal object MgcFullResolutionDenoise {
             lensShadingMap = metadata.lensShadingMap.takeIf { useLensShadingForStrength },
             lensWidth = if (useLensShadingForStrength) metadata.lensShadingMapWidth else 0,
             lensHeight = if (useLensShadingForStrength) metadata.lensShadingMapHeight else 0,
+            luma = lumaConfig,
+            chroma = chromaConfig,
         )
     }
 
-    /** Prepares parameters for GPU chroma denoise (+ low-frequency branch) on an ISP bitmap. */
-    fun prepareBitmapChromaConfig(
+    /** Prepares parameters for unified GPU luma + chroma denoise on an ISP bitmap. */
+    fun prepareBitmapGpuDenoiseConfig(
         fullWidth: Int,
         fullHeight: Int,
         lowFrequencyLog2: Int,
         noiseModel: PreparedYuvNoiseModel,
         spatialStrengthQ8: ShortArray?,
         tuningSnr: Float,
+        lumaStrengthScale: Float,
         chromaStrengthScale: Float,
-    ): ChromaDenoiseConfig? {
+    ): GpuDenoiseConfig? {
+        val lumaScale = DenoiseStrength.clamp(lumaStrengthScale)
         val chromaScale = DenoiseStrength.clamp(chromaStrengthScale)
-        if (!initialized || chromaScale <= 0f) return null
-        check(validPreparedYuvNoise(noiseModel) && validCorrelation(noiseModel.chromaCorrelation)) {
+        if (!initialized || (lumaScale <= 0f && chromaScale <= 0f)) return null
+        check(
+            validPreparedYuvNoise(noiseModel) &&
+                validCorrelation(noiseModel.lumaCorrelation) &&
+                validCorrelation(noiseModel.chromaCorrelation),
+        ) {
             "Malformed bitmap MGC noise model"
         }
         val strengthWidth = (fullWidth + 3) / 4
@@ -702,25 +348,43 @@ internal object MgcFullResolutionDenoise {
         check(spatialStrengthQ8 == null || spatialStrengthQ8.size == strengthWidth * strengthHeight) {
             "Bitmap strength map does not cover ${fullWidth}x$fullHeight"
         }
-        val chromaTuning = bitmapChromaTuning(tuningSnr, chromaScale)
         val coreTuning = PhotonCoreImagingTuning
         val whiteBalance = floatArrayOf(1f, 1f, 1f)
-        val q14Noise = MgcChromaNoiseModel.prepareQ14Noise(
-            normalizedRgbRead = FloatArray(3),
-            normalizedRgbShot = FloatArray(3),
+        val lumaConfig = if (lumaScale > 0f) {
+            val lumaTuning = bitmapLumaTuning(tuningSnr, lumaScale)
+            LumaDenoiseConfig(
+                q14Noise = MgcLumaNoiseModel.prepareQ14Noise(
+                    normalizedRgbRead = FloatArray(3),
+                    normalizedRgbShot = FloatArray(3),
+                    whiteBalance = whiteBalance,
+                    preparedYuv = noiseModel,
+                    lumaCorrelation = noiseModel.lumaCorrelation,
+                ),
+                strength = lumaTuning.strength,
+                outlierDistance = lumaTuning.outlierDistance,
+                revertFactor = lumaTuning.revertFactor,
+            )
+        } else null
+        val chromaConfig = if (chromaScale > 0f) {
+            val chromaTuning = bitmapChromaTuning(tuningSnr, chromaScale)
+            ChromaDenoiseConfig(
+                q14Noise = MgcChromaNoiseModel.prepareQ14Noise(
+                    normalizedRgbRead = FloatArray(3),
+                    normalizedRgbShot = FloatArray(3),
+                    whiteBalance = whiteBalance,
+                    preparedYuv = noiseModel,
+                    chromaCorrelation = noiseModel.chromaCorrelation,
+                ),
+                strength = chromaTuning.strength,
+                outlierThreshold = chromaTuning.outlierDistance,
+                lowFrequencyLog2 = lowFrequencyLog2,
+                chromaMedianFilterType = coreTuning.denoise.chromaMedianFilterType,
+            )
+        } else null
+        return GpuDenoiseConfig(
             whiteBalance = whiteBalance,
-            preparedYuv = noiseModel,
-            chromaCorrelation = noiseModel.chromaCorrelation,
-        )
-        return ChromaDenoiseConfig(
-            whiteBalance = whiteBalance,
-            q14Noise = q14Noise,
             responseOffset = coreTuning.denoise.frequencyResponse.responseOffset,
             responseCosineOffset = coreTuning.denoise.frequencyResponse.cosineOffset,
-            chromaStrength = chromaTuning.strength,
-            chromaOutlier = chromaTuning.outlierDistance,
-            lowFrequencyLog2 = lowFrequencyLog2,
-            chromaMedianFilterType = coreTuning.denoise.chromaMedianFilterType,
             measureMoireEnabled = false,
             spatialStrengthQ8 = spatialStrengthQ8,
             spatialStrengthWidth = if (spatialStrengthQ8 != null) strengthWidth else 0,
@@ -728,39 +392,9 @@ internal object MgcFullResolutionDenoise {
             lensShadingMap = null,
             lensWidth = 0,
             lensHeight = 0,
+            luma = lumaConfig,
+            chroma = chromaConfig,
         )
-    }
-
-    /**
-     * Runs MGC's `MeasureMoireS16` on the packed Q14 Y plane and quarter-res RGBA32UI strength
-     * map read back from GPU, writing the updated 3-channel Q8 strength map as RGBA16UI.
-     */
-    fun measureMoire(
-        yPlaneS16: ByteBuffer,
-        strengthRgba32ui: ByteBuffer,
-        strengthOutRgba16ui: ByteBuffer,
-        paddedWidth: Int,
-        paddedHeight: Int,
-        strengthWidth: Int,
-        strengthHeight: Int,
-    ): Boolean {
-        if (!initialized || !yPlaneS16.isDirect || !strengthRgba32ui.isDirect || !strengthOutRgba16ui.isDirect) {
-            return false
-        }
-        val result = nativeMeasureMoireRgba32uiToRgba16ui(
-            yPlaneS16 = yPlaneS16,
-            strengthInRgba32ui = strengthRgba32ui,
-            strengthOutRgba16ui = strengthOutRgba16ui,
-            width = paddedWidth,
-            height = paddedHeight,
-            strengthWidth = strengthWidth,
-            strengthHeight = strengthHeight,
-        )
-        if (result != 0) {
-            PLog.e(TAG, "MGC MeasureMoire failed: result=$result size=${paddedWidth}x$paddedHeight")
-            return false
-        }
-        return true
     }
 
     private fun validPreparedYuvNoise(model: PreparedYuvNoiseModel): Boolean =
@@ -926,7 +560,7 @@ internal object MgcFullResolutionDenoise {
     /**
      * MGC's BayerRawToYuv/RgbRawToYuv boundary applies channel gains before
      * denoising. Spatial/VGN exports un-white-balanced camera RGB for Linear
-     * DNG, so the native bridge enters that same working domain and removes
+     * DNG, so the denoiser enters that same working domain and removes
      * the gains again after YUV -> RGB.
      */
     internal fun normalizedRgbWhiteBalance(gains: FloatArray): FloatArray {
@@ -1117,57 +751,23 @@ internal object MgcFullResolutionDenoise {
         return result.sortedBy(TuningPoint::snr)
     }
 
-    private external fun nativeMeasureMoireRgba32uiToRgba16ui(
-        yPlaneS16: ByteBuffer,
-        strengthInRgba32ui: ByteBuffer,
-        strengthOutRgba16ui: ByteBuffer,
-        width: Int,
-        height: Int,
-        strengthWidth: Int,
-        strengthHeight: Int,
-    ): Int
+    private fun bitmapLumaTuning(tuningSnr: Float, scale: Float): Tuning {
+        val coreTuning = PhotonCoreImagingTuning
+        return applyCoreDenoiseScales(
+            tuning = interpolateTuning(tuningSnr, lumaTuningPoints),
+            globalStrengthScale = scale,
+            strengthLevelScales = coreTuning.denoise.lumaStrengthScale.toFloatArray(),
+            revertLevelScales = coreTuning.denoise.detailReconstructionScale.toFloatArray(),
+            outlierLevelScales = coreTuning.denoise.outlierRejectionScale.toFloatArray(),
+        )
+    }
 
-    private external fun nativeDenoiseRgba16f(
-        rgbaBuffer: ByteBuffer,
-        width: Int,
-        height: Int,
-        globalOriginX: Int,
-        globalOriginY: Int,
-        fullWidth: Int,
-        fullHeight: Int,
-        inputIsBayer: Boolean,
-        cfaPattern: Int,
-        measureMoireEnabled: Boolean,
-        applyLensShadingInBayerAot: Boolean,
-        lensShading: FloatArray?,
-        lensWidth: Int,
-        lensHeight: Int,
-        normalizedRgbShot: FloatArray,
-        normalizedRgbRead: FloatArray,
-        normalizedRgbWhiteBalance: FloatArray,
-        preparedNormalizedYuvRead: FloatArray?,
-        preparedNormalizedLumaShot: Float,
-        preparedNormalizedLumaQuadratic: Float,
-        preparedNormalizedChromaShot: Float,
-        preparedNormalizedChromaQuadratic: Float,
-        lumaCorrelation: FloatArray?,
-        chromaCorrelation: FloatArray?,
-        denoiseResponseOffset: Float,
-        denoiseResponseCosineOffset: Float,
-        spatialStrengthQ8: ShortArray?,
-        spatialStrengthWidth: Int,
-        spatialStrengthHeight: Int,
-        lumaEnabled: Boolean,
-        chromaEnabled: Boolean,
-        lumaStrength: FloatArray,
-        lumaOutlierDistance: FloatArray,
-        lumaRevertFactor: FloatArray,
-        chromaStrength: FloatArray,
-        chromaOutlierThreshold: FloatArray,
-        diagnosticsEnabled: Boolean,
-        lowFrequencyLog2Downsample: Int,
-        chromaMedianFilterType: Int,
-        exportChromaStrength: Boolean,
-        chromaStrengthOut: ByteBuffer?,
-    ): Int
+    private fun bitmapChromaTuning(tuningSnr: Float, scale: Float): Tuning =
+        applyCoreDenoiseScales(
+            tuning = interpolateTuning(tuningSnr, chromaTuningPoints),
+            globalStrengthScale = scale,
+            strengthLevelScales = PhotonCoreImagingTuning.denoise.chromaStrengthScale.toFloatArray(),
+            revertLevelScales = FloatArray(5) { 1f },
+            outlierLevelScales = FloatArray(5) { 1f },
+        )
 }

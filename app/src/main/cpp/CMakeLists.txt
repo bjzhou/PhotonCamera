@@ -12,84 +12,6 @@ set(
 option(PHOTON_ENABLE_DNG_JXL "Enable Adobe DNG SDK JPEG XL support" OFF)
 
 set(
-    MGC_DENOISE_CAPSULE
-    "${CMAKE_CURRENT_SOURCE_DIR}/mgc_denoise_static/mgc_full_resolution_denoise_capsule.bin"
-)
-set(
-    MGC_DENOISE_CAPSULE_SHA256
-    "3ee5c92d2b830448de6270ec0c71ac64a484885a6bd7440d1c53f8695afc55ec"
-)
-if(NOT EXISTS "${MGC_DENOISE_CAPSULE}")
-    message(
-        FATAL_ERROR
-        "MGC denoise capsule is missing; regenerate it with "
-        "scripts/research/generate_mgc_denoise_static_asm.py"
-    )
-endif()
-file(SHA256 "${MGC_DENOISE_CAPSULE}" MGC_DENOISE_CAPSULE_ACTUAL_SHA256)
-if(NOT MGC_DENOISE_CAPSULE_ACTUAL_SHA256 STREQUAL MGC_DENOISE_CAPSULE_SHA256)
-    message(
-        FATAL_ERROR
-        "MGC denoise capsule hash mismatch; regenerate it with "
-        "scripts/research/generate_mgc_denoise_static_asm.py"
-    )
-endif()
-set(
-    MGC_DENOISE_ASM
-    "${CMAKE_CURRENT_BINARY_DIR}/mgc_full_resolution_denoise_static.S"
-)
-configure_file(
-    "${CMAKE_CURRENT_SOURCE_DIR}/mgc_denoise_static/mgc_full_resolution_denoise_static.S.in"
-    "${MGC_DENOISE_ASM}"
-    @ONLY
-)
-set_source_files_properties(
-    "${MGC_DENOISE_ASM}"
-    PROPERTIES
-    GENERATED TRUE
-    OBJECT_DEPENDS "${MGC_DENOISE_CAPSULE}"
-)
-
-set(
-    MGC_DEMOIRE_CAPSULE
-    "${CMAKE_CURRENT_SOURCE_DIR}/mgc_denoise_static/mgc_demoire_capsule.bin"
-)
-set(
-    MGC_DEMOIRE_CAPSULE_SHA256
-    "769d656725b445c356b9f3e44341e101806bb201fcd2e5681c0ab92173a68c9a"
-)
-if(NOT EXISTS "${MGC_DEMOIRE_CAPSULE}")
-    message(
-        FATAL_ERROR
-        "MGC MeasureMoire capsule is missing; regenerate it with "
-        "scripts/research/generate_mgc_demoire_static_asm.py"
-    )
-endif()
-file(SHA256 "${MGC_DEMOIRE_CAPSULE}" MGC_DEMOIRE_CAPSULE_ACTUAL_SHA256)
-if(NOT MGC_DEMOIRE_CAPSULE_ACTUAL_SHA256 STREQUAL MGC_DEMOIRE_CAPSULE_SHA256)
-    message(
-        FATAL_ERROR
-        "MGC MeasureMoire capsule hash mismatch; regenerate it with "
-        "scripts/research/generate_mgc_demoire_static_asm.py"
-    )
-endif()
-set(
-    MGC_DEMOIRE_ASM
-    "${CMAKE_CURRENT_BINARY_DIR}/mgc_demoire_static.S"
-)
-configure_file(
-    "${CMAKE_CURRENT_SOURCE_DIR}/mgc_denoise_static/mgc_demoire_static.S.in"
-    "${MGC_DEMOIRE_ASM}"
-    @ONLY
-)
-set_source_files_properties(
-    "${MGC_DEMOIRE_ASM}"
-    PROPERTIES
-    GENERATED TRUE
-    OBJECT_DEPENDS "${MGC_DEMOIRE_CAPSULE}"
-)
-
-set(
     MGC_RAISR_CAPSULE
     "${CMAKE_CURRENT_SOURCE_DIR}/mgc_denoise_static/mgc_raisr_capsule.bin"
 )
@@ -244,8 +166,6 @@ set_property(
     "${MGC_RAISR_ASM}"
     "${MGC_RAISR_TABLES_ASM}"
     "${MGC_POLYSHARP_ASM}"
-    "${MGC_DENOISE_ASM}"
-    "${MGC_DEMOIRE_ASM}"
 )
 
 # 4. 添加头文件路径
@@ -360,10 +280,6 @@ add_library(my-native-lib SHARED
     lut_processor.cpp
     dcp_parser.cpp
     mgc_denoise_static/mgc_halide_runtime.cpp
-    mgc_denoise_static/mgc_denoise_static.cpp
-    mgc_denoise_static/mgc_full_resolution_denoise.cpp
-    mgc_denoise_static/mgc_full_resolution_denoise_jni.cpp
-    mgc_denoise_static/mgc_spatial_strength_jni.cpp
     raw_float_texture_transfer_jni.cpp
     mgc_denoise_static/mgc_raisr_jni.cpp
     mgc_denoise_static/mgc_raisr_driver.cpp
@@ -371,8 +287,6 @@ add_library(my-native-lib SHARED
     "${MGC_RAISR_ASM}"
     "${MGC_RAISR_TABLES_ASM}"
     "${MGC_POLYSHARP_ASM}"
-    "${MGC_DENOISE_ASM}"
-    "${MGC_DEMOIRE_ASM}"
     ${LIBRAW_SOURCES}
     ${ADOBE_DNG_SOURCES}
 )
@@ -441,11 +355,9 @@ set_source_files_properties(
     COMPILE_OPTIONS "-fno-fast-math;-ffp-contract=off"
 )
 
-# The MGC Halide runtime and the denoise host-side tuning/noise-model builders
-# rely on scalar IEEE behavior. Keep them independent of the target-wide fast-math flags.
+# The MGC Halide runtime relies on scalar IEEE behavior.
 set_source_files_properties(
     mgc_denoise_static/mgc_halide_runtime.cpp
-    mgc_denoise_static/mgc_denoise_static.cpp
     PROPERTIES
     COMPILE_OPTIONS "-fno-fast-math;-ffp-contract=off"
 )

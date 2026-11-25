@@ -26,8 +26,26 @@ internal object MgcChromaNoiseModel {
         0.9999967217445374f, -0.9083024859428406f, -0.09169333428144455f,
     )
 
-    private val BOX_FILTER = floatArrayOf(0.5f, 0.5f)
-    private val CHROMA_PYRAMID_FILTER = floatArrayOf(0.125f, 0.375f, 0.375f, 0.125f)
+    internal class SpectrumFilter(taps: FloatArray) {
+        private val power = FloatArray(128) { freq ->
+            var real = 0.0
+            var imag = 0.0
+            val omega = (freq.toDouble() + 0.5) * 2.0 * Math.PI / 128.0 - Math.PI
+            for (tap in taps.indices) {
+                val weight = taps[tap].toDouble()
+                real += weight * cos(omega * tap)
+                imag -= weight * sin(omega * tap)
+            }
+            (real * real + imag * imag).toFloat()
+        }
+
+        operator fun get(freq: Int): Float = power[freq]
+    }
+
+    private val BOX_FILTER = SpectrumFilter(floatArrayOf(0.5f, 0.5f))
+    private val CHROMA_PYRAMID_FILTER = SpectrumFilter(floatArrayOf(0.125f, 0.375f, 0.375f, 0.125f))
+    private val nativeCosines = responseCosines(1)
+    private val halfResolutionCosines = responseCosines(2)
 
     /** Fixed-point uniforms for one (level, branch) bilateral filter pass. */
     data class BranchCoeffs(
@@ -122,7 +140,7 @@ internal object MgcChromaNoiseModel {
         return Q14ChromaNoise(read, shot, quad, spectrum)
     }
 
-    /** Builds the 4-level x 2-branch fixed-point coefficients for `GlesMgcChromaDenoise`. */
+    /** Builds the 4-level x 2-branch fixed-point chroma coefficients for [GlesMgcDenoise]. */
     fun buildPyramidParams(
         noise: Q14ChromaNoise,
         responseOffset: Float,
@@ -145,7 +163,6 @@ internal object MgcChromaNoiseModel {
                     downsamplingEnergy(
                         spectrum,
                         downsampleFactor,
-                        0,
                         responseOffset,
                         responseCosineOffset,
                     )
@@ -176,31 +193,38 @@ internal object MgcChromaNoiseModel {
         return PyramidParams(branches)
     }
 
-    private fun downsamplingEnergy(
+    internal fun downsamplingEnergy(
         spectrum: FloatArray,
-        xFactor: Int,
-        yFactor: Int,
+        downsampleFactor: Int,
         responseOffset: Float,
         responseCosineOffset: Float,
     ): Float {
+        // The bilateral branches vary along one axis. The same response applies in each row.
+        val cosines = when (downsampleFactor) {
+            1 -> nativeCosines
+            2 -> halfResolutionCosines
+            else -> error("Unsupported MGC denoise downsample factor $downsampleFactor")
+        }
+        var innerSum = 0f
+        for (index in 0 until 128) {
+            val c = cosines[index]
+            val shifted = c + responseCosineOffset
+            val response = (responseOffset - c * c) + shifted * shifted
+            innerSum += spectrum[index] * response
+        }
         var total = 0f
-        val phaseShift = (xFactor + yFactor).toDouble() * Math.PI
-        for (outer in 0 until 128) {
-            var innerSum = 0f
-            for (inner in 0 until 128) {
-                val wrapped = (outer * yFactor + inner * xFactor) and 127
-                val angle = wrapped.toDouble() * Math.PI / 64.0 - phaseShift
-                val c = cos(angle).toFloat()
-                val shifted = c + responseCosineOffset
-                val response = (responseOffset - c * c) + shifted * shifted
-                innerSum += spectrum[inner] * response
-            }
-            total += innerSum * spectrum[outer]
+        for (index in 0 until 128) {
+            total += innerSum * spectrum[index]
         }
         return total * 0.00006103515625f
     }
 
-    private fun filterAndDecimateSpectrum(spectrum: FloatArray, filter: FloatArray): Float {
+    private fun responseCosines(factor: Int): FloatArray = FloatArray(128) { index ->
+        val wrapped = (index * factor) and 127
+        cos(wrapped.toDouble() * Math.PI / 64.0 - factor.toDouble() * Math.PI).toFloat()
+    }
+
+    internal fun filterAndDecimateSpectrum(spectrum: FloatArray, filter: SpectrumFilter): Float {
         if (spectrum.all { it == 0f }) {
             spectrum.fill(1f)
             return 0f
@@ -208,16 +232,7 @@ internal object MgcChromaNoiseModel {
         val filtered = FloatArray(128)
         var energy = 0f
         for (freq in 0 until 128) {
-            var real = 0.0
-            var imag = 0.0
-            val omega = (freq.toDouble() + 0.5) * 2.0 * Math.PI / 128.0 - Math.PI
-            for (tap in filter.indices) {
-                val tapWeight = filter[tap].toDouble()
-                real += tapWeight * cos(omega * tap)
-                imag -= tapWeight * sin(omega * tap)
-            }
-            val response = (real * real + imag * imag).toFloat()
-            val value = spectrum[freq] * response
+            val value = spectrum[freq] * filter[freq]
             filtered[freq] = value
             energy += value
         }
@@ -250,21 +265,21 @@ internal object MgcChromaNoiseModel {
         return convScale * (dsEnergy * dsEnergy)
     }
 
-    private fun roundNearestEven(x: Float): Float = Math.rint(x.toDouble()).toFloat()
+    internal fun roundNearestEven(x: Float): Float = Math.rint(x.toDouble()).toFloat()
 
-    private fun floatToU16Rne(x: Float): Int {
+    internal fun floatToU16Rne(x: Float): Int {
         if (x.isNaN()) return 0
         val r = max(min(roundNearestEven(x), 65535f), 0f)
         return r.toInt()
     }
 
-    private fun floatToS16Rne(x: Float): Int {
+    internal fun floatToS16Rne(x: Float): Int {
         if (x.isNaN()) return 0
         val r = max(min(roundNearestEven(max(x, 0f)), 32767f), -32768f)
         return r.toInt()
     }
 
-    private fun floatToS32Rne(x: Float): Int {
+    internal fun floatToS32Rne(x: Float): Int {
         if (x.isNaN()) return 0
         val r = max(roundNearestEven(max(x, 0f)), -2147483648f)
         return if (r >= 2147483648f) Int.MAX_VALUE else r.toInt()

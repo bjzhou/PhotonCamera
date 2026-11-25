@@ -12,7 +12,7 @@ internal data class MgcSpatialDiagnosticGeometry(
     val fixed16SampleCount: Long,
 )
 
-/** Exact host geometry required by the lifted Bayer/RGB Spatial noise-model AOT kernels. */
+/** Bayer/RGB Spatial noise-model input geometry, including the original 16×16 signal tiles. */
 internal fun mgcSpatialDiagnosticGeometry(
     outputMode: MgcSpatialOutputMode,
     imageWidth: Int,

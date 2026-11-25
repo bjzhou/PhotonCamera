@@ -43,11 +43,7 @@ internal object RawStackRuntimeDebug {
             }
         }
 
-    /**
-     * Full CPU scans of the spatial strength inputs are intentionally opt-in. They are useful
-     * while validating the capsule boundary, but do not affect the capsule result and are too
-     * expensive to run on every debug capture.
-     */
+    /** Logs Spatial noise input statistics and calibration, including optional atlas readback. */
     val mgcSpatialInputDiagnosticsEnabled: Boolean
         get() = enabled &&
             SystemPropertiesUtil.get("debug.photon.mgc_spatial.input_diagnostics")

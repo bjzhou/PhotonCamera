@@ -2,8 +2,7 @@ package com.hinnka.mycamera.processor
 
 /**
  * Packs equally sized diagnostic planes into a 2D texture without changing their logical
- * plane-major order. The GPU readback path removes the atlas padding before handing the data
- * to the lifted Spatial strength kernels.
+ * plane-major order. The Spatial noise passes address each plane directly in the atlas.
  */
 internal data class MgcSpatialStrengthAtlasLayout(
     val planeWidth: Int,
