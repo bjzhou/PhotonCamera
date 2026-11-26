@@ -39,6 +39,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
 import coil.compose.AsyncImagePainter
+import coil.request.CachePolicy
 import coil.request.ImageRequest
 import coil.size.Size
 import coil.transform.Transformation
@@ -770,11 +771,7 @@ internal fun LutItem(
 ) {
     val context = LocalContext.current
     val isNone = id == "none"
-    val sourceBitmap = if (retainPreview && !isNone) {
-        var lastSource by remember(id) { mutableStateOf<Bitmap?>(null) }
-        if (previewBitmap != null) SideEffect { lastSource = previewBitmap }
-        previewBitmap ?: lastSource
-    } else previewBitmap
+    val sourceBitmap = previewBitmap?.takeUnless { it.isRecycled }
     val lastPreview = remember(id, recipeTarget, if (retainPreview) null else sourceBitmap) {
         mutableStateOf<Painter?>(null)
     }
@@ -792,11 +789,11 @@ internal fun LutItem(
     ) {
         if (isNone) {
             Icon(AppIcons.Block, null, tint = Color.White.copy(alpha = 0.7f), modifier = Modifier.size(24.dp))
-        } else if (sourceBitmap != null) {
+        } else {
             // 照片缩略图
-            val transformation = remember(id, sourceBitmap) {
+            val transformation = remember(context, id, recipeTarget) {
                 object : Transformation {
-                    override val cacheKey: String = "previewTransformation_${sourceBitmap.hashCode()}_$id"
+                    override val cacheKey: String = "lut-preview:$id:$recipeTarget"
                     val contentRepository = ContentRepository.getInstance(context)
 
                     override suspend fun transform(
@@ -821,9 +818,15 @@ internal fun LutItem(
             }
             val imageRequest = remember(sourceBitmap, transformation) {
                 ImageRequest.Builder(context)
-                    .data(sourceBitmap)
+                    .data(sourceBitmap ?: R.drawable.lut_preview_landscape)
                     .crossfade(false)
                     .transformations(transformation)
+                    .apply {
+                        if (sourceBitmap == null) {
+                            // The resource ID stays the same when a LUT or its color recipe is edited.
+                            memoryCachePolicy(CachePolicy.DISABLED)
+                        }
+                    }
                     .build()
             }
 
