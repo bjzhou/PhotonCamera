@@ -163,6 +163,11 @@ class Camera2Controller(private val context: Context) {
         val focusDistanceDiopters: Float
     )
 
+    private data class AutoWhiteBalanceReference(
+        val kelvin: Int,
+        val correction: ManualWhiteBalanceMatrix,
+    )
+
     private data class InitialSessionParametersResult(
         val applied: Boolean,
         val usedVendorParameters: Boolean
@@ -314,7 +319,7 @@ class Camera2Controller(private val context: Context) {
     private var cctWhiteBalanceRange: Range<Int>? = null
     private var whiteBalanceCameraId: String? = null
     private var whiteBalanceCalibration: CameraWhiteBalanceCalibration? = null
-    private var latestAutoWhiteBalanceTransform: ColorSpaceTransform? = null
+    private var latestAutoWhiteBalanceReference: AutoWhiteBalanceReference? = null
     @Volatile
     private var requestedRawCaptureEnabled = false
     private var isRawSupported = false
@@ -2111,7 +2116,7 @@ class Camera2Controller(private val context: Context) {
         cctWhiteBalanceRange = null
         whiteBalanceCameraId = null
         whiteBalanceCalibration = null
-        latestAutoWhiteBalanceTransform = null
+        latestAutoWhiteBalanceReference = null
         isRawSupported = false
         isP010Supported = false
         isStreamUseCaseSupported = false
@@ -4416,10 +4421,10 @@ class Camera2Controller(private val context: Context) {
     }
 
     private fun canAdjustManualWhiteBalance(): Boolean =
-        latestAutoWhiteBalanceTransform != null || cctWhiteBalanceRange != null
+        latestAutoWhiteBalanceReference != null || cctWhiteBalanceRange != null
 
-    private fun whiteBalanceTemperatureRange(matrix: ColorSpaceTransform?): Range<Int> =
-        if (matrix != null) calibratedWhiteBalanceRange else cctWhiteBalanceRange ?: calibratedWhiteBalanceRange
+    private fun whiteBalanceTemperatureRange(useMatrix: Boolean): Range<Int> =
+        if (useMatrix) calibratedWhiteBalanceRange else cctWhiteBalanceRange ?: calibratedWhiteBalanceRange
 
     private fun configureWhiteBalanceOutput(
         cameraId: String,
@@ -4434,8 +4439,8 @@ class Camera2Controller(private val context: Context) {
         } else null
         whiteBalanceCameraId = cameraId
         whiteBalanceCalibration = characteristics?.let(CameraWhiteBalanceCalibration::fromCharacteristics)
-        latestAutoWhiteBalanceTransform = null
-        val range = whiteBalanceTemperatureRange(matrix = null)
+        latestAutoWhiteBalanceReference = null
+        val range = whiteBalanceTemperatureRange(useMatrix = false)
         _state.update {
             it.copy(
                 awbMode = it.awbMode.takeIf {
@@ -4480,10 +4485,6 @@ class Camera2Controller(private val context: Context) {
         val resultMode = frame?.get(CaptureResult.CONTROL_AWB_MODE)
             ?: result.get(CaptureResult.CONTROL_AWB_MODE)
         if (frame != null && resultMode == state.awbMode) {
-            if (resultMode != manualMode && usesSensorCalibratedWhiteBalance()) {
-                frame.readMetadataOrNull(CaptureResult.COLOR_CORRECTION_TRANSFORM, whiteBalanceCameraId)
-                    ?.let { latestAutoWhiteBalanceTransform = it }
-            }
             val gains = frame.readMetadataOrNull(CaptureResult.COLOR_CORRECTION_GAINS, whiteBalanceCameraId)
             // The CCT result fields describe the manual CCT mode. Auto uses the applied gains.
             val isNativeCct = Build.VERSION.SDK_INT >= 36 && resultMode == manualMode &&
@@ -4497,12 +4498,22 @@ class Camera2Controller(private val context: Context) {
             val tint = if (isNativeCct) {
                 frame.readMetadataOrNull(CaptureResult.COLOR_CORRECTION_COLOR_TINT, whiteBalanceCameraId)
             } else null
-            val matrix = if (state.awbMode == manualMode) {
-                state.manualWhiteBalanceMatrix?.transform
-            } else {
-                latestAutoWhiteBalanceTransform
+            if (resultMode != manualMode && temperature != null && gains != null &&
+                gains.hasValidWhiteBalanceGains() && usesSensorCalibratedWhiteBalance()
+            ) {
+                val transform = frame.readMetadataOrNull(CaptureResult.COLOR_CORRECTION_TRANSFORM, whiteBalanceCameraId)
+                if (transform != null) {
+                    latestAutoWhiteBalanceReference = AutoWhiteBalanceReference(
+                        temperature, ManualWhiteBalanceMatrix(gains, transform),
+                    )
+                }
             }
-            val range = whiteBalanceTemperatureRange(matrix)
+            val useMatrix = if (state.awbMode == manualMode) {
+                state.manualWhiteBalanceMatrix != null
+            } else {
+                latestAutoWhiteBalanceReference != null
+            }
+            val range = whiteBalanceTemperatureRange(useMatrix)
             _state.update {
                 it.copy(
                     actualAwbTemperature = temperature,
@@ -4523,6 +4534,9 @@ class Camera2Controller(private val context: Context) {
             updatePreviewWhiteBalance()
         }
     }
+
+    private fun RggbChannelVector.hasValidWhiteBalanceGains(): Boolean =
+        minOf(red, greenEven, greenOdd, blue) > 0f && maxOf(red, greenEven, greenOdd, blue).isFinite()
 
     private fun RggbChannelVector.toStateGains(): WhiteBalanceGains {
         return WhiteBalanceGains(
@@ -5957,7 +5971,8 @@ class Camera2Controller(private val context: Context) {
         val normalizedMode = mode.takeIf { availableAwbModes.isEmpty() || it in availableAwbModes }
             ?: CameraMetadata.CONTROL_AWB_MODE_AUTO
         if (_state.value.awbMode == normalizedMode) return
-        val range = whiteBalanceTemperatureRange(latestAutoWhiteBalanceTransform)
+        latestAutoWhiteBalanceReference = null
+        val range = whiteBalanceTemperatureRange(useMatrix = false)
         _state.update {
             it.copy(
                 awbMode = normalizedMode,
@@ -5975,17 +5990,15 @@ class Camera2Controller(private val context: Context) {
 
     fun setAwbTemperature(kelvin: Int) {
         val state = _state.value
-        val transform = if (state.awbMode == CameraMetadata.CONTROL_AWB_MODE_OFF) {
-            state.manualWhiteBalanceMatrix?.transform
-        } else {
-            latestAutoWhiteBalanceTransform
-        }
-        if (transform == null && cctWhiteBalanceRange == null) return
-        val range = whiteBalanceTemperatureRange(transform)
+        val reference = latestAutoWhiteBalanceReference
+        if (reference == null && cctWhiteBalanceRange == null) return
+        val range = whiteBalanceTemperatureRange(useMatrix = reference != null)
         val temperature = kelvin.coerceIn(range.lower, range.upper)
-        val matrix = if (transform != null) {
-            val gains = whiteBalanceCalibration?.gainsForTemperature(temperature) ?: return
-            ManualWhiteBalanceMatrix(gains, transform)
+        val matrix = if (reference != null) {
+            val gains = whiteBalanceCalibration?.changeTemperature(
+                reference.correction.gains, reference.kelvin, temperature,
+            ) ?: return
+            reference.correction.copy(gains = gains)
         } else null
         pendingRetainedAwbTemperature = null
         if (state.awbMode == CameraMetadata.CONTROL_AWB_MODE_OFF &&
@@ -6005,7 +6018,14 @@ class Camera2Controller(private val context: Context) {
                 awbTemperatureMax = range.upper,
             )
         }
-        val path = if (matrix != null) "calibrated gains" else "Camera2 CCT"
+        if (state.awbMode != CameraMetadata.CONTROL_AWB_MODE_OFF && reference != null) {
+            PLog.d(
+                TAG,
+                "Manual white balance reference: camera=$whiteBalanceCameraId, ${reference.kelvin}K, " +
+                    "gains=${reference.correction.gains}, transform=${reference.correction.transform}",
+            )
+        }
+        val path = if (matrix != null) "gains=${matrix.gains}" else "Camera2 CCT"
         PLog.d(TAG, "White balance: ${temperature}K ($path)")
         updatePreviewWhiteBalance()
     }

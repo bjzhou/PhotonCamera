@@ -19,11 +19,36 @@ internal class CameraWhiteBalanceCalibration private constructor(
         val logRedBlueRatio: Float,
     )
 
-    fun gainsForTemperature(kelvin: Int): RggbChannelVector? {
+    private fun gainsForTemperature(kelvin: Int): RggbChannelVector? {
         if (kelvin !in MIN_TEMPERATURE..MAX_TEMPERATURE) return null
         val offset = kelvin - MIN_TEMPERATURE
         if (offset % TEMPERATURE_STEP == 0) return samples[offset / TEMPERATURE_STEP].gains
         return calculateGains(calibration, kelvin)
+    }
+
+    fun changeTemperature(
+        referenceGains: RggbChannelVector,
+        referenceKelvin: Int,
+        targetKelvin: Int,
+    ): RggbChannelVector? {
+        if (targetKelvin == referenceKelvin) return referenceGains
+        val reference = gainsForTemperature(referenceKelvin) ?: return null
+        val target = gainsForTemperature(targetKelvin) ?: return null
+
+        // Apply the calibrated temperature change to the measured white point, preserving
+        // its tint and the ratio of the two green gains.
+        val greenScale = target.greenEven / reference.greenEven
+        val red = referenceGains.red * (target.red / reference.red)
+        val greenEven = referenceGains.greenEven * greenScale
+        val greenOdd = referenceGains.greenOdd * greenScale
+        val blue = referenceGains.blue * (target.blue / reference.blue)
+        // Keep the reference's common gain floor without clipping channels independently.
+        val minGain = minOf(red, greenEven, greenOdd, blue)
+        if (minGain <= 0f) return null
+        val referenceMin = minOf(referenceGains.red, referenceGains.greenEven, referenceGains.greenOdd, referenceGains.blue)
+        val scale = referenceMin / minGain
+        if (scale <= 0f || !(maxOf(red, greenEven, greenOdd, blue) * scale).isFinite()) return null
+        return RggbChannelVector(red * scale, greenEven * scale, greenOdd * scale, blue * scale)
     }
 
     fun estimateTemperature(gains: RggbChannelVector): Int? {
