@@ -43,6 +43,7 @@ import com.hinnka.mycamera.processor.GpuLinearRgbStorage
 import com.hinnka.mycamera.processor.MgcSpatialOutputMode
 import com.hinnka.mycamera.processor.MgcMergeMethod
 import com.hinnka.mycamera.processor.MultiFrameStacker
+import com.hinnka.mycamera.processor.RawBurstCapture
 import com.hinnka.mycamera.raw.RawNoiseProfileManager
 import com.hinnka.mycamera.processor.RawStackBufferLayout
 import com.hinnka.mycamera.processor.RawStackFrame
@@ -3474,6 +3475,25 @@ object GalleryManager {
                 DngCaptureDiagnostics.put("$key.blackLevel", frame.dynamicBlackLevelByCfaPosition?.contentToString())
                 DngCaptureDiagnostics.put("$key.noiseProfile", frame.channelNoiseProfile?.contentToString())
             }
+            RawBurstCapture.captureIfEnabled(
+                context = context,
+                captureId = photoId,
+                frames = effectiveRawStackFrames,
+                sourceBounds = physicalRawCrop.sourceBounds,
+                cfaPattern = stackCfaPattern,
+                whiteLevel = stackWhiteLevel,
+                blackLevel = stackBlackLevel,
+                whiteBalanceGains = rawMetadata.whiteBalanceGains,
+                cameraWhite = rawMetadata.cameraWhite,
+                noiseProfileSelection = noiseProfileSelection,
+                lensShading = rawMetadata.lensShadingMap,
+                lensShadingWidth = rawMetadata.lensShadingMapWidth,
+                lensShadingHeight = rawMetadata.lensShadingMapHeight,
+                applyLensShadingCorrection = applyRawLensShading,
+                enableHdrFusion = rawMaxHdrFusionEnabled,
+                mergeMethod = rawMaxMergeMethod,
+                outputMode = rawMaxSpatialOutputMode,
+            )
             val rawStackResult = processor.runStackingOnGlContext {
                 MultiFrameStacker.processBurstRaw(
                     frames = effectiveRawStackFrames,

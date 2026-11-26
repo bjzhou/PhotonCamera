@@ -4,6 +4,7 @@ import com.hinnka.mycamera.processor.GlesMgcGreenDemosaicShaders.PLANE_PADDING
 import com.hinnka.mycamera.processor.GlesMgcGreenDemosaicShaders.chromaOps
 import com.hinnka.mycamera.processor.GlesMgcGreenDemosaicShaders.integerOps
 import com.hinnka.mycamera.processor.GlesMgcGreenDemosaicShaders.raw16Ops
+import com.hinnka.mycamera.processor.GlesMgcRawChromaReconstructionShaders.reconstruct
 
 /**
  * GLES implementation of MGC 9.7.047 V25 `gcam::MergeRgbRaw16F16TileSize16Halide`
@@ -17,7 +18,8 @@ import com.hinnka.mycamera.processor.GlesMgcGreenDemosaicShaders.raw16Ops
  *    RAW mirrored per colour plane and the DemosaicGreenRaw16 output mirrored per pixel;
  * 2. demosaics it with the integer chroma interpolation it shares with ResolveSabre, on the
  *    same `wb_gains_applied` int16(roundEven(wb[c] * overallGain * (raw - black[c]))) as
- *    DemosaicGreenRaw16, and divides by the white balance;
+ *    DemosaicGreenRaw16. The calibrated CFA chromaticity guide constrains per-frame
+ *    reconstruction before resampling. The merge then divides by the white balance;
  * 3. resamples it by the sub-quad remainder r = 2a - d with a 3x3 Gaussian
  *    w(i, j) = exp(-0.5 * ((i - r.x)^2 + (j - r.y)^2) * sigma_f^2);
  * 4. weights it by frameWeight_f times the RAW/4 acceptance, bilinearly upsampled with half-pixel
@@ -53,6 +55,9 @@ internal object GlesMgcSpatialRgbMergeShaders {
         uniform vec4 uConversionGains;
         // DemosaicGreenRaw16 output of this frame, padded by PLANE_PADDING.
         uniform highp isampler2D uGreen;
+        #ifndef MGC_NATIVE_COLOR_ONLY
+        uniform highp sampler2D uSourceChroma;
+        #endif
         uniform highp sampler2D uAlignmentAtlas;
         uniform ivec2 uAlignmentOriginX;
         uniform ivec2 uAlignmentOriginY;
@@ -71,9 +76,13 @@ internal object GlesMgcSpatialRgbMergeShaders {
 
         const int TILE_SIZE = $TILE_SIZE;
         const int TILE_SPAN = $TILE_SPAN;
+        #ifdef MGC_NATIVE_COLOR_ONLY
         shared int sRed[$TILE_SPAN * $TILE_SPAN];
         shared int sGreen[$TILE_SPAN * $TILE_SPAN];
         shared int sBlue[$TILE_SPAN * $TILE_SPAN];
+        #else
+        shared vec3 sReconstructed[$TILE_SPAN * $TILE_SPAN];
+        #endif
 
         ${integerOps.prependIndent("        ").trimStart()}
 
@@ -88,6 +97,10 @@ internal object GlesMgcSpatialRgbMergeShaders {
         }
 
         ${chromaOps.prependIndent("        ").trimStart()}
+
+        #ifndef MGC_NATIVE_COLOR_ONLY
+        ${reconstruct.prependIndent("        ").trimStart()}
+        #endif
 
         // Quad-aligned shift d = 2 * roundEven(a) of the tile's alignment, and the remainder 2a - d.
         void tileShift(ivec2 tile, out ivec2 shift, out vec2 remainder) {
@@ -125,9 +138,19 @@ internal object GlesMgcSpatialRgbMergeShaders {
                 int u = origin.x + index % TILE_SPAN;
                 int v = origin.y + index / TILE_SPAN;
                 int cfaColor = (u & 1) + (v & 1);
-                sRed[index] = cfaColor == 0 ? converted(u, v) : chroma(u, v, false);
-                sGreen[index] = green(u, v);
-                sBlue[index] = cfaColor == 2 ? converted(u, v) : chroma(u, v, true);
+                int red = cfaColor == 0 ? converted(u, v) : chroma(u, v, false);
+                int g = green(u, v);
+                int blue = cfaColor == 2 ? converted(u, v) : chroma(u, v, true);
+                #ifdef MGC_NATIVE_COLOR_ONLY
+                sRed[index] = red;
+                sGreen[index] = g;
+                sBlue[index] = blue;
+                #else
+                ivec2 p = ivec2(mirrorIndex(u, uRawSize.x), mirrorIndex(v, uRawSize.y));
+                vec2 uv = (vec2(p) + 0.5) / vec2(uRawSize);
+                vec4 guide = textureLod(uSourceChroma, uv, 0.0);
+                sReconstructed[index] = reconstructSourceChroma(vec3(red, g, blue), guide);
+                #endif
             }
         }
 
@@ -152,8 +175,12 @@ internal object GlesMgcSpatialRgbMergeShaders {
                     for (int j = 0; j < 3; ++j) {
                         for (int i = 0; i < 3; ++i) {
                             int index = (local.y + j) * TILE_SPAN + local.x + i;
+                            #ifdef MGC_NATIVE_COLOR_ONLY
                             resampled += weights[j * 3 + i] *
                                 vec3(sRed[index], sGreen[index], sBlue[index]);
+                            #else
+                            resampled += weights[j * 3 + i] * sReconstructed[index];
+                            #endif
                         }
                     }
                     float accepted = acceptance(p);

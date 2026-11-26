@@ -370,56 +370,7 @@ internal object RawHotPixelShaders {
     """.trimIndent()
 
     /**
-     * Folds second-stage cluster members into the isolated-impulse mask, producing the final
-     * sensor-coordinate defect mask that a burst applies to every frame.
-     */
-    val RESOLVE = """
-        #version 310 es
-        precision highp float;
-        precision highp int;
-        precision highp uimage2D;
-
-        layout(local_size_x = 8, local_size_y = 8) in;
-
-        uniform highp usampler2D uRawTexture;
-        layout(rgba8ui, binding = 0) readonly uniform highp uimage2D uHotPixelMask;
-        layout(rgba8ui, binding = 1) writeonly uniform highp uimage2D uResolvedHotPixelMask;
-
-        $COMMON
-
-        $MASK_RESOLUTION
-
-        void main() {
-            ivec2 packedCoord = ivec2(gl_GlobalInvocationID.xy);
-            int packedWidth = (uImageSize.x + 3) / 4;
-            if (packedCoord.x >= packedWidth || packedCoord.y >= uImageSize.y) return;
-
-            uvec4 mask = uvec4(0u);
-            for (int lane = 0; lane < 4; ++lane) {
-                ivec2 coord = ivec2(packedCoord.x * 4 + lane, packedCoord.y);
-                if (coord.x >= uImageSize.x) continue;
-                int blackChannel = blackChannelAt(coord);
-                float blackLevel = uBlackLevel[blackChannel];
-                float sensorRange = max(uWhiteLevel - blackLevel, 1.0);
-                float center = signalAt(coord, blackLevel, sensorRange);
-                float neighbors[NEIGHBOR_COUNT];
-                bool maskedNeighbors[NEIGHBOR_COUNT];
-                int resolution = resolveHotPixel(
-                    coord,
-                    blackLevel,
-                    sensorRange,
-                    center,
-                    neighbors,
-                    maskedNeighbors
-                );
-                mask[lane] = resolution == RESOLVE_HOT ? 255u : 0u;
-            }
-            imageStore(uResolvedHotPixelMask, packedCoord, mask);
-        }
-    """.trimIndent()
-
-    /**
-     * Applies a resolved sensor-coordinate defect mask to one RAW frame (MGC SuppressHotPixels).
+     * Applies a sensor-coordinate defect mask to one RAW frame (MGC SuppressHotPixels).
      * Masked samples take the median of their unmasked same-CFA cardinal neighbors, falling back
      * to the outer same-CFA ring when all four cardinals are defective. The pass is integer-only:
      * the replacement is a same-channel median of codes, independent of black level and gain, and

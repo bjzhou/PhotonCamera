@@ -25,6 +25,8 @@ import java.nio.FloatBuffer
 import kotlin.math.ceil
 import kotlin.math.exp
 import kotlin.math.max
+import kotlin.math.round
+import kotlin.math.roundToInt
 import kotlin.math.sqrt
 
 internal enum class MgcRawProcessorPipeline {
@@ -234,8 +236,8 @@ internal class GlesMgcRawSpatialStacker(
     }
 
     /**
-     * MGC ProcessCaptureBaseFrame detects sensor defects once on the base frame; the burst then
-     * suppresses that list in every frame before alignment and merge.
+     * Inputs for the V25 Max2 base-frame classifier. The burst applies this sensor-coordinate
+     * mask before alignment and merge.
      */
     private class HotPixelReference(
         val image: SafeImage,
@@ -443,6 +445,9 @@ internal class GlesMgcRawSpatialStacker(
     private var sabreResolveGreenBalanceProgram = 0
     private var sabreResolveGreenProgram = 0
     private var sabreResolveOutputProgram = 0
+    private var sourceChromaHorizontalProgram = 0
+    private var sourceChromaVerticalProgram = 0
+    private var sourceChromaClassifyProgram = 0
     private var currentMergeCovariance = 0
     private var normalizeBayerProgram = 0
     // MergeRgbRaw16F16 on the GPU: per-frame DemosaicGreenRaw16, accumulation and resolve.
@@ -462,10 +467,9 @@ internal class GlesMgcRawSpatialStacker(
     private var spatialNoiseStrengthProgram = 0
     private var spatialNoisePackProgram = 0
     private var hotPixelDetectProgram = 0
-    private var hotPixelResolveProgram = 0
     private var hotPixelSuppressProgram = 0
     private var hotPixelReference: HotPixelReference? = null
-    /** Resolved sensor-coordinate defect mask of [hotPixelReference], applied to every frame. */
+    /** Sensor-coordinate mask from the base-frame detector, applied to every frame. */
     private var hotPixelMask = 0
     /**
      * Two upload slots, alternated per frame like the temporal RAW textures: re-uploading into
@@ -2882,6 +2886,7 @@ internal class GlesMgcRawSpatialStacker(
         val converted = createTexture(planeWidth, planeHeight, GLES30.GL_R16I, GLES30.GL_NEAREST)
         val balanced = createTexture(planeWidth, planeHeight, GLES30.GL_R16I, GLES30.GL_NEAREST)
         val green = createTexture(planeWidth, planeHeight, GLES30.GL_R16I, GLES30.GL_NEAREST)
+        val sourceChroma = createSourceChromaTargets()
 
         GLES30.glUseProgram(sabreResolveConvertProgram)
         bindTexture(sabreResolveConvertProgram, "uAccumulated", 0, accumulatedColor)
@@ -2893,6 +2898,11 @@ internal class GlesMgcRawSpatialStacker(
             demosaicQuantizationScale,
         )
         draw(sabreResolveConvertProgram, planeWidth, planeHeight, intArrayOf(converted))
+        val saturationThreshold = IntArray(4) { phase ->
+            round(demosaicQuantizationScale * calculationWhiteBalance[phase])
+                .toInt().coerceIn(1, Short.MAX_VALUE.toInt())
+        }
+        renderSourceChroma(converted, saturationThreshold, sourceChroma)
 
         // Entry 0x34A67F8: k = fcvtzs(clamp(retention * 65536, 0, 65535)).
         val retentionFixed16 = (greenImbalanceRetention * 65536f).coerceIn(0f, 65535f).toInt()
@@ -2914,6 +2924,7 @@ internal class GlesMgcRawSpatialStacker(
         bindTexture(program, "uBalanced", 1, balanced)
         bindTexture(program, "uGreen", 2, green)
         bindTexture(program, "uLensShading", 3, lensShadingTexture)
+        bindTexture(program, "uSourceChroma", 4, sourceChroma[0])
         uniform2i(program, "uImageSize", width, height)
         uniform2i(program, "uPlaneSize", planeWidth, planeHeight)
         uniform2i(program, "uRedSite", redX, redY)
@@ -2923,6 +2934,59 @@ internal class GlesMgcRawSpatialStacker(
         uniform3f(program, "uFinalGains", gains[0], gains[1], gains[2])
         draw(program, width, height, intArrayOf(output))
         checkGlError("MGC Sabre Resolve")
+    }
+
+    private fun createSourceChromaTargets(): IntArray = IntArray(4) { index ->
+        createTexture(
+            width / 2,
+            height / 2,
+            GLES30.GL_RGBA16F,
+            if (index == 0) GLES30.GL_LINEAR else GLES30.GL_NEAREST,
+        )
+    }
+
+    private fun renderSourceChroma(converted: Int, saturation: IntArray, targets: IntArray) {
+        if (sourceChromaHorizontalProgram == 0) {
+            sourceChromaHorizontalProgram = linkProgram(
+                GlesMgcRawChromaReconstructionShaders.horizontal,
+                "mgc_source_chroma_horizontal",
+            )
+            sourceChromaVerticalProgram = linkProgram(
+                GlesMgcRawChromaReconstructionShaders.vertical,
+                "mgc_source_chroma_vertical",
+            )
+            sourceChromaClassifyProgram = linkProgram(
+                GlesMgcRawChromaReconstructionShaders.classify,
+                "mgc_source_chroma_classify",
+            )
+        }
+        val quadWidth = width / 2
+        val quadHeight = height / 2
+
+        var program = sourceChromaHorizontalProgram
+        GLES30.glUseProgram(program)
+        bindTexture(program, "uConverted", 0, converted)
+        uniform2i(program, "uRawSize", width, height)
+        GLES30.glUniform4i(
+            uniformLocation(program, "uSaturationThreshold"),
+            saturation[0], saturation[1], saturation[2], saturation[3],
+        )
+        draw(program, quadWidth, quadHeight, intArrayOf(targets[0], targets[1], targets[2]))
+
+        program = sourceChromaVerticalProgram
+        GLES30.glUseProgram(program)
+        bindTexture(program, "uHorizontalAll", 0, targets[0])
+        bindTexture(program, "uHorizontalValid", 1, targets[1])
+        bindTexture(program, "uHorizontalSupport", 2, targets[2])
+        uniform2i(program, "uQuadSize", quadWidth, quadHeight)
+        draw(program, quadWidth, quadHeight, intArrayOf(targets[3]))
+
+        program = sourceChromaClassifyProgram
+        GLES30.glUseProgram(program)
+        bindTexture(program, "uColor", 0, targets[3])
+        uniform2i(program, "uQuadSize", quadWidth, quadHeight)
+        // The horizontal values have been consumed. Reuse their first target for the guide.
+        draw(program, quadWidth, quadHeight, intArrayOf(targets[0]))
     }
 
     private fun initSabrePrograms() {
@@ -6349,6 +6413,10 @@ internal class GlesMgcRawSpatialStacker(
         val whiteBalance = calculationWhiteBalance
         val overallGain = sabreResolveRawScale
         val conversionGains = FloatArray(4) { whiteBalance[it] * overallGain }
+        val saturationThreshold = IntArray(4) { phase ->
+            round((sensorWhiteLevel - referenceBlack[phase]) * conversionGains[phase])
+                .toInt().coerceIn(1, Short.MAX_VALUE.toInt())
+        }
         val greenWhiteBalance = 0.5f * (whiteBalance[1] + whiteBalance[2])
         // DemosaicGreenRaw16 receives merge_sharpness as k = fcvtzs(clamp(s * 65536, 0, 65535)).
         val greenImbalanceRetention = (mergeSharpness * 65536f).coerceIn(0f, 65535f).toInt()
@@ -6360,6 +6428,7 @@ internal class GlesMgcRawSpatialStacker(
         val converted = createTexture(planeWidth, planeHeight, GLES30.GL_R16I, GLES30.GL_NEAREST)
         val balanced = createTexture(planeWidth, planeHeight, GLES30.GL_R16I, GLES30.GL_NEAREST)
         val green = createTexture(planeWidth, planeHeight, GLES30.GL_R16I, GLES30.GL_NEAREST)
+        val sourceChroma = createSourceChromaTargets()
         // Red, green and blue sums and the weight sum; R32F is the read/write image format
         // GLES 3.1 guarantees.
         val sums = IntArray(4) { createTexture(width, height, GLES30.GL_R32F, GLES30.GL_NEAREST) }
@@ -6375,6 +6444,7 @@ internal class GlesMgcRawSpatialStacker(
                 uniform4fv(program, "uBlackLevels", referenceBlack)
                 uniform4fv(program, "uConversionGains", conversionGains)
                 draw(program, planeWidth, planeHeight, intArrayOf(converted))
+                renderSourceChroma(converted, saturationThreshold, sourceChroma)
 
                 program = spatialRgbGreenBalanceProgram
                 GLES30.glUseProgram(program)
@@ -6396,6 +6466,7 @@ internal class GlesMgcRawSpatialStacker(
                 bindTexture(program, "uGreen", 1, green)
                 bindTexture(program, "uAlignmentAtlas", 2, capture.alignmentAtlas)
                 bindTexture(program, "uRejectionAtlas", 3, capture.rejectionAtlas)
+                bindTexture(program, "uSourceChroma", 4, sourceChroma[0])
                 uniform2i(program, "uRawSize", width, height)
                 uniform2i(program, "uRedSite", redX, redY)
                 uniform4fv(program, "uBlackLevels", referenceBlack)
@@ -6494,7 +6565,7 @@ internal class GlesMgcRawSpatialStacker(
             return queueSpatialNoise(capture, fixed16, fixed16Layout)
         } finally {
             GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, 0)
-            (intArrayOf(raw, converted, balanced, green) + sums).forEach { texture ->
+            (intArrayOf(raw, converted, balanced, green) + sums + sourceChroma).forEach { texture ->
                 releaseOwnedTexture(texture, "MGC Spatial RGB merge scratch")
             }
         }
@@ -6894,12 +6965,8 @@ internal class GlesMgcRawSpatialStacker(
         }
         if (hotPixelDetectProgram == 0) {
             hotPixelDetectProgram = linkComputeProgram(
-                RawHotPixelShaders.DETECT,
-                "mgc_raw_hot_pixel_detect",
-            )
-            hotPixelResolveProgram = linkComputeProgram(
-                RawHotPixelShaders.RESOLVE,
-                "mgc_raw_hot_pixel_resolve",
+                GlesMgcRawHotPixelShaders.detectMax2,
+                "mgc_raw_hot_pixel_detect_max2",
             )
             hotPixelSuppressProgram = linkProgram(
                 RawHotPixelShaders.SUPPRESS,
@@ -6941,63 +7008,63 @@ internal class GlesMgcRawSpatialStacker(
             "$label: the hot-pixel mask must be detected on the reference frame"
         }
         val packedWidth = ceilDiv(width, 4)
-        val maskSpec = TextureSpec(
-            width = packedWidth,
-            height = height,
-            internalFormat = GLES30.GL_RGBA8UI,
-            filter = GLES30.GL_NEAREST,
+        val mask = allocateTexture(
+            TextureSpec(
+                width = packedWidth,
+                height = height,
+                internalFormat = GLES30.GL_RGBA8UI,
+                filter = GLES30.GL_NEAREST,
+            ),
         )
-        val isolatedMask = allocateTexture(maskSpec)
-        val resolvedMask = allocateTexture(maskSpec)
         val groupsX = GlesComputeWorkGroup.imageGroupCount(packedWidth)
         val groupsY = GlesComputeWorkGroup.imageGroupCount(height)
-        val shot = reference.noiseModel.normalizedShotNoiseForShader(cfaPattern)
         val read = reference.noiseModel.normalizedReadNoiseForShader(cfaPattern)
-
-        fun bindDetectionInputs(program: Int) {
-            GLES30.glUseProgram(program)
-            bindTexture(program, "uRawTexture", 0, rawTexture)
-            uniform2i(program, "uImageSize", width, height)
-            uniform2i(program, "uGlobalOrigin", 0, 0)
-            uniform1i(program, "uCfaPattern", cfaPattern.mod(4))
-            uniform4fv(program, "uBlackLevel", reference.blackLevel)
-            uniform1f(program, "uWhiteLevel", sensorWhiteLevel)
-            // Canonical R, Gr, Gb, B -> the shader's per-color R, G, B model.
-            uniform3f(program, "uNoiseSlope", shot[0], 0.5f * (shot[1] + shot[2]), shot[3])
-            uniform3f(program, "uNoiseOffset", read[0], 0.5f * (read[1] + read[2]), read[3])
+        val phaseBlack = IntArray(4)
+        val phaseGainQ8 = IntArray(4)
+        val phaseThresholdOffsetQ8 = IntArray(4)
+        // DetectHotPixels (V25 0x463EC5C) maps the normalized noise model to white-balanced
+        // sensor codes. Its Max2 defaults (0x52B3FE8) add 2.656 standard deviations at black.
+        val gainScale = sensorWhiteLevel / max(sensorWhiteLevel - reference.blackLevel.max(), 1f)
+        for (phase in 0 until 4) {
+            val channel = canonicalChannelAtPhase(phase)
+            val black = reference.blackLevel[channel]
+            val wb = calculationWhiteBalance[channel]
+            phaseBlack[phase] = black.roundToInt().coerceIn(0, 65535)
+            phaseGainQ8[phase] = round(wb * gainScale * 256f).toInt().coerceIn(0, 65535)
+            val signalScale = max(sensorWhiteLevel - black, 1f) * wb
+            val readVariance = read[channel] * (signalScale * signalScale)
+            val noiseThreshold = 2.656f * sqrt(readVariance)
+            phaseThresholdOffsetQ8[phase] = round(noiseThreshold * 256f).toInt()
         }
 
-        bindDetectionInputs(hotPixelDetectProgram)
+        val program = hotPixelDetectProgram
+        GLES30.glUseProgram(program)
+        bindTexture(program, "uRawTexture", 0, rawTexture)
+        uniform2i(program, "uImageSize", width, height)
+        GLES30.glUniform1ui(uniformLocation(program, "uWhiteLevel"), sensorWhiteLevelCode)
+        GLES30.glUniform4uiv(uniformLocation(program, "uPhaseBlack"), 1, phaseBlack, 0)
+        GLES30.glUniform4uiv(uniformLocation(program, "uPhaseGainQ8"), 1, phaseGainQ8, 0)
+        GLES30.glUniform4uiv(
+            uniformLocation(program, "uPhaseThresholdOffsetQ8"),
+            1,
+            phaseThresholdOffsetQ8,
+            0,
+        )
         GLES31.glBindImageTexture(
-            0, isolatedMask, 0, false, 0, GLES31.GL_WRITE_ONLY, GLES30.GL_RGBA8UI,
+            0, mask, 0, false, 0, GLES31.GL_WRITE_ONLY, GLES30.GL_RGBA8UI,
         )
         GLES31.glDispatchCompute(groupsX, groupsY, 1)
-        GLES31.glMemoryBarrier(GLES31.GL_SHADER_IMAGE_ACCESS_BARRIER_BIT)
-
-        bindDetectionInputs(hotPixelResolveProgram)
-        GLES31.glBindImageTexture(
-            0, isolatedMask, 0, false, 0, GLES31.GL_READ_ONLY, GLES30.GL_RGBA8UI,
-        )
-        GLES31.glBindImageTexture(
-            1, resolvedMask, 0, false, 0, GLES31.GL_WRITE_ONLY, GLES30.GL_RGBA8UI,
-        )
-        GLES31.glDispatchCompute(groupsX, groupsY, 1)
-        // The suppression pass consumes the resolved mask through a sampler.
+        // The suppression pass consumes the detector output through a sampler.
         GLES31.glMemoryBarrier(GLES31.GL_TEXTURE_FETCH_BARRIER_BIT)
-        for (unit in 0..1) {
-            GLES31.glBindImageTexture(
-                unit, 0, 0, false, 0, GLES31.GL_READ_ONLY, GLES30.GL_RGBA8UI,
-            )
-        }
+        GLES31.glBindImageTexture(0, 0, 0, false, 0, GLES31.GL_READ_ONLY, GLES30.GL_RGBA8UI)
         checkGlError("$label hot-pixel detection")
-        releaseOwnedTexture(isolatedMask, "hot-pixel isolated mask")
-        hotPixelMask = resolvedMask
+        hotPixelMask = mask
         PLog.i(
             TAG,
-            "MGC RAW hot-pixel mask detected on $label size=${width}x$height " +
-                "cfa=${cfaPattern.mod(4)} black=${reference.blackLevel.contentToString()} " +
-                "white=$sensorWhiteLevelCode shot=${shot.contentToString()} " +
-                "read=${read.contentToString()}",
+            "MGC RAW hot-pixel mask method=v25-max2 input=$label size=${width}x$height " +
+                "white=$sensorWhiteLevelCode phaseBlack=${phaseBlack.contentToString()} " +
+                "gainQ8=${phaseGainQ8.contentToString()} " +
+                "offsetQ8=${phaseThresholdOffsetQ8.contentToString()}",
         )
     }
 
@@ -7862,8 +7929,10 @@ internal class GlesMgcRawSpatialStacker(
         ownsEglContext = false
         supportsComputePrograms = false
         supportsComputeReadback = false
+        sourceChromaHorizontalProgram = 0
+        sourceChromaVerticalProgram = 0
+        sourceChromaClassifyProgram = 0
         hotPixelDetectProgram = 0
-        hotPixelResolveProgram = 0
         hotPixelSuppressProgram = 0
         hotPixelReference = null
         hotPixelMask = 0

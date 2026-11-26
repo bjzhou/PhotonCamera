@@ -122,7 +122,7 @@ internal class GlesMgcRawFusion(
         PLog.i(
             TAG,
             "MGC Spatial ${outputMode.name} baseFrame=" +
-                "${frames[selectedBaseIndex].frameNumber} source=" +
+                "${frames[selectedBaseIndex].frameNumber} inputIndex=$selectedBaseIndex source=" +
                 if (normalIndicesBeforeSelection.size == 1) {
                     "single_normal"
                 } else {

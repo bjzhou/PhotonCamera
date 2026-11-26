@@ -29,7 +29,7 @@ data class CalibratedRawNoiseProfile(
     val readDigitalGainD: DoubleArray,
     /** Digital-gain divisor written into an external `.c`; absent for native override tables. */
     val maxAnalogSensitivity: Int?,
-    private val evaluation: Evaluation = Evaluation.ISO_POLYNOMIAL,
+    internal val evaluation: Evaluation = Evaluation.ISO_POLYNOMIAL,
 ) {
     enum class Evaluation { ISO_POLYNOMIAL, LEGACY_MGC_GAIN, NATIVE_GAIN }
 

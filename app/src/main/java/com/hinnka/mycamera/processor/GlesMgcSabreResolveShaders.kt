@@ -4,6 +4,7 @@ import com.hinnka.mycamera.processor.GlesMgcGreenDemosaicShaders.PLANE_PADDING
 import com.hinnka.mycamera.processor.GlesMgcGreenDemosaicShaders.chromaOps
 import com.hinnka.mycamera.processor.GlesMgcGreenDemosaicShaders.header
 import com.hinnka.mycamera.processor.GlesMgcGreenDemosaicShaders.integerOps
+import com.hinnka.mycamera.processor.GlesMgcRawChromaReconstructionShaders.reconstruct
 
 /**
  * GLES implementation of MGC 9.6.080 V24 `gcam::ResolveSabreHalide`
@@ -60,6 +61,9 @@ internal object GlesMgcSabreResolveShaders {
         uniform highp sampler2D uAccumulated;
         uniform highp isampler2D uBalanced;
         uniform highp isampler2D uGreen;
+        #ifndef MGC_NATIVE_COLOR_ONLY
+        uniform highp sampler2D uSourceChroma;
+        #endif
         uniform ivec2 uImageSize;
         uniform ivec2 uPlaneSize;
         uniform ivec2 uRedSite;
@@ -79,6 +83,10 @@ internal object GlesMgcSabreResolveShaders {
 
         ${chromaOps.prependIndent("        ").trimStart()}
 
+        #ifndef MGC_NATIVE_COLOR_ONLY
+        ${reconstruct.prependIndent("        ").trimStart()}
+        #endif
+
         void main() {
             ivec2 site = ivec2(gl_FragCoord.xy);
             int u = site.x;
@@ -93,9 +101,14 @@ internal object GlesMgcSabreResolveShaders {
             ivec2 source = clamp(site + uRedSite, ivec2(0), uImageSize - ivec2(1));
             vec4 color = texelFetch(uAccumulated, source, 0);
             float weight = clamp(uBlendBias + color.a * uBlendScale, 0.0, 1.0);
-            vec4 shading = texture(uLensShading, (vec2(site) + 0.5) / vec2(uImageSize));
+            vec2 uv = (vec2(site) + 0.5) / vec2(uImageSize);
+            vec4 shading = texture(uLensShading, uv);
             vec3 gains = uFinalGains * vec3(shading.r, 0.5 * (shading.g + shading.b), shading.a);
-            vec3 resolved = clamp(mix(color.rgb, demosaiced, weight) * gains, 0.0, 1.0);
+            vec3 reconstruction = mix(color.rgb, demosaiced, weight);
+            #ifndef MGC_NATIVE_COLOR_ONLY
+            reconstruction = reconstructSourceChroma(reconstruction, texture(uSourceChroma, uv));
+            #endif
+            vec3 resolved = clamp(reconstruction * gains, 0.0, 1.0);
             oResolved = uvec4(uvec3(round(resolved * 65535.0)), 65535u);
         }
     """.trimIndent()
