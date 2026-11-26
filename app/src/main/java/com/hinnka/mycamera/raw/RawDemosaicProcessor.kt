@@ -1239,20 +1239,35 @@ class RawDemosaicProcessor {
                 }) {
                     "MGC $mode default denoise is missing output-frame SNR"
                 }
+                val observedStackNoise = runCatching {
+                    mgcDenoise.observeRawStackNoise(workingFloatTexture, width, height, defaultDenoiseMetadata)
+                }.onFailure { error ->
+                    PLog.w(TAG, "MGC $mode could not measure merged noise", error)
+                }.getOrNull()
                 val denoiseConfig = checkNotNull(
                     MgcFullResolutionDenoise.prepareRawGpuDenoiseConfig(
                         fullWidth = width,
                         fullHeight = height,
                         outputScale = 1f,
                         metadata = defaultDenoiseMetadata,
+                        sourceIsBayer = isBayerInput,
                         preparedYuvNoiseModel = preparedTransfer,
                         applyLensShadingToDenoiseStrength = applyLscStrength,
                         tuningSnr = tuningSnr,
                         pass = defaultDenoisePass,
                         lumaStrengthScale = resolvedLumaStrength,
                         chromaStrengthScale = resolvedChromaStrength,
+                        observedStackNoise = observedStackNoise,
                     ),
                 ) { "MGC $mode GPU denoise config failed" }
+                DngCaptureDiagnostics.put("denoise.measureMoire", denoiseConfig.measureMoireEnabled)
+                if (observedStackNoise != null) {
+                    DngCaptureDiagnostics.put("denoise.observedSnr", observedStackNoise.snr)
+                    DngCaptureDiagnostics.put("denoise.observedTiles", observedStackNoise.tileCount)
+                    DngCaptureDiagnostics.put("denoise.tuning.luma", denoiseConfig.luma?.strength?.contentToString())
+                    DngCaptureDiagnostics.put("denoise.tuning.lumaRevert", denoiseConfig.luma?.revertFactor?.contentToString())
+                    DngCaptureDiagnostics.put("denoise.tuning.chroma", denoiseConfig.chroma?.strength?.contentToString())
+                }
                 parameterMs = (System.nanoTime() - parameterStartNs) / 1_000_000L
 
                 val denoiseStartNs = System.nanoTime()
@@ -3910,6 +3925,7 @@ class RawDemosaicProcessor {
                 width = actualWidth,
                 height = actualHeight,
                 metadata = actualMetadata,
+                sourceIsBayer = actualSamplesPerPixel == 1,
                 demosaicNoiseTransfer = userAdjustmentNoiseTransfer,
                 denoiseValue = denoiseValue,
                 chromaDenoiseValue = chromaDenoiseValue,
@@ -4557,6 +4573,7 @@ class RawDemosaicProcessor {
                     width = workWidth,
                     height = workHeight,
                     metadata = config.metadata,
+                    sourceIsBayer = config.samplesPerPixel == 1,
                     demosaicNoiseTransfer = userAdjustmentNoiseTransfer,
                     denoiseValue = config.denoiseValue,
                     chromaDenoiseValue = config.chromaDenoiseValue,
@@ -5447,6 +5464,7 @@ class RawDemosaicProcessor {
         width: Int,
         height: Int,
         metadata: RawMetadata,
+        sourceIsBayer: Boolean,
         demosaicNoiseTransfer: DemosaicNoiseTransfer?,
         denoiseValue: Float?,
         chromaDenoiseValue: Float?,
@@ -5486,6 +5504,7 @@ class RawDemosaicProcessor {
                 fullWidth = fullImageWidth,
                 fullHeight = fullImageHeight,
                 metadata = metadata,
+                sourceIsBayer = sourceIsBayer,
                 preparedYuvNoiseModel = demosaicNoiseTransfer,
                 applyLensShadingToDenoiseStrength = useLscStrength,
                 tuningSnr = tuningSnr,

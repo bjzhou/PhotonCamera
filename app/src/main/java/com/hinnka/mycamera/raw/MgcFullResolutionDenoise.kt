@@ -94,6 +94,7 @@ internal object MgcFullResolutionDenoise {
         val lensHeight: Int,
         val luma: LumaDenoiseConfig?,
         val chroma: ChromaDenoiseConfig?,
+        val lensShadingMapGrid: FloatArray? = null,
     )
 
     internal data class TuningPoint(
@@ -157,12 +158,14 @@ internal object MgcFullResolutionDenoise {
         fullHeight: Int,
         outputScale: Float = 1f,
         metadata: RawMetadata,
+        sourceIsBayer: Boolean,
         preparedYuvNoiseModel: PreparedYuvNoiseModel? = null,
         applyLensShadingToDenoiseStrength: Boolean = false,
         tuningSnr: Float,
         pass: Pass,
         lumaStrengthScale: Float,
         chromaStrengthScale: Float,
+        observedStackNoise: MgcRawStackNoiseObservation? = null,
     ): GpuDenoiseConfig? {
         val finiteLumaScale = DenoiseStrength.clamp(lumaStrengthScale)
         val finiteChromaScale = DenoiseStrength.clamp(chromaStrengthScale)
@@ -236,6 +239,9 @@ internal object MgcFullResolutionDenoise {
                 hasValidLensShadingMap(metadata)
         val rgbWhiteBalance = normalizedRgbWhiteBalance(metadata.whiteBalanceGains)
 
+        val observation = observedStackNoise.takeIf { useSpatialModel || useSabreModel }
+        val effectiveSnr = observation?.snr ?: tuningSnr
+        val captureScales = observation?.let { MgcRawMaxDenoiseTuning.atSnr(effectiveSnr) }
         val lumaConfig = if (lumaEnabled) {
             val selectedLumaPoints = if (useSabreModel) {
                 sabreLumaTuningPoints.map { point ->
@@ -253,14 +259,16 @@ internal object MgcFullResolutionDenoise {
                 lumaTuningPoints
             }
             val lumaTuning = applyCoreDenoiseScales(
-                tuning = interpolateTuning(tuningSnr, selectedLumaPoints),
+                tuning = interpolateTuning(effectiveSnr, selectedLumaPoints),
                 globalStrengthScale = finiteLumaScale,
-                strengthLevelScales = coreTuning.denoise.lumaStrengthScale.toFloatArray(),
-                revertLevelScales = coreTuning.denoise.detailReconstructionScale.toFloatArray(),
+                strengthLevelScales = coreTuning.denoise.lumaStrengthScale.toFloatArray()
+                    .multiplyLevels(captureScales?.lumaStrength),
+                revertLevelScales = coreTuning.denoise.detailReconstructionScale.toFloatArray()
+                    .multiplyLevels(captureScales?.lumaRevert),
                 outlierLevelScales = coreTuning.denoise.outlierRejectionScale.toFloatArray(),
             )
             LumaDenoiseConfig(
-                q14Noise = MgcLumaNoiseModel.prepareQ14Noise(
+                q14Noise = observation?.luma ?: MgcLumaNoiseModel.prepareQ14Noise(
                     normalizedRgbRead = rgbRead,
                     normalizedRgbShot = rgbShot,
                     whiteBalance = rgbWhiteBalance,
@@ -275,9 +283,10 @@ internal object MgcFullResolutionDenoise {
 
         val chromaConfig = if (chromaEnabled) {
             val chromaTuning = applyCoreDenoiseScales(
-                tuning = interpolateTuning(tuningSnr, chromaTuningPoints),
+                tuning = interpolateTuning(effectiveSnr, chromaTuningPoints),
                 globalStrengthScale = finiteChromaScale,
-                strengthLevelScales = coreTuning.denoise.chromaStrengthScale.toFloatArray(),
+                strengthLevelScales = coreTuning.denoise.chromaStrengthScale.toFloatArray()
+                    .multiplyLevels(captureScales?.chromaStrength),
                 revertLevelScales = FloatArray(5) { 1f },
                 outlierLevelScales = FloatArray(5) { 1f },
             )
@@ -288,7 +297,7 @@ internal object MgcFullResolutionDenoise {
                 outputHeight = maxOf(1, (fullHeight * outputScale).roundToInt()),
             ).log2Downsample
             ChromaDenoiseConfig(
-                q14Noise = MgcChromaNoiseModel.prepareQ14Noise(
+                q14Noise = observation?.chroma ?: MgcChromaNoiseModel.prepareQ14Noise(
                     normalizedRgbRead = rgbRead,
                     normalizedRgbShot = rgbShot,
                     whiteBalance = rgbWhiteBalance,
@@ -302,7 +311,9 @@ internal object MgcFullResolutionDenoise {
             )
         } else null
 
-        val measureMoireEnabled = chromaEnabled &&
+        // Resolve can retain sensor CFA metadata even when its output is linear RGB.
+        // V25 requires explicit tuning to run MeasureMoire on that RGB input.
+        val measureMoireEnabled = chromaEnabled && sourceIsBayer &&
             metadata.cfaPattern in RawMetadata.CFA_RGGB..RawMetadata.CFA_BGGR &&
             outputScale == 1f
 
@@ -319,6 +330,7 @@ internal object MgcFullResolutionDenoise {
             lensHeight = if (useLensShadingForStrength) metadata.lensShadingMapHeight else 0,
             luma = lumaConfig,
             chroma = chromaConfig,
+            lensShadingMapGrid = metadata.lensShadingMapGrid.takeIf { useLensShadingForStrength },
         )
     }
 
@@ -470,6 +482,9 @@ internal object MgcFullResolutionDenoise {
             expectedSize in 1L..Int.MAX_VALUE.toLong() && map.size == expectedSize.toInt() &&
             map.all { it.isFinite() && it > 0f }
     }
+
+    private fun FloatArray.multiplyLevels(scales: FloatArray?): FloatArray =
+        if (scales == null) this else FloatArray(size) { index -> this[index] * scales[index] }
 
     internal fun applyLumaStrengthScales(
         tuning: Tuning,

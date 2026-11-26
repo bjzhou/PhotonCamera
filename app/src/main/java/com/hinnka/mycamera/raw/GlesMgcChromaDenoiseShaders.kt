@@ -24,7 +24,7 @@ internal object GlesMgcChromaDenoiseShaders {
         precision highp usampler2D;
     """.trimIndent()
 
-    private val rgbToQ14Yuv = """
+    val rgbToQ14Yuv = """
         ivec3 rgbToQ14Yuv(vec3 source, vec3 whiteBalance) {
             vec3 rgb = clamp(max(source, vec3(0.0)) * whiteBalance, 0.0, 1.0);
             vec3 scaled = rgb * 16383.0;
@@ -67,9 +67,8 @@ internal object GlesMgcChromaDenoiseShaders {
         uniform ivec2 uLocalMax;
         uniform ivec2 uGlobalOrigin;
         uniform ivec2 uBaseMax;
-        uniform ivec2 uStrengthOrigin;
         uniform ivec2 uLensMax;
-        uniform vec2 uSampleRate;
+        uniform vec4 uLensGridScaleOffset;
         layout(location = 0) out uvec4 oStrength;
 
         void main() {
@@ -84,10 +83,15 @@ internal object GlesMgcChromaDenoiseShaders {
                 oStrength = uvec4(baseStrength, baseStrength, baseStrength, 0u);
                 return;
             }
-            vec2 g = vec2(p + uStrengthOrigin) * uSampleRate;
-            ivec2 g0 = clamp(ivec2(floor(g)), ivec2(0), uLensMax);
+            // Match the LSC applied to the pixels at the center of this logical strength cell.
+            ivec2 cellStart = min(p, uLocalMax / 4) * 4;
+            ivec2 cellExtent = min(ivec2(4), uLocalMax + 1 - cellStart);
+            vec2 center = vec2(uGlobalOrigin + cellStart) + vec2(cellExtent) * 0.5;
+            vec2 g = clamp(center * uLensGridScaleOffset.xy + uLensGridScaleOffset.zw,
+                vec2(0.0), vec2(uLensMax));
+            ivec2 g0 = ivec2(floor(g));
             ivec2 g1 = min(g0 + ivec2(1), uLensMax);
-            vec2 f = clamp(g - vec2(g0), vec2(0.0), vec2(1.0));
+            vec2 f = g - vec2(g0);
             vec4 c00 = texelFetch(uLensShading, g0, 0);
             vec4 c10 = texelFetch(uLensShading, ivec2(g1.x, g0.y), 0);
             vec4 c01 = texelFetch(uLensShading, ivec2(g0.x, g1.y), 0);

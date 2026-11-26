@@ -1,6 +1,7 @@
 package com.hinnka.mycamera.raw
 
 import android.opengl.GLES30
+import android.util.Half
 import com.hinnka.mycamera.processor.GlesGraphicsShaderSources
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
@@ -35,6 +36,107 @@ internal class GlesMgcDenoise {
     private var placeholderU16Texture = 0
     private var placeholderF32Texture = 0
     private var placeholderI16Texture = 0
+
+    /** Sparse, bounded readback of the actual FinishRaw input, before either filter. */
+    fun observeRawStackNoise(
+        source: Int,
+        width: Int,
+        height: Int,
+        metadata: RawMetadata,
+    ): MgcRawStackNoiseObservation? {
+        val tileSize = 8
+        if (width < tileSize || height < tileSize) return null
+        val gridWidth = minOf(64, width / tileSize)
+        val gridHeight = minOf(64, height / tileSize)
+        val scratch = ScratchTextures()
+        try {
+            val destination = scratch.allocate(GLES30.GL_RGBA32UI, gridWidth, gridHeight, "MGC RAW noise tiles")
+            GLES30.glBindBuffer(GLES30.GL_PIXEL_PACK_BUFFER, 0)
+            GLES30.glPixelStorei(GLES30.GL_PACK_ALIGNMENT, 4)
+            GLES30.glDisable(GLES30.GL_BLEND)
+            draw("rawNoiseTiles", destination, gridWidth, gridHeight) { p ->
+                bindTexture(p, "uSource", 0, source)
+                GLES30.glUniform2i(loc(p, "uInputSize"), width, height)
+                GLES30.glUniform2i(loc(p, "uTileGrid"), gridWidth, gridHeight)
+                GLES30.glUniform3fv(
+                    loc(p, "uWhiteBalance"), 1,
+                    MgcFullResolutionDenoise.normalizedRgbWhiteBalance(metadata.whiteBalanceGains), 0,
+                )
+            }
+            val samples = ByteBuffer.allocateDirect(gridWidth * gridHeight * 4 * Int.SIZE_BYTES)
+                .order(ByteOrder.nativeOrder()).asIntBuffer()
+            GLES30.glReadPixels(
+                0, 0, gridWidth, gridHeight, GLES30.GL_RGBA_INTEGER, GLES30.GL_UNSIGNED_INT, samples,
+            )
+            checkGlError("RAW stack noise observation")
+            val strength = metadata.mgcSpatialStrengthMap?.takeIf {
+                it.width == (width + 3) / 4 && it.height == (height + 3) / 4 &&
+                    it.q8.size == it.width * it.height
+            }
+            val lens = metadata.lensShadingMap?.takeIf {
+                metadata.lensShadingMapWidth > 0 && metadata.lensShadingMapHeight > 0 &&
+                    it.size.toLong() == metadata.lensShadingMapWidth.toLong() * metadata.lensShadingMapHeight * 4
+            }
+            val lensGrid = lensShadingGridTransform(
+                metadata.lensShadingMapGrid, metadata.lensShadingMapWidth, metadata.lensShadingMapHeight,
+                width, height,
+            )
+            val tiles = ArrayList<MgcRawStackNoiseObservation.Tile>(gridWidth * gridHeight)
+            for (y in 0 until gridHeight) {
+                for (x in 0 until gridWidth) {
+                    val offset = (y * gridWidth + x) * 4
+                    val mean = Float.fromBits(samples[offset + 3]) / 16383f
+                    if (!mean.isFinite() || mean <= 0f) continue
+                    val centerX = ((2 * x + 1) * width / (2 * gridWidth)).coerceIn(4, width - 4)
+                    val centerY = ((2 * y + 1) * height / (2 * gridHeight)).coerceIn(4, height - 4)
+                    val q8 = strength?.let { it.q8[(centerY / 4) * it.width + centerX / 4].toInt() and 0xffff }
+                        ?: 256
+                    if (q8 == 0) continue
+                    val gain = if (lens != null) {
+                        val lx = (centerX * lensGrid[0] + lensGrid[2]).coerceIn(0f, metadata.lensShadingMapWidth - 1f)
+                        val ly = (centerY * lensGrid[1] + lensGrid[3]).coerceIn(0f, metadata.lensShadingMapHeight - 1f)
+                        sampleLensLumaGain(lens, metadata.lensShadingMapWidth, metadata.lensShadingMapHeight, lx, ly)
+                    } else 1f
+                    val signal = mean / gain
+                    if (!signal.isFinite() || signal <= 0f) continue
+                    val varianceScale = (256f / q8) / (16383f * 16383f * gain * gain)
+                    val variance = FloatArray(3)
+                    val differenceVariance = FloatArray(3)
+                    for (channel in 0..2) {
+                        val packed = samples[offset + channel]
+                        val sigma = Half.toFloat(packed.toShort())
+                        val diffSigma = Half.toFloat((packed ushr 16).toShort())
+                        variance[channel] = sigma * sigma * varianceScale
+                        differenceVariance[channel] = diffSigma * diffSigma * varianceScale
+                    }
+                    if (variance.all(Float::isFinite) && differenceVariance.all(Float::isFinite)) {
+                        tiles += MgcRawStackNoiseObservation.Tile(signal, variance, differenceVariance)
+                    }
+                }
+            }
+            return MgcRawStackNoiseObservation.fit(tiles)
+        } finally {
+            resetBindings()
+            scratch.close()
+        }
+    }
+
+    private fun sampleLensLumaGain(lens: FloatArray, width: Int, height: Int, x: Float, y: Float): Float {
+        fun luma(ix: Int, iy: Int): Float {
+            val index = (iy * width + ix) * 4
+            return 0.2126f * lens[index] + 0.3576f * (lens[index + 1] + lens[index + 2]) +
+                0.0722f * lens[index + 3]
+        }
+        val x0 = x.toInt()
+        val y0 = y.toInt()
+        val x1 = minOf(x0 + 1, width - 1)
+        val y1 = minOf(y0 + 1, height - 1)
+        val fx = x - x0
+        val fy = y - y0
+        val top = luma(x0, y0) * (1f - fx) + luma(x1, y0) * fx
+        val bottom = luma(x0, y1) * (1f - fx) + luma(x1, y1) * fx
+        return top * (1f - fy) + bottom * fy
+    }
 
     fun render(
         source: Int,
@@ -150,14 +252,9 @@ internal class GlesMgcDenoise {
                         uploadRgba32f(it, config.lensWidth, config.lensHeight, config.lensShadingMap)
                     }
                 } else 0
-                val fullStrengthW = roundUp(fullWidth, 128) / 4
-                val fullStrengthH = roundUp(fullHeight, 16) / 4
-                val sampleRateX = if (fullStrengthW > 1 && config.lensWidth > 0) {
-                    (config.lensWidth - 1).toFloat() / (fullStrengthW - 1).toFloat()
-                } else 1f
-                val sampleRateY = if (fullStrengthH > 1 && config.lensHeight > 0) {
-                    (config.lensHeight - 1).toFloat() / (fullStrengthH - 1).toFloat()
-                } else 1f
+                val lensGrid = lensShadingGridTransform(
+                    config.lensShadingMapGrid, config.lensWidth, config.lensHeight, fullWidth, fullHeight,
+                )
                 draw("strengthMap", strengthTex, strengthW, strengthH) { p ->
                     bindTexture(p, "uBaseStrength", 0, if (baseTex != 0) baseTex else placeholderU16Texture)
                     bindTexture(p, "uLensShading", 1, if (lscTex != 0) lscTex else placeholderF32Texture)
@@ -170,13 +267,12 @@ internal class GlesMgcDenoise {
                         maxOf(config.spatialStrengthWidth - 1, 0),
                         maxOf(config.spatialStrengthHeight - 1, 0),
                     )
-                    GLES30.glUniform2i(loc(p, "uStrengthOrigin"), globalOriginX / 4, globalOriginY / 4)
                     GLES30.glUniform2i(
                         loc(p, "uLensMax"),
                         maxOf(config.lensWidth - 1, 0),
                         maxOf(config.lensHeight - 1, 0),
                     )
-                    GLES30.glUniform2f(loc(p, "uSampleRate"), sampleRateX, sampleRateY)
+                    GLES30.glUniform4fv(loc(p, "uLensGridScaleOffset"), 1, lensGrid, 0)
                 }
                 scratch.discard(baseTex)
                 scratch.discard(lscTex)
@@ -301,6 +397,39 @@ internal class GlesMgcDenoise {
             resetBindings()
             scratch.close()
         }
+    }
+
+    private fun lensShadingGridTransform(
+        grid: FloatArray?,
+        lensWidth: Int,
+        lensHeight: Int,
+        fullWidth: Int,
+        fullHeight: Int,
+    ): FloatArray {
+        if (grid == null || grid.size < 4) {
+            // Camera2 samples the lens map at full-image UV with GL_LINEAR texel centers.
+            return floatArrayOf(
+                lensWidth.toFloat() / fullWidth,
+                lensHeight.toFloat() / fullHeight,
+                -0.5f,
+                -0.5f,
+            )
+        }
+        // DNG stores the grid in coordinates normalized to the GainMap bounds.
+        val left = grid.getOrElse(4) { 0f }
+        val top = grid.getOrElse(5) { 0f }
+        val boundsWidth = (grid.getOrElse(6) { fullWidth.toFloat() } - left).coerceAtLeast(1f)
+        val boundsHeight = (grid.getOrElse(7) { fullHeight.toFloat() } - top).coerceAtLeast(1f)
+        val spacingX = grid[2].coerceAtLeast(1e-8f)
+        val spacingY = grid[3].coerceAtLeast(1e-8f)
+        val scaleX = 1f / (boundsWidth * spacingX)
+        val scaleY = 1f / (boundsHeight * spacingY)
+        return floatArrayOf(
+            scaleX,
+            scaleY,
+            -left * scaleX - grid[0] / spacingX,
+            -top * scaleY - grid[1] / spacingY,
+        )
     }
 
     private fun runMeasureMoire(
@@ -692,6 +821,7 @@ internal class GlesMgcDenoise {
 
     private fun program(pass: String): Int = programs.getOrPut(pass) {
         val source = when (pass) {
+            "rawNoiseTiles" -> GlesMgcRawNoiseTiles.fragment
             "rgbToYuv" -> GlesMgcChromaDenoiseShaders.rgbToYuvShader
             "strengthMap" -> GlesMgcChromaDenoiseShaders.strengthMapShader
             "bitmapStrengthMap" -> GlesMgcBitmapStrengthMapShader.fragment

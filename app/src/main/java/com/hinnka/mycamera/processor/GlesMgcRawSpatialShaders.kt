@@ -2009,7 +2009,8 @@ internal object GlesMgcRawSpatialShaders {
      * DownsampleRawF16ToFloatTileSize16 does not consume IEEE FP16. Its F16
      * input is signed Q14 and has Halide dimensions [quadX, quadY, phase].
      * The four phase planes are stacked vertically so the readback has the
-     * same conventional planar strides requested by the Halide bounds query:
+     * same conventional planar strides requested by the Halide bounds query.
+     * Each padded tile extends the nearest valid sample of its own phase.
      *
      *   address = quadX + quadY * quadWidth
      *       + phase * quadWidth * quadHeight
@@ -2032,7 +2033,9 @@ internal object GlesMgcRawSpatialShaders {
             int phase = packed.y / uQuadSize.y;
             ivec2 quad = ivec2(packed.x, packed.y - phase * uQuadSize.y);
             ivec2 phaseOffset = ivec2(phase & 1, phase >> 1);
-            ivec2 source = min(quad * 2 + phaseOffset, uSourceSize - ivec2(1));
+            ivec2 last = uSourceSize - 1;
+            last -= (last - phaseOffset) & ivec2(1);
+            ivec2 source = min(quad * 2 + phaseOffset, last);
             vec2 valueAndWeight = texelFetch(uBayerAndWeight, source, 0).rg;
             float normalized = max(
                 valueAndWeight.x / max(valueAndWeight.y, 1.0e-8),

@@ -3456,7 +3456,7 @@ object GalleryManager {
             DngCaptureDiagnostics.put("merge.blackLevel", stackBlackLevel.contentToString())
             DngCaptureDiagnostics.put("merge.whiteLevel", stackWhiteLevel)
             DngCaptureDiagnostics.put("merge.cfaPattern", stackCfaPattern)
-            DngCaptureDiagnostics.put("merge.noiseProfileId", resolveRawNoiseProfileId(context, metadata))
+            DngCaptureDiagnostics.put("merge.noiseProfileId", noiseProfileSelection.id)
             DngCaptureDiagnostics.put("merge.whiteBalance", rawMetadata.whiteBalanceGains.contentToString())
             effectiveRawStackFrames.forEachIndexed { index, frame ->
                 val key = "frame.$index"
