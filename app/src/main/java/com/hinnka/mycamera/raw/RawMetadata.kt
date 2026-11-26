@@ -9,7 +9,6 @@ import android.hardware.camera2.params.RggbChannelVector
 import android.util.Log
 import android.util.Rational
 import com.hinnka.mycamera.camera.readMetadataOrNull
-import com.hinnka.mycamera.camera.readMetadataOrThrow
 import com.hinnka.mycamera.processor.CalibratedRawNoiseProfile
 import com.hinnka.mycamera.processor.RawNoiseModel
 import com.hinnka.mycamera.processor.RawNoiseProfileSelection
@@ -423,7 +422,7 @@ data class RawMetadata(
             }
 
             // 4. 获取白平衡增益
-            val wbGains = captureResult.readMetadataOrThrow(CaptureResult.COLOR_CORRECTION_GAINS)
+            val wbGains = RawColorCalibrationPolicy.readCaptureWhiteBalanceGains(characteristics, captureResult)
             val whiteBalanceGains = if (wbGains != null) {
                 // Android 顺序为 [R, G_even, G_odd, B]
                 // 无论 CFA 模式如何，G_even 始终定义为与 R 同行的绿像素 (Gr)，G_odd 始终定义为与 B 同行的绿像素 (Gb)

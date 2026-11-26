@@ -505,4 +505,5 @@
     <string name="camera_looks_more">Mehr</string>
     <string name="camera_looks_collapse">Einklappen</string>
     <string name="preset_revert">Zurücksetzen</string>
+    <string name="camera_white_balance_auto">Auto</string>
 </resources>

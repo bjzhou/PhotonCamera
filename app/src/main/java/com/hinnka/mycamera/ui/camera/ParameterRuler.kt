@@ -9,6 +9,7 @@ import androidx.compose.foundation.gestures.Orientation
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.Text
@@ -41,10 +42,12 @@ import androidx.compose.ui.unit.sp
 import com.hinnka.mycamera.ui.theme.AccentColor
 import com.hinnka.mycamera.ui.theme.OnAccentColor
 import com.hinnka.mycamera.R
+import com.hinnka.mycamera.camera.CameraWhiteBalanceCalibration
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.launch
 import kotlin.math.abs
+import kotlin.math.ceil
 import kotlin.math.roundToInt
 
 /** Parameters supported by the manual control ruler. */
@@ -69,6 +72,7 @@ fun ParameterRuler(
     isAdjustable: Boolean,
     isAutoMode: Boolean,
     showAutoButton: Boolean,
+    showScale: Boolean = true,
     isAutoModeToggleEnabled: Boolean = true,
     valueStep: Float = 1f / 3f,
     discreteValues: List<Float>? = null,
@@ -81,6 +85,7 @@ fun ParameterRuler(
     onAutoModeToggle: () -> Unit,
     modifier: Modifier = Modifier
 ) {
+    val isWhiteBalance = parameter == CameraParameter.WHITE_BALANCE
     val scaleValues = remember(parameter, minValue, maxValue, valueStep, discreteValues) {
         discreteValues?.takeIf { it.isNotEmpty() } ?: getScaleValues(parameter, minValue, maxValue, valueStep)
     }
@@ -94,7 +99,7 @@ fun ParameterRuler(
     val currentValueState by rememberUpdatedState(currentValue)
     val canReset = resetValue != null
     val resetValueState by rememberUpdatedState(resetValue)
-    val canAdjust = isAdjustable && scaleValues.size > 1
+    val canAdjust = showScale && isAdjustable && scaleValues.size > 1
     val autoModeState by rememberUpdatedState(isAutoMode)
     val onValueChangeState by rememberUpdatedState(onValueChange)
     val haptic = LocalHapticFeedback.current
@@ -120,8 +125,12 @@ fun ParameterRuler(
     }
 
     fun moveRuler(index: Float) {
+        val previousIndex = scrollIndex.roundToInt()
         scrollIndex = index.coerceIn(0f, scaleValues.lastIndex.toFloat())
-        val value = scaleValues[scrollIndex.roundToInt()]
+        val nextIndex = scrollIndex.roundToInt()
+        // Keep the metered white balance until scrolling actually selects a Kelvin step.
+        if (isWhiteBalance && previousIndex == nextIndex) return
+        val value = scaleValues[nextIndex]
         if (value != selectedValue) selectValue(value)
     }
 
@@ -159,13 +168,17 @@ fun ParameterRuler(
             RulerModeButton(
                 selected = isAutoMode,
                 enabled = isAutoModeToggleEnabled,
+                role = if (isWhiteBalance) Role.Button else Role.Switch,
                 onClick = {
                     stopMotion()
                     onAutoModeToggle()
                 }
             ) {
                 Text(
-                    text = stringResource(R.string.camera_parameter_auto),
+                    text = stringResource(
+                        if (isWhiteBalance) R.string.camera_white_balance_auto else R.string.camera_parameter_auto
+                    ),
+                    modifier = if (isWhiteBalance) Modifier.padding(horizontal = 8.dp) else Modifier,
                     fontSize = 12.sp,
                     fontWeight = FontWeight.SemiBold
                 )
@@ -201,11 +214,13 @@ fun ParameterRuler(
             modifier = Modifier.weight(1f).fillMaxHeight().clipToBounds()
                 .semantics {
                     stateDescription = displayedValueLabel
-                    progressBarRangeInfo = ProgressBarRangeInfo(
-                        closestScaleIndex(scaleValues, displayedValue).toFloat(),
-                        0f..scaleValues.lastIndex.toFloat(),
-                        (scaleValues.size - 2).coerceAtLeast(0)
-                    )
+                    if (showScale) {
+                        progressBarRangeInfo = ProgressBarRangeInfo(
+                            closestScaleIndex(scaleValues, displayedValue).toFloat(),
+                            0f..scaleValues.lastIndex.toFloat(),
+                            (scaleValues.size - 2).coerceAtLeast(0)
+                        )
+                    }
                     if (canAdjust) {
                         setProgress { index ->
                             stopMotion()
@@ -248,7 +263,11 @@ fun ParameterRuler(
                                     if (!isInteracting) {
                                         isInteracting = true
                                         scrollIndex = closestScaleIndex(scaleValues, currentValueState).toFloat()
-                                        selectValue(scaleValues[scrollIndex.roundToInt()], force = true)
+                                        if (isWhiteBalance) {
+                                            selectedValue = currentValueState
+                                        } else {
+                                            selectValue(scaleValues[scrollIndex.roundToInt()], force = true)
+                                        }
                                     }
                                 },
                                 onDragEnd = onDragEnd@{ up ->
@@ -286,7 +305,7 @@ fun ParameterRuler(
                 maxLines = 1,
                 softWrap = false
             )
-            Canvas(Modifier.fillMaxSize()) {
+            if (showScale) Canvas(Modifier.fillMaxSize()) {
                 val center = size.width / 2f
                 val spacing = ParameterRulerTickSpacing.toPx()
                 val baseline = size.height - 9.dp.toPx()
@@ -323,12 +342,19 @@ private fun RulerModeButton(
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
     enabled: Boolean = true,
+    role: Role = Role.Switch,
     content: @Composable () -> Unit
 ) {
     Box(
         modifier = modifier.defaultMinSize(minWidth = 44.dp, minHeight = 48.dp)
             .clip(CircleShape)
-            .toggleable(value = selected, enabled = enabled, role = Role.Switch, onValueChange = { onClick() })
+            .then(
+                if (role == Role.Button) {
+                    Modifier.selectable(selected = selected, enabled = enabled, role = role, onClick = onClick)
+                } else {
+                    Modifier.toggleable(value = selected, enabled = enabled, role = role, onValueChange = { onClick() })
+                }
+            )
             .padding(horizontal = 6.dp, vertical = 10.dp)
             .border(1.dp, if (selected) AccentColor else Color.White.copy(alpha = 0.3f), CircleShape)
             .background(if (selected) AccentColor else Color.Transparent, CircleShape),
@@ -365,7 +391,11 @@ private fun formatParameterValue(parameter: CameraParameter, value: Float): Stri
     CameraParameter.SHUTTER_SPEED -> formatShutterSpeedValue(value.toLong())
     CameraParameter.APERTURE -> if (value > 0f) formatPhysicalAperture(value) else stringResource(R.string.unknown)
     CameraParameter.ISO -> value.roundToInt().toString()
-    CameraParameter.WHITE_BALANCE -> "${value.roundToInt()}K"
+    CameraParameter.WHITE_BALANCE -> if (value > 0f) {
+        stringResource(R.string.camera_white_balance_kelvin, value.roundToInt())
+    } else {
+        stringResource(R.string.camera_white_balance_auto)
+    }
     CameraParameter.FOCUS -> formatFocusDistance(value)
 }
 
@@ -471,10 +501,10 @@ private fun getScaleValues(parameter: CameraParameter, minValue: Float, maxValue
         }
 
         CameraParameter.WHITE_BALANCE -> {
-            // Color temperature presets
-            generateSequence(minValue) { it + 100f }
+            val step = CameraWhiteBalanceCalibration.TEMPERATURE_STEP
+            val firstStep = ceil(minValue / step) * step
+            generateSequence(firstStep) { it + step }
                 .takeWhile { it <= maxValue }
-                .filter { it in minValue..maxValue }
                 .toList()
         }
 

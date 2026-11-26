@@ -1455,4 +1455,5 @@
     <string name="frequent_filters">常用</string>
     <string name="camera_looks_more">更多</string>
     <string name="camera_looks_collapse">收起</string>
+    <string name="camera_white_balance_auto">自動</string>
 </resources>

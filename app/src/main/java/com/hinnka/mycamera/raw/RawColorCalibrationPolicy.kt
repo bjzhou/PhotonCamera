@@ -4,9 +4,11 @@ import android.hardware.camera2.CameraCharacteristics
 import android.hardware.camera2.CaptureRequest
 import android.hardware.camera2.CaptureResult
 import android.hardware.camera2.params.ColorSpaceTransform
+import android.hardware.camera2.params.RggbChannelVector
 import android.os.Build
 import com.hinnka.mycamera.camera.associatedMetadataCameraId
 import com.hinnka.mycamera.camera.readMetadataOrNull
+import com.hinnka.mycamera.camera.readMetadataOrThrow
 import com.hinnka.mycamera.utils.PLog
 import java.util.Collections
 import java.util.WeakHashMap
@@ -47,7 +49,7 @@ internal object RawColorCalibrationPolicy {
         val calibration2: ColorSpaceTransform?,
         val source: Source,
         val cameraForwardStatus: ForwardStatus,
-        /** The gain-derived white point paired with an ISP-derived calibration. */
+        /** A white point derived from the gains used to render the capture. */
         val asShotNeutral: FloatArray? = null,
     ) {
         fun toRawCalibration(): RawCameraCalibration = RawCameraCalibration(
@@ -153,9 +155,21 @@ internal object RawColorCalibrationPolicy {
         logDecision: Boolean = false,
     ): CameraCalibration {
         val mode = mode
-        val source = fromCharacteristics(characteristics, mode)
         val cameraId = characteristics.associatedMetadataCameraId()
         val resultCameraId = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) captureResult.cameraId else null
+        val request = captureResult.request
+        val usesManualCct = Build.VERSION.SDK_INT >= 36 &&
+            request.get(CaptureRequest.CONTROL_AWB_MODE) == CaptureRequest.CONTROL_AWB_MODE_OFF &&
+            request.get(CaptureRequest.COLOR_CORRECTION_MODE) == CaptureRequest.COLOR_CORRECTION_MODE_CCT
+        val cctGains = if (usesManualCct) {
+            captureResult.readMetadataOrThrow(CaptureResult.COLOR_CORRECTION_GAINS)
+        } else {
+            null
+        }
+        // The reported scene neutral can differ from the manual white point applied by the ISP.
+        val cctNeutral = cctGains?.takeIf { it.hasValidGains() }?.asShotNeutralOrNull()
+        val calibration = fromCharacteristics(characteristics, mode)
+        val source = if (cctNeutral != null) calibration.copy(asShotNeutral = cctNeutral) else calibration
 
         fun finish(
             reason: String,
@@ -163,7 +177,6 @@ internal object RawColorCalibrationPolicy {
             details: () -> String = { "" },
         ): CameraCalibration {
             if (logDecision) {
-                val request = captureResult.request
                 val awbMode = request.get(CaptureRequest.CONTROL_AWB_MODE)
                 val requestedColorMode = request.get(CaptureRequest.COLOR_CORRECTION_MODE)
                 val resultColorMode = captureResult.readMetadataOrNull(CaptureResult.COLOR_CORRECTION_MODE, cameraId)
@@ -178,6 +191,12 @@ internal object RawColorCalibrationPolicy {
             return selected
         }
 
+        if (request.usesManualMatrixWhiteBalance()) {
+            // The application supplies the CCM in matrix mode, so skip ISP calibration derivation.
+            val neutral = readManualMatrixGains(captureResult, cameraId)?.asShotNeutralOrNull()
+            return finish("APP_MANUAL_CCM", source.copy(asShotNeutral = neutral))
+        }
+
         if (mode != RawColorCalibrationMode.AUTO) return finish("MODE_EXCLUDES_ISP")
         if (source.forwardMatrix1 != null) return finish("CAMERA_FORWARD_AVAILABLE")
 
@@ -185,13 +204,6 @@ internal object RawColorCalibrationPolicy {
             val physicalId = captureResult.readMetadataOrNull(CaptureResult.LOGICAL_MULTI_CAMERA_ACTIVE_PHYSICAL_ID)
             if (physicalId != cameraId) return finish("CAMERA_MISMATCH") { " activePhysical=$physicalId" }
         }
-
-        val request = captureResult.request
-        // The app supplies its own CCM for matrix-mode white balance; that result carries no new ISP calibration.
-        if (request.get(CaptureRequest.CONTROL_AWB_MODE) == CaptureRequest.CONTROL_AWB_MODE_OFF &&
-            request.get(CaptureRequest.COLOR_CORRECTION_MODE) == CaptureRequest.COLOR_CORRECTION_MODE_TRANSFORM_MATRIX &&
-            request.get(CaptureRequest.COLOR_CORRECTION_TRANSFORM) != null
-        ) return finish("APP_MANUAL_CCM")
 
         val standardTransform = captureResult.readMetadataOrNull(CaptureResult.COLOR_CORRECTION_TRANSFORM, cameraId)
             ?.toMatrix()
@@ -230,10 +242,14 @@ internal object RawColorCalibrationPolicy {
                 " rowSums=${rowSums.contentToString()} ispCcm=${transform.contentToString()}"
             }
         }
-        val gains = captureResult.readMetadataOrNull(CaptureResult.COLOR_CORRECTION_GAINS, cameraId)
-            ?: return finish("WB_GAINS_MISSING_OR_UNREADABLE") {
-                " ccmOrigin=$ccmOrigin ispCcm=${transform.contentToString()}${oplusDetails()}"
-            }
+        val resultGains = if (usesManualCct) {
+            cctGains
+        } else {
+            captureResult.readMetadataOrNull(CaptureResult.COLOR_CORRECTION_GAINS, cameraId)
+        }
+        val gains = resultGains ?: return finish("WB_GAINS_MISSING_OR_UNREADABLE") {
+            " ccmOrigin=$ccmOrigin ispCcm=${transform.contentToString()}${oplusDetails()}"
+        }
         val whiteBalance = floatArrayOf(gains.red, gains.greenEven, gains.greenOdd, gains.blue)
         if (whiteBalance.any { !it.isFinite() || it <= 0f }) {
             return finish("WB_GAINS_INVALID") { " gains=${whiteBalance.contentToString()}" }
@@ -272,6 +288,45 @@ internal object RawColorCalibrationPolicy {
             " ccmOrigin=$ccmOrigin ispCcm=${transform.contentToString()} gains=${whiteBalance.contentToString()}${oplusDetails()}"
         }
     }
+
+    fun readCaptureWhiteBalanceGains(
+        characteristics: CameraCharacteristics,
+        captureResult: CaptureResult,
+    ): RggbChannelVector? {
+        return if (captureResult.request.usesManualMatrixWhiteBalance()) {
+            readManualMatrixGains(captureResult, characteristics.associatedMetadataCameraId())
+        } else {
+            captureResult.readMetadataOrThrow(CaptureResult.COLOR_CORRECTION_GAINS)
+        }
+    }
+
+    private fun CaptureRequest.usesManualMatrixWhiteBalance(): Boolean =
+        get(CaptureRequest.CONTROL_AWB_MODE) == CaptureRequest.CONTROL_AWB_MODE_OFF &&
+            get(CaptureRequest.COLOR_CORRECTION_MODE) == CaptureRequest.COLOR_CORRECTION_MODE_TRANSFORM_MATRIX &&
+            get(CaptureRequest.COLOR_CORRECTION_TRANSFORM) != null
+
+    private fun readManualMatrixGains(captureResult: CaptureResult, cameraId: String?): RggbChannelVector? {
+        // Result gains take precedence because the camera can clip the requested gains.
+        val applied = captureResult.readMetadataOrThrow(CaptureResult.COLOR_CORRECTION_GAINS)
+        if (applied != null) return applied.takeIf { it.hasValidGains() }
+
+        // Use the frame's explicit manual setting when the device omits the applied gains.
+        // If the result reports another mode, its neutral is the remaining source.
+        val awbMode = captureResult.readMetadataOrNull(CaptureResult.CONTROL_AWB_MODE, cameraId)
+        val colorMode = captureResult.readMetadataOrNull(CaptureResult.COLOR_CORRECTION_MODE, cameraId)
+        if (awbMode != null && awbMode != CaptureResult.CONTROL_AWB_MODE_OFF) return null
+        if (colorMode != null && colorMode != CaptureResult.COLOR_CORRECTION_MODE_TRANSFORM_MATRIX) return null
+        return captureResult.request.get(CaptureRequest.COLOR_CORRECTION_GAINS)
+            ?.takeIf { it.hasValidGains() }
+    }
+
+    private fun RggbChannelVector.hasValidGains(): Boolean =
+        red.isFinite() && red > 0f && greenEven.isFinite() && greenEven > 0f &&
+            greenOdd.isFinite() && greenOdd > 0f && blue.isFinite() && blue > 0f
+
+    private fun RggbChannelVector.asShotNeutralOrNull(): FloatArray? =
+        DngSdkColorSpec.cameraNeutralFromWb(floatArrayOf(red, greenEven, greenOdd, blue))
+            .takeIf { neutral -> neutral.all { it.isFinite() && it > 0f } }
 
     private fun isIdentityCcm(matrix: FloatArray): Boolean =
         matrix.indices.all { abs(matrix[it] - (if (it % 4 == 0) 1f else 0f)) < 0.001f }

@@ -4,7 +4,7 @@ import android.hardware.camera2.CameraMetadata
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
-import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -41,6 +41,7 @@ fun CameraParameterBar(
     state: CameraState,
     selectedParameter: CameraParameter?,
     onParameterClick: (CameraParameter) -> Unit,
+    onWhiteBalanceLongClick: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     Row(
@@ -52,6 +53,7 @@ fun CameraParameterBar(
                 item = item,
                 isSelected = selectedParameter == item.parameter,
                 onClick = { onParameterClick(item.parameter) },
+                onWhiteBalanceLongClick = onWhiteBalanceLongClick,
                 modifier = Modifier.weight(1f)
             )
         }
@@ -118,10 +120,12 @@ internal fun ParameterItem(
     item: CameraParameterItem,
     isSelected: Boolean,
     onClick: () -> Unit,
+    onWhiteBalanceLongClick: () -> Unit,
     vertical: Boolean = false,
     modifier: Modifier = Modifier
 ) {
     val titleOnly = item.value == null
+    val onLongClick = onWhiteBalanceLongClick.takeIf { item.parameter == CameraParameter.WHITE_BALANCE }
     val valueColor by animateColorAsState(
         targetValue = when {
             item.isWarning -> Color(0xFFFF6666)
@@ -148,7 +152,13 @@ internal fun ParameterItem(
             )
             .then(if (titleOnly) Modifier.clip(RoundedCornerShape(8.dp)) else Modifier)
             .semantics { selected = isSelected }
-            .clickable(enabled = item.isEnabled, role = Role.Button, onClick = onClick),
+            .combinedClickable(
+                enabled = item.isEnabled,
+                role = Role.Button,
+                onClick = onClick,
+                onLongClick = onLongClick,
+                onLongClickLabel = onLongClick?.let { stringResource(R.string.camera_white_balance_auto) }
+            ),
         contentAlignment = Alignment.Center
     ) {
         Box(
@@ -277,10 +287,15 @@ internal fun formatFocusDistance(value: Float): String {
 
 @Composable
 private fun formatWhiteBalanceValue(state: CameraState): String {
-    val measuredValue = state.actualAwbTemperature?.let { "${it}K" }
-    return when (state.awbMode) {
-        CameraMetadata.CONTROL_AWB_MODE_OFF -> "${state.awbTemperature}K"
-        CameraMetadata.CONTROL_AWB_MODE_AUTO -> measuredValue ?: stringResource(R.string.camera_focus_auto)
-        else -> measuredValue ?: stringResource(R.string.unknown)
+    val temperature = if (state.awbMode == CameraMetadata.CONTROL_AWB_MODE_OFF) {
+        state.awbTemperature
+    } else {
+        state.actualAwbTemperature
     }
+    return temperature?.let { stringResource(R.string.camera_white_balance_kelvin, it) }
+        ?: if (state.awbMode == CameraMetadata.CONTROL_AWB_MODE_AUTO) {
+            stringResource(R.string.camera_white_balance_auto)
+        } else {
+            stringResource(R.string.unknown)
+        }
 }

@@ -28,6 +28,7 @@ import android.content.ContextWrapper
 import android.content.Intent
 import android.graphics.Bitmap
 import android.graphics.SurfaceTexture
+import android.hardware.camera2.CameraMetadata
 import android.os.Environment
 import android.os.SystemClock
 import android.provider.Settings
@@ -149,7 +150,6 @@ private const val ZoomStopAnimationCompletionThreshold = 0.001f
 private const val RawCaptureTapDebounceMillis = 1000L
 private const val DefaultShutterSpeedNs = 1_000_000_000f / 60f
 private const val DefaultIso = 100f
-private const val DefaultAwbTemperature = 5000f
 private const val DefaultFocusDistance = 0f
 private val CameraTopBarBaseTopPadding = 32.dp
 private val CameraTopBarBaseHeight = 80.dp
@@ -232,7 +232,7 @@ private fun CameraParameter.defaultResetValue(): Float? {
         CameraParameter.APERTURE -> null
         CameraParameter.ISO -> DefaultIso
         CameraParameter.FOCUS -> DefaultFocusDistance
-        CameraParameter.WHITE_BALANCE -> DefaultAwbTemperature
+        CameraParameter.WHITE_BALANCE -> null
     }
 }
 
@@ -935,6 +935,12 @@ fun CameraScreen(
             selectedParameter = parameter
             showParameterRuler = !wasSelected || !showParameterRuler
         }
+        val onWhiteBalanceLongClick = {
+            if (selectedParameter == CameraParameter.WHITE_BALANCE) {
+                showParameterRuler = false
+            }
+            viewModel.setAwbMode(CameraMetadata.CONTROL_AWB_MODE_AUTO)
+        }
         LaunchedEffect(showParameterRuler) {
             if (!showParameterRuler) {
                 parameterRulerBounds = null
@@ -1067,10 +1073,10 @@ fun CameraScreen(
         val parameterRuler = @Composable { rulerModifier: Modifier ->
             val parameter = selectedParameter
             val cameraId = state.currentCameraId
-            val whiteBalanceCurrentValue = if (
-                state.awbMode == android.hardware.camera2.CameraMetadata.CONTROL_AWB_MODE_AUTO
-            ) {
-                state.actualAwbTemperature?.toFloat() ?: state.awbTemperature.toFloat()
+            val whiteBalanceSelected = parameter == CameraParameter.WHITE_BALANCE
+            val isWhiteBalanceAuto = state.awbMode == CameraMetadata.CONTROL_AWB_MODE_AUTO
+            val whiteBalanceCurrentValue = if (isWhiteBalanceAuto) {
+                state.actualAwbTemperature?.toFloat() ?: 0f
             } else {
                 state.awbTemperature.toFloat()
             }
@@ -1118,13 +1124,13 @@ fun CameraScreen(
                     CameraParameter.APERTURE -> state.isApertureAuto
                     CameraParameter.ISO -> state.isIsoAuto
                     CameraParameter.FOCUS -> state.isAutoFocus
-                    CameraParameter.WHITE_BALANCE ->
-                        state.awbMode == android.hardware.camera2.CameraMetadata.CONTROL_AWB_MODE_AUTO
+                    CameraParameter.WHITE_BALANCE -> isWhiteBalanceAuto
                     CameraParameter.EXPOSURE_COMPENSATION -> false
                 },
-                showAutoButton = parameter != CameraParameter.EXPOSURE_COMPENSATION,
+                showAutoButton = parameter != CameraParameter.EXPOSURE_COMPENSATION &&
+                    (!whiteBalanceSelected || state.canAdjustWhiteBalance),
+                showScale = !whiteBalanceSelected || state.canAdjustWhiteBalance,
                 isAutoModeToggleEnabled = when (parameter) {
-                    CameraParameter.WHITE_BALANCE -> state.canAdjustWhiteBalance
                     CameraParameter.FOCUS -> state.minimumFocusDistance > 0f
                     CameraParameter.APERTURE -> state.isApertureAdjustable
                     else -> true
@@ -1157,12 +1163,8 @@ fun CameraScreen(
                         CameraParameter.APERTURE -> viewModel.setPhysicalApertureAuto(!state.isApertureAuto)
                         CameraParameter.ISO -> viewModel.setIsoAuto(!state.isIsoAuto)
                         CameraParameter.WHITE_BALANCE -> {
-                            if (state.canAdjustWhiteBalance) {
-                                if (state.awbMode == android.hardware.camera2.CameraMetadata.CONTROL_AWB_MODE_AUTO) {
-                                    viewModel.setAwbMode(android.hardware.camera2.CameraMetadata.CONTROL_AWB_MODE_OFF)
-                                } else {
-                                    viewModel.setAwbMode(android.hardware.camera2.CameraMetadata.CONTROL_AWB_MODE_AUTO)
-                                }
+                            if (showParameterRuler && selectedParameter == parameter && cameraId == state.currentCameraId) {
+                                viewModel.setAwbMode(CameraMetadata.CONTROL_AWB_MODE_AUTO)
                             }
                         }
 
@@ -1180,7 +1182,8 @@ fun CameraScreen(
             CameraParameterBar(
                 state = state,
                 selectedParameter = activeParameter,
-                onParameterClick = onParameterClick
+                onParameterClick = onParameterClick,
+                onWhiteBalanceLongClick = onWhiteBalanceLongClick
             )
         }
 
@@ -1681,6 +1684,7 @@ fun CameraScreen(
                                 showParameterRuler
                             },
                             onParameterClick = onParameterClick,
+                            onWhiteBalanceLongClick = onWhiteBalanceLongClick,
                         )
                     }
                 }

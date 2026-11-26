@@ -14,6 +14,7 @@ fun CameraParameterBarVerticel(
     state: CameraState,
     selectedParameter: CameraParameter?,
     onParameterClick: (CameraParameter) -> Unit,
+    onWhiteBalanceLongClick: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     Column(
@@ -26,6 +27,7 @@ fun CameraParameterBarVerticel(
                 item = item,
                 isSelected = selectedParameter == item.parameter,
                 onClick = { onParameterClick(item.parameter) },
+                onWhiteBalanceLongClick = onWhiteBalanceLongClick,
                 vertical = true
             )
         }

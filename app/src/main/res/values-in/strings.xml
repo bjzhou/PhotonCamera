@@ -505,4 +505,5 @@
     <string name="camera_looks_more">Lainnya</string>
     <string name="camera_looks_collapse">Ciutkan</string>
     <string name="preset_revert">Pulihkan</string>
+    <string name="camera_white_balance_auto">Otomatis</string>
 </resources>

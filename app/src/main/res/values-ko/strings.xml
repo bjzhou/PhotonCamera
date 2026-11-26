@@ -506,4 +506,5 @@
     <string name="camera_looks_more">더 보기</string>
     <string name="camera_looks_collapse">접기</string>
     <string name="preset_revert">되돌리기</string>
+    <string name="camera_white_balance_auto">자동</string>
 </resources>

@@ -35,6 +35,8 @@
     <string name="camera_parameter_iso" translatable="false">ISO</string>
     <string name="camera_parameter_focus" translatable="false">AF</string>
     <string name="camera_parameter_white_balance" translatable="false">AWB</string>
+    <string name="camera_white_balance_auto">Auto</string>
+    <string name="camera_white_balance_kelvin" translatable="false">%1$d K</string>
     <string name="camera_parameter_auto" translatable="false">A</string>
 
     <!-- Focus -->

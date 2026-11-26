@@ -1,6 +1,8 @@
 package com.hinnka.mycamera.camera
 
 import android.graphics.Rect
+import android.hardware.camera2.params.ColorSpaceTransform
+import android.hardware.camera2.params.RggbChannelVector
 import android.util.Range
 import android.util.Size
 import com.hinnka.mycamera.processor.MgcRawMaxMode
@@ -275,6 +277,11 @@ data class WhiteBalanceGains(
     val blue: Float
 )
 
+data class ManualWhiteBalanceMatrix(
+    val gains: RggbChannelVector,
+    val transform: ColorSpaceTransform,
+)
+
 /**
  * 相机状态数据类
  */
@@ -296,13 +303,14 @@ data class CameraState(
 
     val awbMode: Int = 1, // 自动白平衡模式
     val awbTemperature: Int = 5000, // 色温 (K)
+    val manualWhiteBalanceMatrix: ManualWhiteBalanceMatrix? = null,
     val actualAwbTemperature: Int? = null, // 相机当前实际/估算色温 (K)
     val actualAwbTint: Int? = null,
     val actualAwbGains: WhiteBalanceGains? = null,
     val canAdjustWhiteBalance: Boolean = false,
     val supportsCctWhiteBalance: Boolean = false,
-    val awbTemperatureMin: Int = 2000,
-    val awbTemperatureMax: Int = 8000,
+    val awbTemperatureMin: Int = CameraWhiteBalanceCalibration.MIN_TEMPERATURE,
+    val awbTemperatureMax: Int = CameraWhiteBalanceCalibration.MAX_TEMPERATURE,
 
     // 测光模式
     val meteringMode: MeteringMode = MeteringMode.SYSTEM_DEFAULT,

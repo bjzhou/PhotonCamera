@@ -1123,4 +1123,5 @@
     <string name="frequent_filters">ใช้บ่อย</string>
     <string name="camera_looks_more">เพิ่มเติม</string>
     <string name="camera_looks_collapse">ยุบ</string>
+    <string name="camera_white_balance_auto">อัตโนมัติ</string>
 </resources>

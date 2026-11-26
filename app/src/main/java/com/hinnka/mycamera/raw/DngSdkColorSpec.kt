@@ -35,6 +35,31 @@ internal object DngSdkColorSpec {
         val cameraCalibration: FloatArray
     )
 
+    /** Maps a Planckian scene white to the calibrated sensor response. */
+    class TemperatureCalibration(calibration: RawCameraCalibration) {
+        private val profile = prepareProfile(
+            colorMatrix1 = calibration.colorMatrix1,
+            colorMatrix2 = calibration.colorMatrix2,
+            forwardMatrix1 = null,
+            forwardMatrix2 = null,
+            calibrationIlluminant1 = calibration.calibrationIlluminant1,
+            calibrationIlluminant2 = calibration.calibrationIlluminant2,
+            analogBalance = calibration.analogBalance,
+            cameraCalibration1 = calibration.cameraCalibration1,
+            cameraCalibration2 = calibration.cameraCalibration2,
+        )
+
+        fun cameraNeutralForTemperature(kelvin: Int): FloatArray? {
+            val profile = profile ?: return null
+            val whiteXyz = planckianWhiteXy(kelvin)?.let(::xyToXyz) ?: return null
+            val xyzToCamera = findXyzToCamera(profile, kelvin.toFloat()).colorMatrix
+            val neutral = multiplyMatrixVector(xyzToCamera, whiteXyz)
+            if (neutral.any { !it.isFinite() || it <= 0f }) return null
+            val brightestChannel = neutral.maxOrNullValue()
+            return FloatArray(neutral.size) { neutral[it] / brightestChannel }
+        }
+    }
+
     /**
      * Resolves source color metadata from the profile and as-shot gains stored in the DNG.
      * Replacing only the gains leaves Camera2's old white/CCT and lens calibration behind;
@@ -596,8 +621,10 @@ internal object DngSdkColorSpec {
         return last
     }
 
-    private fun findXyzToCamera(profile: PreparedProfile, whiteXy: FloatArray): MatrixForWhite {
-        val whiteTemperature = temperatureForXy(whiteXy)
+    private fun findXyzToCamera(profile: PreparedProfile, whiteXy: FloatArray): MatrixForWhite =
+        findXyzToCamera(profile, temperatureForXy(whiteXy))
+
+    private fun findXyzToCamera(profile: PreparedProfile, whiteTemperature: Float): MatrixForWhite {
         val weight = when {
             whiteTemperature <= profile.temperature1 -> 1f
             whiteTemperature >= profile.temperature2 -> 0f
@@ -716,6 +743,21 @@ internal object DngSdkColorSpec {
             lastDistance = distance
         }
         return 5000f
+    }
+
+    private fun planckianWhiteXy(kelvin: Int): FloatArray? {
+        if (kelvin <= 0) return null
+        val reciprocal = 1.0e6 / kelvin
+        val upperIndex = TEMP_TABLE.indexOfFirst { it.reciprocal >= reciprocal }
+        if (upperIndex <= 0) return null
+        val lower = TEMP_TABLE[upperIndex - 1]
+        val upper = TEMP_TABLE[upperIndex]
+        val fraction = (reciprocal - lower.reciprocal) / (upper.reciprocal - lower.reciprocal)
+        val u = lower.u + (upper.u - lower.u) * fraction
+        val v = lower.v + (upper.v - lower.v) * fraction
+        // Robertson tabulates CIE 1960 UCS coordinates on the Planckian locus.
+        val denominator = 2.0 * u - 8.0 * v + 4.0
+        return floatArrayOf((3.0 * u / denominator).toFloat(), (2.0 * v / denominator).toFloat())
     }
 
     private fun illuminantToTemperature(illuminant: Int): Float {

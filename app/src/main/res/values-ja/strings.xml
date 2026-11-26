@@ -1341,4 +1341,5 @@
     <string name="frequent_filters">よく使う</string>
     <string name="camera_looks_more">もっと見る</string>
     <string name="camera_looks_collapse">折りたたむ</string>
+    <string name="camera_white_balance_auto">オート</string>
 </resources>
