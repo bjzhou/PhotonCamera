@@ -445,6 +445,9 @@ internal class GlesMgcRawSpatialStacker(
     private var sabreResolveGreenBalanceProgram = 0
     private var sabreResolveGreenProgram = 0
     private var sabreResolveOutputProgram = 0
+    private var sabreChromaQuadsProgram = 0
+    private var sabreChromaHorizontalProgram = 0
+    private var sabreChromaVerticalProgram = 0
     private var sourceChromaHorizontalProgram = 0
     private var sourceChromaVerticalProgram = 0
     private var sourceChromaClassifyProgram = 0
@@ -2898,11 +2901,7 @@ internal class GlesMgcRawSpatialStacker(
             demosaicQuantizationScale,
         )
         draw(sabreResolveConvertProgram, planeWidth, planeHeight, intArrayOf(converted))
-        val saturationThreshold = IntArray(4) { phase ->
-            round(demosaicQuantizationScale * calculationWhiteBalance[phase])
-                .toInt().coerceIn(1, Short.MAX_VALUE.toInt())
-        }
-        renderSourceChroma(converted, saturationThreshold, sourceChroma)
+        renderSabreSourceChroma(accumulatedColor, redX, redY, sourceChroma)
 
         // Entry 0x34A67F8: k = fcvtzs(clamp(retention * 65536, 0, 65535)).
         val retentionFixed16 = (greenImbalanceRetention * 65536f).coerceIn(0f, 65535f).toInt()
@@ -2955,15 +2954,11 @@ internal class GlesMgcRawSpatialStacker(
                 GlesMgcRawChromaReconstructionShaders.vertical,
                 "mgc_source_chroma_vertical",
             )
-            sourceChromaClassifyProgram = linkProgram(
-                GlesMgcRawChromaReconstructionShaders.classify,
-                "mgc_source_chroma_classify",
-            )
         }
         val quadWidth = width / 2
         val quadHeight = height / 2
 
-        var program = sourceChromaHorizontalProgram
+        val program = sourceChromaHorizontalProgram
         GLES30.glUseProgram(program)
         bindTexture(program, "uConverted", 0, converted)
         uniform2i(program, "uRawSize", width, height)
@@ -2972,21 +2967,57 @@ internal class GlesMgcRawSpatialStacker(
             saturation[0], saturation[1], saturation[2], saturation[3],
         )
         draw(program, quadWidth, quadHeight, intArrayOf(targets[0], targets[1], targets[2]))
+        finishSourceChroma(sourceChromaVerticalProgram, targets)
+    }
 
-        program = sourceChromaVerticalProgram
-        GLES30.glUseProgram(program)
-        bindTexture(program, "uHorizontalAll", 0, targets[0])
-        bindTexture(program, "uHorizontalValid", 1, targets[1])
-        bindTexture(program, "uHorizontalSupport", 2, targets[2])
-        uniform2i(program, "uQuadSize", quadWidth, quadHeight)
-        draw(program, quadWidth, quadHeight, intArrayOf(targets[3]))
+    private fun renderSabreSourceChroma(accumulated: Int, redX: Int, redY: Int, targets: IntArray) {
+        val quadWidth = width / 2
+        val quadHeight = height / 2
+        val quads = sabreChromaQuadsProgram
+        GLES30.glUseProgram(quads)
+        bindTexture(quads, "uAccumulated", 0, accumulated)
+        uniform2i(quads, "uRawSize", width, height)
+        uniform2i(quads, "uRedSite", redX, redY)
+        // The merge normalizes white to the WB gain and stores its RGB in half-float.
+        uniform3f(
+            quads,
+            "uSaturationThreshold",
+            Half.toFloat(Half.toHalf(calculationWhiteBalance[0])),
+            Half.toFloat(Half.toHalf(calculationWhiteBalance[1])),
+            Half.toFloat(Half.toHalf(calculationWhiteBalance[3])),
+        )
+        draw(quads, quadWidth, quadHeight, intArrayOf(targets[3]))
 
-        program = sourceChromaClassifyProgram
-        GLES30.glUseProgram(program)
-        bindTexture(program, "uColor", 0, targets[3])
-        uniform2i(program, "uQuadSize", quadWidth, quadHeight)
+        val horizontal = sabreChromaHorizontalProgram
+        GLES30.glUseProgram(horizontal)
+        bindTexture(horizontal, "uQuadRgb", 0, targets[3])
+        uniform2i(horizontal, "uRawSize", width, height)
+        draw(horizontal, quadWidth, quadHeight, intArrayOf(targets[0], targets[1], targets[2]))
+        finishSourceChroma(sabreChromaVerticalProgram, targets)
+    }
+
+    private fun finishSourceChroma(vertical: Int, targets: IntArray) {
+        if (sourceChromaClassifyProgram == 0) {
+            sourceChromaClassifyProgram = linkProgram(
+                GlesMgcRawChromaReconstructionShaders.classify,
+                "mgc_source_chroma_classify",
+            )
+        }
+        val quadWidth = width / 2
+        val quadHeight = height / 2
+        GLES30.glUseProgram(vertical)
+        bindTexture(vertical, "uHorizontalAll", 0, targets[0])
+        bindTexture(vertical, "uHorizontalValid", 1, targets[1])
+        bindTexture(vertical, "uHorizontalSupport", 2, targets[2])
+        uniform2i(vertical, "uQuadSize", quadWidth, quadHeight)
+        draw(vertical, quadWidth, quadHeight, intArrayOf(targets[3]))
+
+        val classify = sourceChromaClassifyProgram
+        GLES30.glUseProgram(classify)
+        bindTexture(classify, "uColor", 0, targets[3])
+        uniform2i(classify, "uQuadSize", quadWidth, quadHeight)
         // The horizontal values have been consumed. Reuse their first target for the guide.
-        draw(program, quadWidth, quadHeight, intArrayOf(targets[0]))
+        draw(classify, quadWidth, quadHeight, intArrayOf(targets[0]))
     }
 
     private fun initSabrePrograms() {
@@ -3065,6 +3096,18 @@ internal class GlesMgcRawSpatialStacker(
         sabreResolveOutputProgram = linkProgram(
             GlesMgcSabreResolveShaders.resolveOutput,
             "mgc_sabre_resolve_output",
+        )
+        sabreChromaQuadsProgram = linkProgram(
+            GlesMgcRawChromaReconstructionShaders.sabreQuads,
+            "mgc_sabre_chroma_quads",
+        )
+        sabreChromaHorizontalProgram = linkProgram(
+            GlesMgcRawChromaReconstructionShaders.sabreHorizontal,
+            "mgc_sabre_chroma_horizontal",
+        )
+        sabreChromaVerticalProgram = linkProgram(
+            GlesMgcRawChromaReconstructionShaders.sabreVertical,
+            "mgc_sabre_chroma_vertical",
         )
         if (exportGpuLinearRgbSource && gpuLinearRgbStorage == GpuLinearRgbStorage.RGBA16F
         ) {
@@ -7929,6 +7972,9 @@ internal class GlesMgcRawSpatialStacker(
         ownsEglContext = false
         supportsComputePrograms = false
         supportsComputeReadback = false
+        sabreChromaQuadsProgram = 0
+        sabreChromaHorizontalProgram = 0
+        sabreChromaVerticalProgram = 0
         sourceChromaHorizontalProgram = 0
         sourceChromaVerticalProgram = 0
         sourceChromaClassifyProgram = 0

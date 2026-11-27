@@ -1,5 +1,7 @@
 package com.hinnka.mycamera.camera
 
+import android.hardware.camera2.CaptureRequest
+
 enum class MultiFrameCaptureRole {
     BASE,
     SHORT,
@@ -25,6 +27,17 @@ internal object RawExposureMath {
         val sensitivity = sensitivityIso?.takeIf { it > 0 } ?: return null
         return product(exposure, sensitivity)
     }
+
+    fun requestedProductOrNull(request: CaptureRequest, fallback: Double? = null): Double? {
+        // AE ignores the template's manual shutter and ISO fields even when AE is locked.
+        if (request.get(CaptureRequest.CONTROL_AE_MODE) != CaptureRequest.CONTROL_AE_MODE_OFF) {
+            return null
+        }
+        return productOrNull(
+            request.get(CaptureRequest.SENSOR_EXPOSURE_TIME),
+            request.get(CaptureRequest.SENSOR_SENSITIVITY),
+        ) ?: fallback
+    }
 }
 
 data class CapturedFrameMetadata(
@@ -43,7 +56,7 @@ data class CapturedFrameMetadata(
     val gyroWindow: GyroExposureWindow?,
     val channelNoiseProfile: FloatArray? = null,
     val multiFrameCaptureRole: MultiFrameCaptureRole? = null,
-    /** Requested RAW TET in the same proportional units as [exposureProduct], when available. */
+    /** Manually requested RAW exposure in the same units as [exposureProduct], when available. */
     val desiredExposureProduct: Double? = null,
     /** Camera2 dynamic black levels in 2x2 CFA position order: (0,0), (1,0), (0,1), (1,1). */
     val dynamicBlackLevelByCfaPosition: FloatArray? = null,

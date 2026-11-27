@@ -5524,13 +5524,11 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             exposureProduct = metadata?.exposureProduct
                 ?: captureResult?.let(::captureExposureProduct)
                 ?: 1.0,
-            desiredExposureProduct = metadata?.desiredExposureProduct
-                ?: captureResult?.let { result ->
-                    RawExposureMath.productOrNull(
-                        result.request.get(android.hardware.camera2.CaptureRequest.SENSOR_EXPOSURE_TIME),
-                        result.request.get(android.hardware.camera2.CaptureRequest.SENSOR_SENSITIVITY),
-                    )
-                },
+            desiredExposureProduct = if (metadata != null) {
+                metadata.desiredExposureProduct
+            } else {
+                captureResult?.let { RawExposureMath.requestedProductOrNull(it.request) }
+            },
             focusDistanceDiopters = metadata?.focusDistanceDiopters
                 ?: captureResult?.get(CaptureResult.LENS_FOCUS_DISTANCE)
                 ?: Float.NaN,

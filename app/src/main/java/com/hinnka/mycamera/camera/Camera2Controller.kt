@@ -970,10 +970,7 @@ class Camera2Controller(private val context: Context) {
         val sensitivityIso = result.get(CaptureResult.SENSOR_SENSITIVITY) ?: return null
         val exposureProduct = RawExposureMath.productOrNull(exposureTimeNs, sensitivityIso)
             ?: return null
-        val desiredExposureProduct = RawExposureMath.productOrNull(
-            result.request.get(CaptureRequest.SENSOR_EXPOSURE_TIME),
-            result.request.get(CaptureRequest.SENSOR_SENSITIVITY),
-        )
+        val desiredExposureProduct = RawExposureMath.requestedProductOrNull(result.request)
         val channelNoiseProfile = captureChannelNoiseProfile(result)
         val framePhysicalCameraId = activeOutputPhysicalCameraId
             ?: result.get(CaptureResult.LOGICAL_MULTI_CAMERA_ACTIVE_PHYSICAL_ID)
@@ -8983,10 +8980,10 @@ class Camera2Controller(private val context: Context) {
                         exposureTimeNs,
                         sensitivityIso,
                     ) ?: frozenMetadata?.exposureProduct ?: 0.0,
-                    desiredExposureProduct = RawExposureMath.productOrNull(
-                        frameResult.request.get(CaptureRequest.SENSOR_EXPOSURE_TIME),
-                        frameResult.request.get(CaptureRequest.SENSOR_SENSITIVITY),
-                    ) ?: frozenMetadata?.desiredExposureProduct,
+                    desiredExposureProduct = RawExposureMath.requestedProductOrNull(
+                        request = frameResult.request,
+                        fallback = frozenMetadata?.desiredExposureProduct,
+                    ),
                     focusDistanceDiopters = frameResult
                         .get(CaptureResult.LENS_FOCUS_DISTANCE)
                         ?: Float.NaN,

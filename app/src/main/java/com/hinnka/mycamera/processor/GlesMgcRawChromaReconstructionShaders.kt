@@ -3,7 +3,8 @@ package com.hinnka.mycamera.processor
 import com.hinnka.mycamera.processor.GlesMgcGreenDemosaicShaders.PLANE_PADDING
 
 /**
- * Estimates chromaticity from the calibrated CFA on the Bayer-quad grid.
+ * Estimates chromaticity on the Bayer-quad grid from Spatial's calibrated CFA or Sabre's
+ * co-sited merged RGB.
  *
  * Both separable passes place the four phases at the same spatial centre. A clipped
  * quad is excluded as a unit where nearby quads provide enough observations. The
@@ -35,13 +36,47 @@ internal object GlesMgcRawChromaReconstructionShaders {
 
     private const val lumaWeights = "vec3(1742.0, 5859.0, 591.0) * (1.0 / 8192.0)"
 
-    val horizontal = """
+    val sabreQuads = """
         #version 310 es
         precision highp float;
         precision highp int;
-        uniform highp isampler2D uConverted;
+        uniform highp sampler2D uAccumulated;
         uniform ivec2 uRawSize;
-        uniform ivec4 uSaturationThreshold;
+        uniform ivec2 uRedSite;
+        uniform vec3 uSaturationThreshold;
+        layout(location = 0) out vec4 oQuadRgb;
+
+        vec3 rgbAt(ivec2 p) {
+            return texelFetch(uAccumulated, min(p, uRawSize - 1), 0).rgb;
+        }
+
+        void main() {
+            ivec2 p = 2 * ivec2(gl_FragCoord.xy) + uRedSite;
+            vec3 topLeft = rgbAt(p);
+            vec3 topRight = rgbAt(p + ivec2(1, 0));
+            vec3 bottomLeft = rgbAt(p + ivec2(0, 1));
+            vec3 bottomRight = rgbAt(p + 1);
+            vec3 peak = max(max(topLeft, topRight), max(bottomLeft, bottomRight));
+            bool unclipped = all(lessThan(peak, uSaturationThreshold));
+            // Using the same samples for every channel preserves neutral detail at any CFA phase.
+            vec3 mean = 0.25 * (topLeft + topRight + bottomLeft + bottomRight);
+            oQuadRgb = vec4(mean, unclipped ? 1.0 : 0.0);
+        }
+    """.trimIndent()
+
+    val horizontal = horizontalShader(coSitedRgb = false)
+    val sabreHorizontal = horizontalShader(coSitedRgb = true)
+
+    private fun horizontalShader(coSitedRgb: Boolean): String = """
+        #version 310 es
+        precision highp float;
+        precision highp int;
+        uniform ivec2 uRawSize;
+        ${if (coSitedRgb) {
+            "uniform highp sampler2D uQuadRgb;"
+        } else {
+            "uniform highp isampler2D uConverted;\n        uniform ivec4 uSaturationThreshold;"
+        }}
         layout(location = 0) out vec4 oAll;
         layout(location = 1) out vec4 oValid;
         layout(location = 2) out vec4 oSupport;
@@ -55,17 +90,29 @@ internal object GlesMgcRawChromaReconstructionShaders {
             vec4 validWeight = vec4(0.0);
             for (int k = 0; k < 7; ++k) {
                 int x = mirrorQuad(q.x + k - 3, uRawSize.x / 2);
-                ivec2 p = 2 * ivec2(x, q.y) + ivec2($PLANE_PADDING);
-                ivec4 cfa = ivec4(
-                    texelFetch(uConverted, p, 0).r,
-                    texelFetch(uConverted, p + ivec2(1, 0), 0).r,
-                    texelFetch(uConverted, p + ivec2(0, 1), 0).r,
-                    texelFetch(uConverted, p + ivec2(1, 1), 0).r
-                );
-                vec4 weights = PHASE_WEIGHT[k].xyxy;
-                vec4 signal = max(vec4(cfa), 0.0) * (1.0 / 16384.0);
+                ${if (coSitedRgb) {
+                    """
+                    vec4 quad = texelFetch(uQuadRgb, ivec2(x, q.y), 0);
+                    vec4 weights = vec4(0.5 * (PHASE_WEIGHT[k].x + PHASE_WEIGHT[k].y));
+                    vec4 signal = quad.rggb;
+                    bool unclipped = quad.a > 0.5;
+                    """.trimIndent()
+                } else {
+                    """
+                    ivec2 p = 2 * ivec2(x, q.y) + ivec2($PLANE_PADDING);
+                    ivec4 cfa = ivec4(
+                        texelFetch(uConverted, p, 0).r,
+                        texelFetch(uConverted, p + ivec2(1, 0), 0).r,
+                        texelFetch(uConverted, p + ivec2(0, 1), 0).r,
+                        texelFetch(uConverted, p + ivec2(1, 1), 0).r
+                    );
+                    vec4 weights = PHASE_WEIGHT[k].xyxy;
+                    vec4 signal = max(vec4(cfa), 0.0) * (1.0 / 16384.0);
+                    bool unclipped = all(lessThan(cfa, uSaturationThreshold));
+                    """.trimIndent()
+                }.prependIndent("                ").trimStart()}
                 allSum += weights * signal;
-                if (all(lessThan(cfa, uSaturationThreshold))) {
+                if (unclipped) {
                     validSum += weights * signal;
                     validWeight += weights;
                 }
@@ -76,7 +123,10 @@ internal object GlesMgcRawChromaReconstructionShaders {
         }
     """.trimIndent()
 
-    val vertical = """
+    val vertical = verticalShader(coSitedRgb = false)
+    val sabreVertical = verticalShader(coSitedRgb = true)
+
+    private fun verticalShader(coSitedRgb: Boolean): String = """
         #version 310 es
         precision highp float;
         precision highp int;
@@ -95,7 +145,11 @@ internal object GlesMgcRawChromaReconstructionShaders {
             vec4 support = vec4(0.0);
             for (int k = 0; k < 7; ++k) {
                 ivec2 p = ivec2(q.x, mirrorQuad(q.y + k - 3, uQuadSize.y));
-                vec4 weights = PHASE_WEIGHT[k].xxyy;
+                vec4 weights = ${if (coSitedRgb) {
+                    "vec4(0.5 * (PHASE_WEIGHT[k].x + PHASE_WEIGHT[k].y))"
+                } else {
+                    "PHASE_WEIGHT[k].xxyy"
+                }};
                 allSum += weights * texelFetch(uHorizontalAll, p, 0);
                 validSum += weights * texelFetch(uHorizontalValid, p, 0);
                 support += weights * texelFetch(uHorizontalSupport, p, 0);
@@ -104,6 +158,7 @@ internal object GlesMgcRawChromaReconstructionShaders {
             // support. Transition continuously to the estimate using the whole footprint.
             vec4 validAmount = clamp((support - 0.25) / 0.4, 0.0, 1.0);
             vec4 phase = mix(allSum, validSum / max(support, 1.0e-6), validAmount);
+            ${if (coSitedRgb) "phase = max(phase, 0.0);" else ""}
             oColor = vec4(phase.r, 0.5 * (phase.g + phase.b), phase.a, 0.0);
         }
     """.trimIndent()
