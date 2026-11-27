@@ -1,11 +1,13 @@
 package com.hinnka.mycamera.livephoto
 
 import android.opengl.EGL14
+import android.opengl.EGL15
 import android.opengl.EGLConfig
 import android.opengl.EGLContext
 import android.opengl.EGLDisplay
 import android.opengl.EGLExt
 import android.opengl.EGLSurface
+import android.opengl.EGLSync
 import android.opengl.GLES30
 import android.opengl.Matrix
 import android.view.Surface
@@ -241,7 +243,8 @@ class HardwareLutVideoRenderer(
         stMatrix: FloatArray,
         timestampUs: Long,
         mirrorHorizontally: Boolean = false,
-        mirrorVertically: Boolean = false
+        mirrorVertically: Boolean = false,
+        fenceSync: EGLSync? = null,
     ) {
         if (!isInitialized || textureId == 0 || shaderProgram == 0) return
 
@@ -255,6 +258,12 @@ class HardwareLutVideoRenderer(
             }
         } else {
             return
+        }
+
+        if (fenceSync != null && fenceSync != EGL15.EGL_NO_SYNC) {
+            if (!EGL15.eglWaitSync(eglDisplay, fenceSync, 0)) {
+                EGL15.eglClientWaitSync(eglDisplay, fenceSync, 0, 50_000_000L)
+            }
         }
 
         GLES30.glViewport(0, 0, width, height)

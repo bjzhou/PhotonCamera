@@ -1707,11 +1707,15 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 val shotSettings = settings
                 shotSettings.state = photo.state
                 if (photo.state.useLivePhoto) {
-                    val first = photo.frames.first()
+                    val primaryFrame = photo.frames.firstOrNull { frame ->
+                        val role = frame.frameMetadata?.multiFrameCaptureRole
+                            ?: (frame.captureResult?.request?.tag as? MultiFrameCaptureRole)
+                        role == null || role == MultiFrameCaptureRole.BASE
+                    } ?: photo.frames.first()
                     shotSettings.livePhotoVideo = CompletableDeferred<Pair<File, Long>?>().also { deferred ->
                         cameraController.recordLivePhotoVideo(
-                            first.image.timestamp / 1000,
-                            first.captureInfo.livePhotoVideoStartTimestampUs,
+                            primaryFrame.image.timestamp / 1000,
+                            primaryFrame.captureInfo.livePhotoVideoStartTimestampUs,
                         ) { file, timestamp ->
                             deferred.complete(if (file.name == "error") null else file to timestamp)
                         }

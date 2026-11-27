@@ -19,6 +19,7 @@ import kotlinx.coroutines.sync.withLock
 import java.io.File
 import java.nio.ByteBuffer
 import java.util.concurrent.Executors
+import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicReference
 
 /**
@@ -161,59 +162,83 @@ class LivePhotoRecorder(
         lutConfig: LutConfig?,
         params: ColorRecipeParams?,
         sharedContext: EGLContext,
-        sharedDisplay: EGLDisplay
+        sharedDisplay: EGLDisplay,
+        fenceSync: EGLSync? = null,
+        onFrameConsumed: (() -> Unit)? = null,
     ) {
-        if (!isRunning) return
-        if (!preCaptureBufferingEnabled && !acceptingTorchFrames) return
-        if (timestampNs / 1000 < (captureMinimumTimestampUs ?: Long.MIN_VALUE)) return
+        val timestampUs = timestampNs / 1000
+        val frameReleased = AtomicBoolean(false)
+        fun releasePendingFrame() {
+            if (!frameReleased.compareAndSet(false, true)) return
+            if (fenceSync != null && fenceSync != EGL15.EGL_NO_SYNC && sharedDisplay != EGL14.EGL_NO_DISPLAY) {
+                EGL15.eglDestroySync(sharedDisplay, fenceSync)
+            }
+            onFrameConsumed?.invoke()
+        }
 
-        lastFrameTimestampUs = timestampNs / 1000
+        if (!isRunning ||
+            (!preCaptureBufferingEnabled && !acceptingTorchFrames) ||
+            timestampUs < (captureMinimumTimestampUs ?: Long.MIN_VALUE) ||
+            (lastFrameTimestampUs > 0L && timestampUs <= lastFrameTimestampUs)
+        ) {
+            releasePendingFrame()
+            return
+        }
+
+        lastFrameTimestampUs = timestampUs
 
         val matrix = transformMatrix.clone()
-        scope.launch(renderDispatcher) {
-            hardwareMutex.withLock {
-                if (!isRunning) return@withLock
-                if (!preCaptureBufferingEnabled && !acceptingTorchFrames) return@withLock
-                if (timestampNs / 1000 < (captureMinimumTimestampUs ?: Long.MIN_VALUE)) return@withLock
+        val job = scope.launch(renderDispatcher) {
+            try {
+                hardwareMutex.withLock {
+                    if (!isRunning) return@withLock
+                    if (!preCaptureBufferingEnabled && !acceptingTorchFrames) return@withLock
+                    if (timestampUs < (captureMinimumTimestampUs ?: Long.MIN_VALUE)) return@withLock
 
-                // 如果上下文发生了变化（比如 App 重入）或者分辨率发生了变化（旋转），必须释放旧编码器并重新创建
-                if (videoEncoder != null && (
-                            (lastSharedContext != EGL14.EGL_NO_CONTEXT && lastSharedContext != sharedContext) ||
-                                    (lastWidth != width || lastHeight != height)
-                            )
-                ) {
-                    PLog.w(TAG, "Shared EGL Context or dimensions changed, forcing encoder re-init.")
-                    releaseHardwareLocked()
-                }
-
-                if (!isRunning) return@withLock
-
-                // 延迟初始化编码器
-                if (videoEncoder == null && sharedContext != EGL14.EGL_NO_CONTEXT) {
-                    initEncoder(width, height, lutConfig, params, sharedContext, sharedDisplay)
-                    lastSharedContext = sharedContext
-                    lastWidth = width
-                    lastHeight = height
-                    pendingRelease = false
-                }
-
-                if (!isRunning) return@withLock
-
-                try {
-                    pendingCaptureStart.get()?.let { pending ->
-                        if (!pending.syncFrameRequested && timestampNs / 1000 >= pending.minimumTimestampUs) {
-                            videoEncoder?.setParameters(Bundle().apply {
-                                putInt(MediaCodec.PARAMETER_KEY_REQUEST_SYNC_FRAME, 0)
-                            })
-                            pending.syncFrameRequested = true
-                        }
+                    // 如果上下文发生了变化（比如 App 重入）或者分辨率发生了变化（旋转），必须释放旧编码器并重新创建
+                    if (videoEncoder != null && (
+                                (lastSharedContext != EGL14.EGL_NO_CONTEXT && lastSharedContext != sharedContext) ||
+                                        (lastWidth != width || lastHeight != height)
+                                )
+                    ) {
+                        PLog.w(TAG, "Shared EGL Context or dimensions changed, forcing encoder re-init.")
+                        releaseHardwareLocked()
                     }
-                    lutRenderer?.renderFrame(textureId, matrix, timestampNs / 1000)
-                } catch (e: Exception) {
-                    PLog.e(TAG, "Failed to render Live Photo frame: timestampUs=${timestampNs / 1000}", e)
-                    pendingCaptureStart.get()?.ready?.completeExceptionally(e)
+
+                    if (!isRunning) return@withLock
+
+                    // 延迟初始化编码器
+                    if (videoEncoder == null && sharedContext != EGL14.EGL_NO_CONTEXT) {
+                        initEncoder(width, height, lutConfig, params, sharedContext, sharedDisplay)
+                        lastSharedContext = sharedContext
+                        lastWidth = width
+                        lastHeight = height
+                        pendingRelease = false
+                    }
+
+                    if (!isRunning) return@withLock
+
+                    try {
+                        pendingCaptureStart.get()?.let { pending ->
+                            if (!pending.syncFrameRequested && timestampUs >= pending.minimumTimestampUs) {
+                                videoEncoder?.setParameters(Bundle().apply {
+                                    putInt(MediaCodec.PARAMETER_KEY_REQUEST_SYNC_FRAME, 0)
+                                })
+                                pending.syncFrameRequested = true
+                            }
+                        }
+                        lutRenderer?.renderFrame(textureId, matrix, timestampUs, fenceSync = fenceSync)
+                    } catch (e: Exception) {
+                        PLog.e(TAG, "Failed to render Live Photo frame: timestampUs=$timestampUs", e)
+                        pendingCaptureStart.get()?.ready?.completeExceptionally(e)
+                    }
                 }
+            } finally {
+                releasePendingFrame()
             }
+        }
+        if (job.isCancelled) {
+            releasePendingFrame()
         }
     }
 

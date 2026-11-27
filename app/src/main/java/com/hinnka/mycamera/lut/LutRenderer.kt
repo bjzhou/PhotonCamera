@@ -25,6 +25,7 @@ import com.hinnka.mycamera.video.VideoLogProfile
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.util.ArrayDeque
+import java.util.concurrent.ConcurrentLinkedQueue
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 import com.hinnka.mycamera.raw.RawEnginePreviewPlan
@@ -519,6 +520,22 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
 
     // Live Photo 录制器
     var livePhotoRecorder: LivePhotoRecorder? = null
+    private class LivePhotoFrameSlot(
+        val fboId: Int,
+        val textureId: Int,
+        val width: Int,
+        val height: Int,
+        val inUse: AtomicBoolean = AtomicBoolean(false),
+        @Volatile var retired: Boolean = false,
+        var deleted: Boolean = false,
+    )
+    private val livePhotoSlots = mutableListOf<LivePhotoFrameSlot>()
+    private val retiredLivePhotoSlots = ConcurrentLinkedQueue<LivePhotoFrameSlot>()
+    private var livePhotoSlotWidth = 0
+    private var livePhotoSlotHeight = 0
+    private var nextLivePhotoSlotIndex = 0
+    private var lastLivePhotoFrameTimestampNs = 0L
+    private var lastLivePhotoRecorderRef: LivePhotoRecorder? = null
     @Volatile
     var videoLogProfile: VideoLogProfile = VideoLogProfile.OFF
 
@@ -634,6 +651,13 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
         stackTextureId = 0
         stackFboWidth = 0
         stackFboHeight = 0
+        livePhotoSlots.clear()
+        retiredLivePhotoSlots.clear()
+        livePhotoSlotWidth = 0
+        livePhotoSlotHeight = 0
+        nextLivePhotoSlotIndex = 0
+        lastLivePhotoFrameTimestampNs = 0L
+        lastLivePhotoRecorderRef = null
         copyProgramId = 0
         hdfExtractBlurHProgram = 0
         hdfBlurVProgram = 0
@@ -788,6 +812,88 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
             fboHeight == height &&
             stackFboWidth == width &&
             stackFboHeight == height
+    }
+
+    private fun acquireLivePhotoSlot(width: Int, height: Int): LivePhotoFrameSlot? {
+        if (width <= 0 || height <= 0) return null
+        if (livePhotoSlots.isEmpty() || livePhotoSlotWidth != width || livePhotoSlotHeight != height) {
+            retireLivePhotoSlots()
+            drainRetiredLivePhotoSlots()
+            livePhotoSlotWidth = width
+            livePhotoSlotHeight = height
+            nextLivePhotoSlotIndex = 0
+            val ids = IntArray(1)
+            for (i in 0 until 3) {
+                GLES30.glGenFramebuffers(1, ids, 0)
+                val slotFboId = ids[0]
+                GLES30.glGenTextures(1, ids, 0)
+                val slotTexId = ids[0]
+                if (slotFboId == 0 || slotTexId == 0) {
+                    if (slotFboId != 0) GLES30.glDeleteFramebuffers(1, intArrayOf(slotFboId), 0)
+                    if (slotTexId != 0) GLES30.glDeleteTextures(1, intArrayOf(slotTexId), 0)
+                    continue
+                }
+                GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, slotTexId)
+                GLES30.glTexImage2D(
+                    GLES30.GL_TEXTURE_2D, 0, GLES30.GL_RGBA8, width, height,
+                    0, GLES30.GL_RGBA, GLES30.GL_UNSIGNED_BYTE, null,
+                )
+                GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_MIN_FILTER, GLES30.GL_LINEAR)
+                GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_MAG_FILTER, GLES30.GL_LINEAR)
+                GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_WRAP_S, GLES30.GL_CLAMP_TO_EDGE)
+                GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_WRAP_T, GLES30.GL_CLAMP_TO_EDGE)
+                GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, slotFboId)
+                GLES30.glFramebufferTexture2D(
+                    GLES30.GL_FRAMEBUFFER, GLES30.GL_COLOR_ATTACHMENT0,
+                    GLES30.GL_TEXTURE_2D, slotTexId, 0,
+                )
+                val status = GLES30.glCheckFramebufferStatus(GLES30.GL_FRAMEBUFFER)
+                if (status != GLES30.GL_FRAMEBUFFER_COMPLETE) {
+                    PLog.e(TAG, "LivePhoto slot FBO init failed: status=$status")
+                    GLES30.glDeleteFramebuffers(1, intArrayOf(slotFboId), 0)
+                    GLES30.glDeleteTextures(1, intArrayOf(slotTexId), 0)
+                } else {
+                    livePhotoSlots.add(LivePhotoFrameSlot(slotFboId, slotTexId, width, height))
+                }
+            }
+            GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, 0)
+            GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, 0)
+        }
+        val count = livePhotoSlots.size
+        if (count == 0) return null
+        for (offset in 0 until count) {
+            val idx = (nextLivePhotoSlotIndex + offset) % count
+            val slot = livePhotoSlots[idx]
+            if (slot.inUse.compareAndSet(false, true)) {
+                nextLivePhotoSlotIndex = (idx + 1) % count
+                return slot
+            }
+        }
+        return null
+    }
+
+    private fun retireLivePhotoSlots(forceEnqueueAll: Boolean = false) {
+        for (slot in livePhotoSlots) {
+            slot.retired = true
+            if (forceEnqueueAll || !slot.inUse.get()) {
+                retiredLivePhotoSlots.add(slot)
+            }
+        }
+        livePhotoSlots.clear()
+        livePhotoSlotWidth = 0
+        livePhotoSlotHeight = 0
+        nextLivePhotoSlotIndex = 0
+    }
+
+    private fun drainRetiredLivePhotoSlots(forceDeleteInUse: Boolean = false) {
+        while (true) {
+            val slot = retiredLivePhotoSlots.poll() ?: break
+            if (slot.deleted) continue
+            if (!forceDeleteInUse && slot.inUse.get()) continue
+            slot.deleted = true
+            if (slot.fboId != 0) GLES30.glDeleteFramebuffers(1, intArrayOf(slot.fboId), 0)
+            if (slot.textureId != 0) GLES30.glDeleteTextures(1, intArrayOf(slot.textureId), 0)
+        }
     }
 
     private fun hasBaselineLayer(): Boolean {
@@ -1305,33 +1411,74 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
 
             val outputTexId = currentTexId
 
-            // 确保 FBO 内容已刷入显存
-            GLES30.glFlush()
-
-            // Live Photo 录制
-            if (liveRecorder != null) {
-                val applyRotation = getApplyRotation()
-                val isSwapped = applyRotation % 180 != 0
-                val targetWidth = if (isSwapped) viewportHeight else viewportWidth
-                val targetHeight = if (isSwapped) viewportWidth else viewportHeight
-                val rotationMatrix = FloatArray(16)
-                Matrix.setIdentityM(rotationMatrix, 0)
-                if (applyRotation != 0) {
-                    Matrix.translateM(rotationMatrix, 0, 0.5f, 0.5f, 0f)
-                    Matrix.rotateM(rotationMatrix, 0, applyRotation.toFloat(), 0f, 0f, 1f)
-                    Matrix.translateM(rotationMatrix, 0, -0.5f, -0.5f, 0f)
+            // Live Photo 录制：严格按新相机帧提交，并通过独立纹理槽位 + EGLSync 隔离跨线程读写
+            drainRetiredLivePhotoSlots()
+            if (liveRecorder !== lastLivePhotoRecorderRef) {
+                lastLivePhotoRecorderRef = liveRecorder
+                lastLivePhotoFrameTimestampNs = 0L
+            }
+            if (liveRecorder == null || !liveRecorder.isRecording()) {
+                lastLivePhotoFrameTimestampNs = 0L
+                if (liveRecorder == null) {
+                    retireLivePhotoSlots()
+                    drainRetiredLivePhotoSlots()
                 }
-                liveRecorder.onPreviewFrame(
-                    textureId = outputTexId,
-                    transformMatrix = rotationMatrix,
-                    width = targetWidth,
-                    height = targetHeight,
-                    timestampNs = currentFrameTimestampNs,
-                    lutConfig = currentLutConfig,
-                    params = getCurrentRecipeParams(),
-                    sharedContext = EGL14.eglGetCurrentContext(),
-                    sharedDisplay = EGL14.eglGetCurrentDisplay()
-                )
+            } else if (cameraFrameUpdated &&
+                currentFrameTimestampNs > 0L &&
+                currentFrameTimestampNs > lastLivePhotoFrameTimestampNs
+            ) {
+                val slot = acquireLivePhotoSlot(currentWidth, currentHeight)
+                if (slot != null) {
+                    drawFboToScreen(slot.fboId, currentWidth, currentHeight, outputTexId)
+                    val sharedDisplay = EGL14.eglGetCurrentDisplay()
+                    val sharedContext = EGL14.eglGetCurrentContext()
+                    val fenceSync = if (sharedDisplay != EGL14.EGL_NO_DISPLAY) {
+                        EGL15.eglCreateSync(
+                            sharedDisplay,
+                            EGL15.EGL_SYNC_FENCE,
+                            longArrayOf(EGL14.EGL_NONE.toLong()),
+                            0,
+                        )
+                    } else {
+                        EGL15.EGL_NO_SYNC
+                    }
+                    if (fenceSync != EGL15.EGL_NO_SYNC) {
+                        GLES30.glFlush()
+                    } else {
+                        GLES30.glFinish()
+                    }
+                    lastLivePhotoFrameTimestampNs = currentFrameTimestampNs
+
+                    val applyRotation = getApplyRotation()
+                    val isSwapped = applyRotation % 180 != 0
+                    val targetWidth = if (isSwapped) viewportHeight else viewportWidth
+                    val targetHeight = if (isSwapped) viewportWidth else viewportHeight
+                    val rotationMatrix = FloatArray(16)
+                    Matrix.setIdentityM(rotationMatrix, 0)
+                    if (applyRotation != 0) {
+                        Matrix.translateM(rotationMatrix, 0, 0.5f, 0.5f, 0f)
+                        Matrix.rotateM(rotationMatrix, 0, applyRotation.toFloat(), 0f, 0f, 1f)
+                        Matrix.translateM(rotationMatrix, 0, -0.5f, -0.5f, 0f)
+                    }
+                    liveRecorder.onPreviewFrame(
+                        textureId = slot.textureId,
+                        transformMatrix = rotationMatrix,
+                        width = targetWidth,
+                        height = targetHeight,
+                        timestampNs = currentFrameTimestampNs,
+                        lutConfig = currentLutConfig,
+                        params = getCurrentRecipeParams(),
+                        sharedContext = sharedContext,
+                        sharedDisplay = sharedDisplay,
+                        fenceSync = fenceSync,
+                        onFrameConsumed = {
+                            slot.inUse.set(false)
+                            if (slot.retired) {
+                                retiredLivePhotoSlots.add(slot)
+                            }
+                        },
+                    )
+                }
             }
 
             // 峰值对焦仅作用于预览，不进入录制
@@ -3497,6 +3644,10 @@ class LutRenderer(context: Context) : GLSurfaceView.Renderer {
             GLES30.glDeleteTextures(1, intArrayOf(stackTextureId), 0)
             stackTextureId = 0
         }
+        retireLivePhotoSlots(forceEnqueueAll = true)
+        drainRetiredLivePhotoSlots(forceDeleteInUse = true)
+        lastLivePhotoFrameTimestampNs = 0L
+        lastLivePhotoRecorderRef = null
         basicToneTextures.release()
         mgcEisRenderer.release()
         previewYuvRenderer.release()

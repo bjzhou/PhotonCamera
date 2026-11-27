@@ -233,6 +233,7 @@ class Camera2Controller(private val context: Context) {
     private var multiFrameTorchWarmupTriggerResultSeen = false
     private var isMultiFrameTorchCaptureActive = false
     private var isContinuousBurstTorchActive = false
+    private var previewModifiedForCapture = false
     private var livePhotoVideoStartTimestampUs: Long? = null
     @Volatile
     private var isCaptureFocusFrozen = false
@@ -1807,6 +1808,7 @@ class Camera2Controller(private val context: Context) {
             }
             val torchRequest = torchRequestBuilder.build()
 
+            previewModifiedForCapture = true
             session.setRepeatingRequest(torchRequest, previewCallback, handler)
             multiFrameTorchWarmupNeedsAePrecapture = usesCameraAutoExposure(_state.value) &&
                 torchRequest.get(CaptureRequest.CONTROL_AE_MODE) != CaptureRequest.CONTROL_AE_MODE_OFF &&
@@ -1860,6 +1862,7 @@ class Camera2Controller(private val context: Context) {
             null
         }
         isCaptureFocusFrozen = true
+        previewModifiedForCapture = true
         submitStillFlashPhase(pending, StillFlashPhase.APPLYING_SESSION)
     }
 
@@ -2156,6 +2159,7 @@ class Camera2Controller(private val context: Context) {
         clearMultiFrameTorchWarmupTracking()
         isMultiFrameTorchCaptureActive = false
         isContinuousBurstTorchActive = false
+        previewModifiedForCapture = false
         pendingCaptureDevice = null
         pendingCaptureReader = null
         pendingCaptureBaseExposureResult = null
@@ -4743,8 +4747,11 @@ class Camera2Controller(private val context: Context) {
             val exposureTime = if (isCapture) state.shutterSpeed else coercePreviewExposureTime(state)
             builder.set(CaptureRequest.SENSOR_EXPOSURE_TIME, exposureTime)
 
-            // 拍摄时设置低帧率范围以支持长曝光
-            if (isCapture && state.captureMode == CaptureMode.PHOTO) {
+            // 仅在实际长曝光超出预览帧周期时降低帧率范围，避免常规手动快门触发 sensor 模式切换
+            if (isCapture &&
+                state.captureMode == CaptureMode.PHOTO &&
+                state.shutterSpeed > getMaxPreviewExposureTime(state)
+            ) {
                 try {
                     val characteristics = getActiveOpenCameraCharacteristics() ?: return
                     val availableFpsRanges =
@@ -7897,6 +7904,7 @@ class Camera2Controller(private val context: Context) {
         baseResult: CaptureResult?,
         lockExposure: Boolean,
         isRawCapture: Boolean,
+        preferManualExposureLock: Boolean = false,
     ) {
         if (!state.requiresMultiFrameCaptureSequence) return
 
@@ -7907,7 +7915,15 @@ class Camera2Controller(private val context: Context) {
             }
             val requestUsesManualExposure =
                 builder.get(CaptureRequest.CONTROL_AE_MODE) == CaptureRequest.CONTROL_AE_MODE_OFF
-            if (isRawCapture && !requestUsesManualExposure && !useMultiFrameTorch) {
+            val aeLockAvailable = getActiveOpenCameraCharacteristics()
+                ?.get(CameraCharacteristics.CONTROL_AE_LOCK_AVAILABLE) == true
+            val shouldSwitchToManualExposure =
+                isRawCapture &&
+                !requestUsesManualExposure &&
+                !useMultiFrameTorch &&
+                !state.useLivePhoto &&
+                (preferManualExposureLock || !aeLockAvailable)
+            if (shouldSwitchToManualExposure) {
                 val lockedIso = baseResult?.get(CaptureResult.SENSOR_SENSITIVITY)
                 val lockedExposure = baseResult?.get(CaptureResult.SENSOR_EXPOSURE_TIME)
                 val canUseManualExposure = isManualSensorSupported &&
@@ -7918,12 +7934,11 @@ class Camera2Controller(private val context: Context) {
                     builder.set(CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_OFF)
                     builder.set(CaptureRequest.SENSOR_SENSITIVITY, lockedIso)
                     builder.set(CaptureRequest.SENSOR_EXPOSURE_TIME, lockedExposure)
+                    applyPreservedPostRawBoostIfSupported(builder, baseResult)
                 }
             }
 
             if (builder.get(CaptureRequest.CONTROL_AE_MODE) != CaptureRequest.CONTROL_AE_MODE_OFF) {
-                val aeLockAvailable = getActiveOpenCameraCharacteristics()
-                    ?.get(CameraCharacteristics.CONTROL_AE_LOCK_AVAILABLE) == true
                 if (aeLockAvailable) {
                     builder.set(CaptureRequest.CONTROL_AE_LOCK, true)
                 }
@@ -7939,13 +7954,30 @@ class Camera2Controller(private val context: Context) {
         PLog.d(
             TAG,
             "Multi-frame capture locked exposure=$lockExposure " +
+                    "preferManual=$preferManualExposureLock " +
                     "ae=${builder.get(CaptureRequest.CONTROL_AE_MODE)} " +
+                    "aeLock=${builder.get(CaptureRequest.CONTROL_AE_LOCK)} " +
                     "flash=${builder.get(CaptureRequest.FLASH_MODE)} " +
                     "iso=${builder.get(CaptureRequest.SENSOR_SENSITIVITY)} " +
                     "shutter=${builder.get(CaptureRequest.SENSOR_EXPOSURE_TIME)} " +
+                    "boost=${builder.get(CaptureRequest.CONTROL_POST_RAW_SENSITIVITY_BOOST)} " +
                     "af=${builder.get(CaptureRequest.CONTROL_AF_MODE)} " +
                     "focus=${builder.get(CaptureRequest.LENS_FOCUS_DISTANCE)}"
         )
+    }
+
+    private fun applyPreservedPostRawBoostIfSupported(
+        builder: CaptureRequest.Builder,
+        baseResult: CaptureResult?,
+    ) {
+        if (!isCaptureRequestKeyAvailable(CaptureRequest.CONTROL_POST_RAW_SENSITIVITY_BOOST.name)) return
+        val boost = baseResult?.get(CaptureResult.CONTROL_POST_RAW_SENSITIVITY_BOOST) ?: return
+        val range = getActiveOpenCameraCharacteristics()
+            ?.readMetadataOrNull(CameraCharacteristics.CONTROL_POST_RAW_SENSITIVITY_BOOST_RANGE)
+        val clampedBoost = range?.clamp(boost) ?: boost
+        if (clampedBoost > 0) {
+            builder.set(CaptureRequest.CONTROL_POST_RAW_SENSITIVITY_BOOST, clampedBoost)
+        }
     }
 
     private fun buildMultiFrameShortCaptureRequest(
@@ -7971,6 +8003,7 @@ class Camera2Controller(private val context: Context) {
                 baseResult = baseResult,
                 lockExposure = true,
                 isRawCapture = isRawCapture,
+                preferManualExposureLock = true,
             )
             applyMultiFrameShortExposure(
                 builder = this,
@@ -8075,6 +8108,7 @@ class Camera2Controller(private val context: Context) {
                 baseResult = baseResult,
                 lockExposure = true,
                 isRawCapture = isRawCapture,
+                preferManualExposureLock = true,
             )
         }
         if (!applyMultiFrameLongExposure(builder, state, baseResult, baseRequest)) return null
@@ -8231,6 +8265,10 @@ class Camera2Controller(private val context: Context) {
             val session = captureSession
                 ?: throw IllegalStateException("Capture session unavailable")
 
+            val useHdrPlusBracketExposurePlan =
+                currentState.isHdrPlusBracketExposureEnabled &&
+                    !useMultiFrameTorch &&
+                    !(currentState.useLivePhoto && usesCameraAutoExposure(currentState))
             val captureBuilder = device.createCaptureRequest(CameraDevice.TEMPLATE_STILL_CAPTURE).apply {
                 addTarget(reader.surface)
 
@@ -8299,6 +8337,7 @@ class Camera2Controller(private val context: Context) {
                     baseResult = baseExposureResult,
                     lockExposure = true,
                     isRawCapture = isRawCapture,
+                    preferManualExposureLock = isRawCapture && useHdrPlusBracketExposurePlan,
                 )
 
                 PLog.d(
@@ -8318,8 +8357,6 @@ class Camera2Controller(private val context: Context) {
                 val frameCount = currentState.activeMultiFrameCount
                 captureBuilder.setTag(MultiFrameCaptureRole.BASE)
                 val baseRequest = captureBuilder.build()
-                val useHdrPlusBracketExposurePlan =
-                    currentState.isHdrPlusBracketExposureEnabled && !useMultiFrameTorch
                 val requests = if (!useHdrPlusBracketExposurePlan) {
                     List(frameCount) { baseRequest }
                 } else {
@@ -8350,22 +8387,30 @@ class Camera2Controller(private val context: Context) {
                     } else {
                         null
                     }
+                    val leadingNormalFrameCount = if (normalFrameCount >= 2) 1 else 0
+                    val trailingNormalFrameCount = (normalFrameCount - leadingNormalFrameCount).coerceAtLeast(0)
                     val radianceRequests = buildList(
                         MultiFrameConfig.hdrPlusCaptureFrameCount(frameCount)
                     ) {
-                        repeat(normalFrameCount) {
+                        // Place short/long bracket frames before trailing 0EV base frames so the
+                        // sensor exposure pipeline settles back to normal exposure before preview resumes.
+                        repeat(leadingNormalFrameCount) {
                             add(baseRequest)
                         }
                         shortRequest?.let(::add)
                         repeat(longFrameCount) {
                             add(longRequest ?: baseRequest)
                         }
+                        repeat(trailingNormalFrameCount) {
+                            add(baseRequest)
+                        }
                     }
                     val scheduledLongFrameCount = if (longRequest != null) longFrameCount else 0
                     PLog.i(
                         TAG,
-                        "HDR+ burst plan: normalFrames=$normalFrameCount shortFrames=" +
-                            "$shortFrameCount " +
+                        "HDR+ burst plan: normalFrames=$normalFrameCount " +
+                            "(leading=$leadingNormalFrameCount, trailing=$trailingNormalFrameCount) " +
+                            "shortFrames=$shortFrameCount " +
                             "longFrames=$scheduledLongFrameCount " +
                             "fallbackNormalFrames=${longFrameCount - scheduledLongFrameCount} " +
                             "shortTargetEv=${currentState.hdrPlusShortFrameExposureEv} " +
@@ -8425,22 +8470,45 @@ class Camera2Controller(private val context: Context) {
             livePhotoVideoStartTimestampUs?.let(livePhotoRecorder::cancelCapture)
             livePhotoVideoStartTimestampUs = null
         }
+        val needsPreviewRestore =
+            previewModifiedForCapture ||
+            stillFlashPrecapture != null ||
+            stillFlashCaptureState != null ||
+            stillFlashAfMode != null ||
+            isCaptureFocusFrozen ||
+            isMultiFrameTorchCaptureActive ||
+            isContinuousBurstTorchActive ||
+            activeMultiFrameTorchWarmupGeneration != 0L
+        val afTriggerModeToCancel = stillFlashAfMode?.takeIf {
+            supportsAfTrigger(it) && isCaptureRequestKeyAvailable(CaptureRequest.CONTROL_AF_TRIGGER.name)
+        }
+        val shouldCancelAePrecapture =
+            previewModifiedForCapture ||
+            stillFlashPrecapture != null ||
+            stillFlashCaptureState != null ||
+            isMultiFrameTorchCaptureActive ||
+            isContinuousBurstTorchActive ||
+            activeMultiFrameTorchWarmupGeneration != 0L
+
         // 重置拍照状态机
         clearPrecaptureTracking()
         clearMultiFrameTorchWarmupTracking()
         isMultiFrameTorchCaptureActive = false
         isContinuousBurstTorchActive = false
+        previewModifiedForCapture = false
         pendingCaptureDevice = null
         pendingCaptureReader = null
         pendingCaptureBaseExposureResult = null
+
+        if (!needsPreviewRestore) {
+            clearCaptureFocusState("capture sequence finished without preview override")
+            return
+        }
 
         // 关键修复：检查相机和会话是否仍然有效
         val device = cameraDevice
         val session = captureSession
         val builder = previewRequestBuilder
-        val afTriggerModeToCancel = stillFlashAfMode?.takeIf {
-            supportsAfTrigger(it) && isCaptureRequestKeyAvailable(CaptureRequest.CONTROL_AF_TRIGGER.name)
-        }
 
         if (device == null || session == null || builder == null) {
             PLog.v(TAG, "resetPreviewAfterCapture: camera not ready, skipping")
@@ -8449,20 +8517,29 @@ class Camera2Controller(private val context: Context) {
         }
 
         try {
-            if (afTriggerModeToCancel != null) {
-                builder.set(CaptureRequest.CONTROL_AF_MODE, afTriggerModeToCancel)
-                builder.set(CaptureRequest.CONTROL_AF_TRIGGER, CaptureRequest.CONTROL_AF_TRIGGER_CANCEL)
-            } else {
-                builder.set(CaptureRequest.CONTROL_AF_TRIGGER, CaptureRequest.CONTROL_AF_TRIGGER_IDLE)
+            if (afTriggerModeToCancel != null || shouldCancelAePrecapture) {
+                if (afTriggerModeToCancel != null) {
+                    builder.set(CaptureRequest.CONTROL_AF_MODE, afTriggerModeToCancel)
+                    builder.set(CaptureRequest.CONTROL_AF_TRIGGER, CaptureRequest.CONTROL_AF_TRIGGER_CANCEL)
+                } else {
+                    builder.set(CaptureRequest.CONTROL_AF_TRIGGER, CaptureRequest.CONTROL_AF_TRIGGER_IDLE)
+                }
+                if (shouldCancelAePrecapture) {
+                    setAePrecaptureTriggerIfSupported(
+                        builder,
+                        CaptureRequest.CONTROL_AE_PRECAPTURE_TRIGGER_CANCEL,
+                    )
+                } else {
+                    setAePrecaptureTriggerIfSupported(
+                        builder,
+                        CaptureRequest.CONTROL_AE_PRECAPTURE_TRIGGER_IDLE,
+                    )
+                }
+                // The preview builder also targets the stabilization ImageReader. Keep this one-shot
+                // AF/AE reset request on the normal preview callback so its YUV image has matching
+                // CaptureResult metadata; otherwise the stabilizer must emit an identity-pose frame.
+                session.capture(builder.build(), previewCallback, cameraHandler)
             }
-            setAePrecaptureTriggerIfSupported(
-                builder,
-                CaptureRequest.CONTROL_AE_PRECAPTURE_TRIGGER_CANCEL,
-            )
-            // The preview builder also targets the stabilization ImageReader. Keep this one-shot
-            // AF/AE reset request on the normal preview callback so its YUV image has matching
-            // CaptureResult metadata; otherwise the stabilizer must emit an identity-pose frame.
-            session.capture(builder.build(), previewCallback, cameraHandler)
 
             clearCaptureFocusState("capture sequence finished")
             applyBaseCameraSettings(builder, isCapture = false)
@@ -8474,6 +8551,7 @@ class Camera2Controller(private val context: Context) {
             )
             session.setRepeatingRequest(builder.build(), previewCallback, cameraHandler)
             PLog.i(TAG, "Capture preview restored: cancelledAfMode=$afTriggerModeToCancel " +
+                "cancelledAePrecapture=$shouldCancelAePrecapture " +
                 "previewAfMode=${builder.get(CaptureRequest.CONTROL_AF_MODE)}")
         } catch (e: Exception) {
             PLog.e(TAG, "Failed to reset preview", e)
