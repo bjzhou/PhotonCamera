@@ -7,7 +7,7 @@
   "overrides": {
     "preferred_main_camera_id": "2",
     "hdr_plus_frame_count": 8,
-    "raw_black_level_modes": { "2": "Custom", "3": "Custom", "4": "Custom" },
-    "raw_custom_black_levels": { "2": 59, "3": 0, "4": 0 }
+    "raw_black_level_modes": { "2": "Custom", "3": "Custom", "4": "Custom", "5": "Custom" },
+    "raw_custom_black_levels": { "2": 59, "3": 0, "4": 0, "5": 0 }
   }
 }
