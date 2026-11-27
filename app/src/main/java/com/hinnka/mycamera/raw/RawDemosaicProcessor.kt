@@ -8313,7 +8313,7 @@ class RawDemosaicProcessor {
             }
             val greenEvenGain = positiveGain(1, 1f)
             val greenOddGain = positiveGain(2, greenEvenGain)
-            val rgbGains = floatArrayOf(
+            val rawRgbGains = floatArrayOf(
                 positiveGain(0, 1f),
                 0.5f * (greenEvenGain + greenOddGain),
                 positiveGain(3, 1f),
@@ -8324,9 +8324,21 @@ class RawDemosaicProcessor {
                         CameraMetadata.COLOR_CORRECTION_MODE_TRANSFORM_MATRIX &&
                         matrix.size == 9 && matrix.all(Float::isFinite)
                 }
-            val meteringRgbTransform = if (camera2Transform != null) {
-                camera2Transform
+            val rgbGains: FloatArray
+            val meteringRgbTransform: FloatArray
+            if (camera2Transform != null) {
+                rgbGains = rawRgbGains
+                meteringRgbTransform = camera2Transform
             } else {
+                // Normalize pre-matrix WB gains so min(R, G, B) == 1.0, matching MGC's
+                // AwbInfo.gains contract. HALs reporting G > 1.0 would otherwise clip
+                // highlights early at 1/G before diag(1/rgbGains) divides the factor out.
+                val minGain = minOf(rawRgbGains[0], rawRgbGains[1], rawRgbGains[2])
+                rgbGains = floatArrayOf(
+                    rawRgbGains[0] / minGain,
+                    rawRgbGains[1] / minGain,
+                    rawRgbGains[2] / minGain,
+                )
                 // A standalone DNG does not retain Camera2's per-frame rgb2rgb matrix. Keep the
                 // DNG color-spec reconstruction as an explicit regeneration fallback. Factor its
                 // white balance out so the common path can retain MGC's pre-matrix clamp ordering.
@@ -8334,7 +8346,7 @@ class RawDemosaicProcessor {
                     profileToLinearSrgbTransform,
                     colorCorrectionMatrix,
                 )
-                multiplyMatrix3x3(
+                meteringRgbTransform = multiplyMatrix3x3(
                     combinedTransform,
                     floatArrayOf(
                         1f / rgbGains[0], 0f, 0f,

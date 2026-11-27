@@ -216,11 +216,6 @@ internal object RawSceneExposureMath {
     private const val SALIENCY_SEMANTIC_CHANNEL = 3
     // MeasureLogSceneBrightness uses the reflected-light calibration constant directly.
     private const val SCENE_BRIGHTNESS_CALIBRATION = 14.6
-    // ComputeAeResults resolves sensor sensitivity before selecting RunMlAeCore or the classic
-    // RunAe fallback. MGC 9.7 V25's tuning supplies this positive hard-coded value, so the
-    // min_iso / f_number^2 fallback is not entered for these bundled V25 ML models either.
-    // Calling the original V25 AE capsule reports 17.61 for the same capture metadata.
-    private const val MGC_V25_SENSOR_SENSITIVITY = 17.61
     private const val SCENE_BRIGHTNESS_LOG_FLOOR = 1e-4
     // RunMlAeCore performs expf(model_output) - 1e-6 before using every branch gain.
     private const val MODEL_LINEAR_GAIN_EPSILON = 1e-6
@@ -271,11 +266,12 @@ internal object RawSceneExposureMath {
         val overallGain = sensitivityIso.toDouble() / referenceSensitivityIso.toDouble()
         val currentTetMs = exposureTimeMs * overallGain
         if (!currentTetMs.isFinite() || currentTetMs <= 0.0) return null
-        // RunAe first consumes the positive hard-coded sensor_sensitivity from the V25 tuning.
-        // Aperture and min ISO only participate in MGC's fallback path, which is not selected by
-        // this tuning. Using that fallback here shifted every table scene coordinate downward by
-        // ln((minIso / f^2) / 14.6), about 1.01 for the reference capture.
-        val sensorSensitivity = MGC_V25_SENSOR_SENSITIVITY
+        // MGC's physical sensor sensitivity formula: reference_iso / f_number^2.
+        // Using the active lens aperture and sensor reference ISO keeps logSceneBrightness
+        // aligned with true scene luminance across non-Pixel sensors and lenses.
+        val apertureSquared = aperture.toDouble() * aperture.toDouble()
+        val sensorSensitivity = referenceSensitivityIso.toDouble() / apertureSquared
+        if (!sensorSensitivity.isFinite() || sensorSensitivity <= 0.0) return null
         val normalizedExposure =
             (sensorSensitivity / SCENE_BRIGHTNESS_CALIBRATION) *
                 (currentTetMs / MILLIS_PER_SECOND)
@@ -937,7 +933,7 @@ internal object RawSceneExposureMath {
             )
             return null
         }
-        val whiteBalance = metadata.whiteBalanceGains.takeIf { gains ->
+        val rawWhiteBalance = metadata.whiteBalanceGains.takeIf { gains ->
             gains.size >= 4 && gains.take(4).all { it.isFinite() && it > 0f }
         } ?: run {
             PLog.e(
@@ -946,6 +942,18 @@ internal object RawSceneExposureMath {
             )
             return null
         }
+        val minWhiteBalanceGain = minOf(
+            rawWhiteBalance[0],
+            rawWhiteBalance[1],
+            rawWhiteBalance[2],
+            rawWhiteBalance[3],
+        )
+        val whiteBalance = floatArrayOf(
+            rawWhiteBalance[0] / minWhiteBalanceGain,
+            rawWhiteBalance[1] / minWhiteBalanceGain,
+            rawWhiteBalance[2] / minWhiteBalanceGain,
+            rawWhiteBalance[3] / minWhiteBalanceGain,
+        )
 
         var clippedPixels = 0
         // MGC ComputeSafeUnderexposure initializes this reduction with FLT_MAX. No clipped RAW
@@ -1545,7 +1553,7 @@ internal object RawSceneExposureEstimator {
                         "maxPostCaptureGain=${RawSceneExposureMath.MAX_POST_CAPTURE_GAIN} " +
                         "tuningMaxOverallGain=${RawSceneExposureMath.MAX_OVERALL_GAIN} " +
                         "sensorSensitivity=${measurement.sensorSensitivity} " +
-                        "sensorSensitivitySource=MGC_9_7_V25_TUNING",
+                        "sensorSensitivitySource=CAMERA_REF_ISO_OVER_F2",
                 )
                 RawSceneExposureEstimate(
                     hdrRatio = fusion.finalHdrRatio,
@@ -1697,7 +1705,7 @@ internal object RawSceneExposureEstimator {
         appendLine("iso=${metadata.iso}")
         appendLine("referenceIso=$referenceSensitivityIso")
         appendLine("sensorSensitivity=${measurement.sensorSensitivity}")
-        appendLine("sensorSensitivitySource=MGC_9_7_V25_TUNING")
+        appendLine("sensorSensitivitySource=CAMERA_REF_ISO_OVER_F2")
         appendLine("geometricSignal=${measurement.geometricSignal}")
         appendLine("predictedImageBrightness=${measurement.predictedImageBrightness}")
         appendLine("currentTetMs=${measurement.currentTetMs}")
