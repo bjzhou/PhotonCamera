@@ -251,6 +251,24 @@ BguAffine SampleTrilinearBgu(
     };
 }
 
+inline float SampleOutputCurve(float y, const float* outputCurve, int outputCurveCount) {
+    if (!std::isfinite(y) || y <= 0.0f) {
+        return 0.0f;
+    }
+    if (outputCurve == nullptr || outputCurveCount < 2) {
+        return y;
+    }
+    const int last = outputCurveCount - 1;
+    if (y >= 1.0f) {
+        // Preserve linear highlight headroom above 1.0 for multi-frame HDR overrange.
+        return outputCurve[last] + (y - 1.0f);
+    }
+    const float pos = y * static_cast<float>(last);
+    const int i0 = std::min(static_cast<int>(std::floor(pos)), last - 1);
+    const float t = pos - static_cast<float>(i0);
+    return outputCurve[i0] + (outputCurve[i0 + 1] - outputCurve[i0]) * t;
+}
+
 }  // namespace
 
 bool GenerateQualcommAdrcPgtm(
@@ -258,6 +276,8 @@ bool GenerateQualcommAdrcPgtm(
     const AdrcInputParams& params,
     int pointCount,
     float rangeScale,
+    const float* outputCurve,
+    int outputCurveCount,
     QualcommAdrcPgtmOutput* outPgtm) {
     if (linearRgba == nullptr || outPgtm == nullptr ||
         params.width <= 0 || params.height <= 0 ||
@@ -492,10 +512,13 @@ bool GenerateQualcommAdrcPgtm(
 
             float* dst = outPgtm->gains.data() +
                          static_cast<size_t>((py * kPgtmGridWidth + px) * pointCount);
+            const float maxFinalGain = std::min(kMaxTableGain, curve.yRatioMax * 1.25f);
             for (int n = 1; n < pointCount; ++n) {
                 const float xEff = knotEffX[static_cast<size_t>(n)];
-                const float gain = (xEff > kEps) ? (curveY[static_cast<size_t>(n)] / xEff) : 1.0f;
-                dst[n] = ClampFloat(gain, kMinTableGain, std::min(kMaxTableGain, curve.yRatioMax));
+                const float yMapped = SampleOutputCurve(
+                    curveY[static_cast<size_t>(n)], outputCurve, outputCurveCount);
+                const float gain = (xEff > kEps) ? (yMapped / xEff) : 1.0f;
+                dst[n] = ClampFloat(gain, kMinTableGain, maxFinalGain);
             }
             dst[0] = dst[1];
         }

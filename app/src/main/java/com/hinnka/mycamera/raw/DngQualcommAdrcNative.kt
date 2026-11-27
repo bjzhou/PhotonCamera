@@ -119,6 +119,7 @@ internal object DngQualcommAdrcNative {
             faceRects = faceRects,
             pointCount = pointCount,
             rangeScale = rangeScale,
+            outputCurve = QcomGamma15OutputCurve.samples(),
             outDiagnostics = diagnosticsOut,
         ) ?: return null
 
@@ -197,6 +198,7 @@ internal object DngQualcommAdrcNative {
         faceRects: FloatArray?,
         pointCount: Int,
         rangeScale: Float,
+        outputCurve: FloatArray?,
         outDiagnostics: FloatArray,
     ): FloatArray?
 }

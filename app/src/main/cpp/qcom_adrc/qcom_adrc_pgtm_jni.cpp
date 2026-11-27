@@ -31,6 +31,7 @@ Java_com_hinnka_mycamera_raw_DngQualcommAdrcNative_nativeGenerateQualcommAdrcPgt
     jfloatArray faceRectsArray,
     jint pointCount,
     jfloat rangeScale,
+    jfloatArray outputCurveArray,
     jfloatArray outDiagnostics) {
     if (linearRgbaArray == nullptr || width <= 0 || height <= 0 || pointCount < 2) {
         __android_log_print(ANDROID_LOG_ERROR, kLogTag, "Invalid arguments to nativeGenerateQualcommAdrcPgtm");
@@ -83,10 +84,25 @@ Java_com_hinnka_mycamera_raw_DngQualcommAdrcNative_nativeGenerateQualcommAdrcPgt
         }
     }
 
+    jfloat* outputCurvePtr = nullptr;
+    int outputCurveCount = 0;
+    if (outputCurveArray != nullptr) {
+        const jsize curveLen = env->GetArrayLength(outputCurveArray);
+        if (curveLen >= 2) {
+            outputCurvePtr = env->GetFloatArrayElements(outputCurveArray, nullptr);
+            if (outputCurvePtr != nullptr) {
+                outputCurveCount = static_cast<int>(curveLen);
+            }
+        }
+    }
+
     qcom_adrc::QualcommAdrcPgtmOutput output;
     const bool ok = qcom_adrc::GenerateQualcommAdrcPgtm(
-        rgbaPtr, params, pointCount, rangeScale, &output);
+        rgbaPtr, params, pointCount, rangeScale, outputCurvePtr, outputCurveCount, &output);
     env->ReleaseFloatArrayElements(linearRgbaArray, rgbaPtr, JNI_ABORT);
+    if (outputCurvePtr != nullptr) {
+        env->ReleaseFloatArrayElements(outputCurveArray, outputCurvePtr, JNI_ABORT);
+    }
 
     if (!ok || output.gains.empty()) {
         __android_log_print(ANDROID_LOG_ERROR, kLogTag, "GenerateQualcommAdrcPgtm failed");

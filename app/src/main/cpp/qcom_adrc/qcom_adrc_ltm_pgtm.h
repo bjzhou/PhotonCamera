@@ -25,12 +25,18 @@ struct QualcommAdrcPgtmOutput {
  * Generates a pure scene-linear DNG ProfileGainTableMap2 from a 256x192 linear Profile RGB
  * image using Qualcomm ADRC/TMC12 curve solving + multi-scale Guided Filter LTM + regularized
  * Bilateral Guided Upsampling (BGU) with strict monotonicity & ISO-aware noise clamping.
+ *
+ * When outputCurve is provided (uniformly sampled over [0, 1] with outputCurveCount >= 2),
+ * each monotonic linear TMC12/LTM curve output is mapped through outputCurve (e.g. Qualcomm
+ * IPE Gamma15 -> sRGB decode -> invACR3) right before encoding into PGTM gains.
  */
 bool GenerateQualcommAdrcPgtm(
     const float* linearRgba,
     const AdrcInputParams& params,
     int pointCount,
     float rangeScale,
+    const float* outputCurve,
+    int outputCurveCount,
     QualcommAdrcPgtmOutput* outPgtm);
 
 }  // namespace qcom_adrc

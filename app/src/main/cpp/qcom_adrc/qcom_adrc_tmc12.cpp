@@ -10,19 +10,16 @@ namespace {
 
 constexpr float kEps = 1.0e-6f;
 constexpr float kLogAvgEps = 1.0e-4f;
-// Camera linear mid-grey target before downstream ACR3 curve.
-// Empirically aligned with Qualcomm AEC metering + Gamma15 vs Adobe ACR3 (+0.50 EV offset):
-// at DRCGain=1.0, ACR3(0.71 * x) reproduces Qualcomm's flat-scene Gamma15 response across [0, 1].
-constexpr float kBasePreAcr3Scale = 0.69f;
-constexpr float kTargetCameraMidLuma = 0.150f;
+// Qualcomm linear AEC/ADRC luminance targets (in pure [0, 1] scene-linear domain before IPE Gamma15).
+constexpr float kTargetCameraMidLuma = 0.148f;
+constexpr float kTargetBgMidLuma = 0.204f;
 
 // Qualcomm tmc12_sw.xml calibrated baseline constants.
 constexpr float kHistClipSlope = 16.0f;
 constexpr float kToneBrightAdj = 1.55f;
 constexpr float kToneDarkAdj = 2.60f;
-constexpr float kHistEnhanceClamp = 1.35f;
-constexpr float kContrastBrightClip = 1.65f;
-constexpr float kContrastDarkAdj = 1.15f;
+constexpr float kHistEnhanceClamp = 1.15f;
+constexpr float kContrastDarkAdj = 1.08f;
 constexpr float kToneMaxRatio = 8.0f;
 constexpr float kBaseLtmPercentage = 0.75f;
 constexpr float kMinLtmPercentage = 0.20f;
@@ -30,9 +27,8 @@ constexpr float kMinLtmPercentage = 0.20f;
 // 5-tap symmetric smoothing kernel matching TMC12 hist_conv_kernel structure.
 constexpr float kHistConvKernel[5] = {0.36f, 0.20f, 0.08f, 0.03f, 0.01f};
 
-// Tone anchors & targets aligned with Qualcomm tmc12_sw.xml (in camera-linear domain).
-// Keep bright anchors close to or below identity when highlights saturate to preserve sky/cloud texture.
-constexpr float kToneAnchors[kKneePointCount] = {0.0f, 0.16f, 0.26f, 0.72f, 1.0f};
+// Pure scene-linear Qualcomm TMC12 anchor points and histogram blend weights.
+constexpr float kAnchorY[kKneePointCount] = {0.0f, 0.06f, 0.20f, 0.58f, 1.0f};
 constexpr float kToneTargets[kKneePointCount] = {0.0f, 0.28f, 0.48f, 0.70f, 1.0f};
 constexpr float kHistEnhanceRatio[kKneePointCount] = {0.0f, 0.18f, 0.25f, 0.20f, 0.0f};
 
@@ -317,11 +313,14 @@ bool SolveAdrcTmc12(
     const float baselineGain = params.rendererBaselineGain;
     double weightedLogSum = 0.0;
     double weightSum = 0.0;
+    double bgUnsatLumaSum = 0.0;
+    double bgUnsatWeightSum = 0.0;
     double faceWeightedLogSum = 0.0;
+    double faceLinearLumaSum = 0.0;
     double faceWeightSum = 0.0;
     int highlightClipCount = 0;
 
-    // Step 1: Collect linear intensity, luminance, weighted log-avg and 256-bin histogram.
+    // Step 1: Collect linear intensity, luminance, BG-stats unsaturated mean, weighted log-avg and 256-bin histogram.
     for (int y = 0; y < params.height; ++y) {
         const float v = (static_cast<float>(y) + 0.5f) / static_cast<float>(params.height);
         const float dy = v - 0.5f;
@@ -335,6 +334,7 @@ bool SolveAdrcTmc12(
 
             const float intensity = ComputePgtmIntensity(r, g, b);
             const float luma = ComputeRec709Luma(r, g, b);
+            const float maxChannel = std::max(r, std::max(g, b));
             intensities[static_cast<size_t>(idx)] = intensity;
             lumas[static_cast<size_t>(idx)] = luma;
 
@@ -352,11 +352,17 @@ bool SolveAdrcTmc12(
                 }
             }
             const float totalWeight = inFace ? (centerWeight + 3.0f) : centerWeight;
-            const double logL = std::log(static_cast<double>(std::max(luma, 0.0f)) + kLogAvgEps);
+            const double safeLuma = static_cast<double>(std::max(luma, 0.0f));
+            const double logL = std::log(safeLuma + kLogAvgEps);
             weightedLogSum += static_cast<double>(totalWeight) * logL;
             weightSum += static_cast<double>(totalWeight);
+            if (maxChannel < 0.85f) {
+                bgUnsatLumaSum += static_cast<double>(totalWeight) * safeLuma;
+                bgUnsatWeightSum += static_cast<double>(totalWeight);
+            }
             if (inFace) {
                 faceWeightedLogSum += logL;
+                faceLinearLumaSum += safeLuma;
                 faceWeightSum += 1.0;
             }
 
@@ -382,6 +388,12 @@ bool SolveAdrcTmc12(
     const float effectiveLuma = (faceWeightSum > 16.0)
         ? (0.60f * weightedLogAvg + 0.40f * static_cast<float>(std::exp(faceWeightedLogSum / faceWeightSum)))
         : weightedLogAvg;
+    const float bgUnsatMean = (bgUnsatWeightSum > 16.0)
+        ? static_cast<float>(bgUnsatLumaSum / bgUnsatWeightSum)
+        : weightedLogAvg;
+    const float effectiveBgLuma = (faceWeightSum > 16.0)
+        ? (0.60f * bgUnsatMean + 0.40f * static_cast<float>(faceLinearLumaSum / faceWeightSum))
+        : bgUnsatMean;
 
     const float sceneDrEv = std::max(0.0f, std::log2(p992 / p05));
     const float clippedFraction = static_cast<float>(highlightClipCount) / static_cast<float>(pixelCount);
@@ -395,17 +407,17 @@ bool SolveAdrcTmc12(
     result.lumaP992 = p992;
 
     // Step 3: ISO-aware noise attenuation & y_ratio_max (mirrors Qualcomm Chromatix gain triggers).
-    // Note: yRatioMax is expressed in pre-ACR3 DNG PGTM gain units (2.7x pre-ACR3 ≈ 3.8-4.2x
-    // display-linear shadow lift after ACR3, matching Qualcomm's observed backlit ceiling).
+    // Expressed directly in Qualcomm's scene-linear domain before downstream IPE Gamma15.
     const float refIso = static_cast<float>(std::max(params.minIso, 50));
     const float isoGain = std::max(static_cast<float>(params.iso) / refIso, 1.0f);
     const float highIsoAtten = 1.0f - 0.65f * SmoothStep(4.0f, 32.0f, isoGain);
-    const float yRatioMax = ClampFloat(2.55f - 1.05f * SmoothStep(4.0f, 32.0f, isoGain), 1.48f, 2.65f);
+    const float yRatioMax = ClampFloat(3.75f - 1.50f * SmoothStep(4.0f, 32.0f, isoGain), 2.10f, 3.85f);
     result.yRatioMax = yRatioMax;
 
-    // Step 4: Self-contained ADRC decision layer (computes DRCGain & DRCGainDark).
-    // Always run full scene-linear ADRC/TMC12 regardless of Camera2 aeMode so capture-time
-    // multi-frame locked exposure and gallery re-development produce identical results.
+    // Step 4: Self-contained Qualcomm AEC/ADRC metering layer (computes DRCGain & DRCGainDark).
+    // Standard/moderate-DR scenes track Qualcomm BG-stats unsaturated arithmetic mean (including
+    // smooth attenuation < 1.0 on bright high-key scenes). High-DR backlit scenes transition
+    // smoothly to shadow-aware log-average ADRC lift.
     const float postBoost = std::isfinite(params.postRawSensitivityBoost)
         ? ClampFloat(params.postRawSensitivityBoost, 1.0f, 8.0f)
         : 1.0f;
@@ -413,19 +425,32 @@ bool SolveAdrcTmc12(
     const bool isMultiFrameHdr = (params.frameCount > 1) || (params.maxLinearIntensity * baselineGain > 1.25f);
     const float maxDrcGain = isMultiFrameHdr ? 4.8f : 3.8f;
 
-    // Target camera-linear mid-grey (~0.150 before kBasePreAcr3Scale, matching Qualcomm AEC metering).
-    // Keep only gentle night damping when there is no highlight clipping and the whole scene is very dark.
     const float highlightPressure = SmoothStep(0.65f, 0.96f, p992) * 0.70f +
                                     SmoothStep(0.003f, 0.05f, clippedFraction) * 0.30f;
     const float darkNightDamp = (1.0f - highlightPressure) *
                                 (1.0f - SmoothStep(0.015f, 0.055f, effectiveLuma));
+    const float targetBgLuma = ClampFloat(
+        kTargetBgMidLuma * (1.0f - 0.35f * darkNightDamp) * userEvScale,
+        0.09f, 0.40f);
     const float targetMidLuma = ClampFloat(
         kTargetCameraMidLuma * (1.0f - 0.35f * darkNightDamp) * userEvScale,
         0.07f, 0.32f);
 
-    // Raw brightness deficit relative to target camera mid-grey.
-    const float neededGain = targetMidLuma / std::max(effectiveLuma, 0.018f);
-    const float drcGain = ClampFloat(std::max(postBoost, neededGain), 1.0f, maxDrcGain);
+    const float bgNeededGain = ClampFloat(
+        targetBgLuma / std::max(effectiveBgLuma, 0.025f),
+        0.72f,
+        maxDrcGain);
+    const float logNeededGain = ClampFloat(
+        targetMidLuma / std::max(effectiveLuma, 0.018f),
+        1.0f,
+        maxDrcGain);
+    const float adrcBlend = SmoothStep(5.6f, 7.2f, sceneDrEv);
+    const float neededGain = bgNeededGain * (1.0f - adrcBlend) +
+                             std::max(bgNeededGain, logNeededGain) * adrcBlend;
+    const float drcGain = ClampFloat(
+        (postBoost > 1.01f) ? std::max(postBoost, neededGain) : neededGain,
+        0.72f,
+        maxDrcGain);
 
     // Dark boost (DRCGainDark): lifts shadows in moderate/high-DR scenes, attenuated at high ISO.
     const float shadowRatio = ClampFloat(p50 / std::max(p05, 1.0e-3f), 1.0f, 64.0f);
@@ -434,57 +459,38 @@ bool SolveAdrcTmc12(
     const float darkBoostExtra = 0.25f * darkTrigger * highIsoAtten;
     const float drcGainDark = ClampFloat(1.0f + darkBoostExtra, 1.0f, 1.30f);
 
-    // Step 5: Qualcomm TMC12 Anchor Knee Points mapped into pre-ACR3 DNG linear domain.
-    // Flat scene (drcGain=1.0): pre-ACR3 gain stays ~0.71 across tones (matches Qualcomm Gamma15 after ACR3).
-    // High-DR / backlit scene: strong lift concentrates in [0, 0.10] and rolls off smoothly through
-    // midtones into a concave highlight shoulder so indoor shadows lift while sky/clouds stay detailed.
-    const float preAcr3DarkGain = ClampFloat(
-        drcGain * drcGainDark * kBasePreAcr3Scale,
-        kBasePreAcr3Scale,
-        std::min(kToneMaxRatio, yRatioMax));
-    // Midtone gain rolls off earlier under extreme bimodal highlight saturation (e.g. bright window).
-    const float bimodalCompress = highlightPressure * SmoothStep(6.8f, 9.5f, sceneDrEv);
-    const float midGainRetention = 0.86f - 0.30f * bimodalCompress;
-    const float preAcr3MidGain = ClampFloat(
-        kBasePreAcr3Scale + (preAcr3DarkGain - kBasePreAcr3Scale) * midGainRetention,
-        kBasePreAcr3Scale,
-        preAcr3DarkGain);
+    // Step 5: Pure scene-linear Qualcomm TMC12 Anchor Knee Points (DRCGain=1 -> exact identity).
+    // Output tone rendering (IPE Gamma15 -> invACR3) is cleanly decoupled as a downstream 1D LUT.
+    const float liftDrcGain = std::max(drcGain, 1.0f);
+    const float darkGain = (drcGain >= 1.0f)
+        ? ClampFloat(drcGain * drcGainDark, 1.0f, std::min(kToneMaxRatio, yRatioMax))
+        : drcGain;
+    const float midGain = (drcGain >= 1.0f) ? std::pow(darkGain, 0.80f) : drcGain;
+    const float brightGain = (drcGain >= 1.0f) ? std::pow(drcGain, 0.30f) : drcGain;
 
-    const float kneeDarkY = ClampFloat(0.050f + 0.020f * SmoothStep(1.2f, 3.4f, drcGain), 0.045f, 0.075f);
-    const float kneeDarkX = ClampFloat(kneeDarkY / std::max(preAcr3DarkGain, 0.5f), 0.014f, 0.14f);
+    std::array<float, kKneePointCount> anchorKneeX{};
+    std::array<float, kKneePointCount> anchorKneeY{};
+    if (drcGain >= 1.0f) {
+        anchorKneeX = {
+            0.0f,
+            ClampFloat(kAnchorY[1] / darkGain, 0.015f, kAnchorY[1]),
+            ClampFloat(kAnchorY[2] / midGain, 0.045f, kAnchorY[2]),
+            ClampFloat(kAnchorY[3] / brightGain, 0.20f, kAnchorY[3]),
+            1.0f,
+        };
+        anchorKneeY = {kAnchorY[0], kAnchorY[1], kAnchorY[2], kAnchorY[3], kAnchorY[4]};
+    } else {
+        anchorKneeX = {kAnchorY[0], kAnchorY[1], kAnchorY[2], kAnchorY[3], kAnchorY[4]};
+        anchorKneeY = {
+            0.0f,
+            kAnchorY[1] * drcGain,
+            kAnchorY[2] * drcGain,
+            kAnchorY[3] * drcGain,
+            1.0f,
+        };
+    }
 
-    const float kneeMidY = ClampFloat(
-        0.180f + 0.040f * SmoothStep(1.2f, 2.8f, drcGain) - 0.055f * bimodalCompress,
-        0.125f, 0.230f);
-    const float kneeMidX = ClampFloat(kneeMidY / std::max(preAcr3MidGain, 0.5f), kneeDarkX + 0.025f, 0.36f);
-
-    // Bright anchor & concave highlight top: lift mid-highlights moderately in non-clipping scenes,
-    // and keep a smooth concave shoulder under highlight saturation to preserve sky/cloud texture.
-    const float brightAnchorX = 0.52f;
-    const float brightGain = kBasePreAcr3Scale +
-                             0.28f * SmoothStep(1.2f, 2.4f, drcGain) * (1.0f - 0.72f * highlightPressure) -
-                             0.02f * highlightPressure;
-    const float brightAnchorY = ClampFloat(
-        brightAnchorX * brightGain,
-        kneeMidY + 0.11f,
-        0.56f);
-
-    std::array<float, kKneePointCount> anchorKneeX{
-        0.0f,
-        kneeDarkX,
-        kneeMidX,
-        brightAnchorX,
-        1.0f,
-    };
-    std::array<float, kKneePointCount> anchorKneeY{
-        0.0f,
-        kneeDarkY,
-        kneeMidY,
-        brightAnchorY,
-        ClampFloat(0.86f - 0.04f * bimodalCompress, 0.80f, 0.90f),
-    };
-
-    // Step 6: Qualcomm TMC12 Histogram Knee Points (CalculateHistKneePoints).
+    // Step 6: Qualcomm TMC12 Histogram Knee Points (CalculateHistKneePoints) in pure [0, 1] linear.
     // Compute log-mean luminance in boost [0, 0.4], avg [0, 1.0], and suppress [0.2, 1.0] CDF ranges.
     double sumAvg = 0.0, cntAvg = 0.0;
     double sumMin = 0.0, cntMin = 0.0;
@@ -513,26 +519,25 @@ bool SolveAdrcTmc12(
     const float lwMin = (cntMin > kEps) ? static_cast<float>(std::exp(sumMin / cntMin)) : 350.0f;
     const float lwMax = (cntMax > kEps) ? static_cast<float>(std::exp(sumMax / cntMax)) : 8000.0f;
 
-    // Target pre-ACR3 midtone from Qualcomm tone_target[2] (~0.48 sRGB -> ~0.195 display lin -> ~0.102 pre-ACR3).
-    const float targetMidPreAcr3 = SrgbToLinear(kToneTargets[2]) * kBasePreAcr3Scale * 0.78f * userEvScale;
+    const float targetMidLinear = SrgbToLinear(kToneTargets[2]) * 0.82f * userEvScale;
     const float epsHist = 1.0f;
     const float histF = ClampFloat(
         (2.0f * std::log(lwAvg + epsHist) - std::log(1.0f) - std::log(16383.0f + epsHist)) /
         std::max(std::log(16383.0f + epsHist) - std::log(1.0f), 1.0f),
         -1.0f, 1.0f);
-    const float adaptiveA = targetMidPreAcr3 *
+    const float adaptiveA = targetMidLinear *
         std::pow((histF > 0.0f) ? kToneBrightAdj : kToneDarkAdj, histF * 0.30f);
     float histGlobalGain = adaptiveA / std::max(lwAvg / 16383.0f, 1.0e-3f);
     histGlobalGain = ClampFloat(histGlobalGain,
-                                preAcr3MidGain / kHistEnhanceClamp,
-                                std::min(preAcr3MidGain * kHistEnhanceClamp, yRatioMax));
+                                midGain / kHistEnhanceClamp,
+                                std::min(midGain * kHistEnhanceClamp, yRatioMax));
 
     const float gainMinAdj = std::min(histGlobalGain * kContrastDarkAdj, yRatioMax);
     const float gainAvgAdj = histGlobalGain;
     const float gainMaxAdj = ClampFloat(
-        kBasePreAcr3Scale * (1.25f - 0.35f * highlightPressure),
-        0.55f,
-        std::min(histGlobalGain, 1.05f));
+        std::pow(std::max(histGlobalGain, 0.5f), 0.35f),
+        0.65f,
+        std::min(histGlobalGain, 1.15f));
 
     std::array<float, kKneePointCount> histKneeX{
         0.0f,
@@ -543,10 +548,10 @@ bool SolveAdrcTmc12(
     };
     std::array<float, kKneePointCount> histKneeY{
         0.0f,
-        ClampFloat(histKneeX[1] * gainMinAdj, 0.015f, 0.35f),
-        ClampFloat(histKneeX[2] * gainAvgAdj, 0.05f, 0.55f),
-        ClampFloat(histKneeX[3] * gainMaxAdj, 0.20f, 0.78f),
-        anchorKneeY[4],
+        ClampFloat(histKneeX[1] * gainMinAdj, 0.015f, 0.45f),
+        ClampFloat(histKneeX[2] * gainAvgAdj, 0.05f, 0.72f),
+        ClampFloat(histKneeX[3] * gainMaxAdj, 0.20f, 0.90f),
+        1.0f,
     };
 
     // Step 7: Blend anchor & histogram knee points (matches TMC12Interpolation::CalculateKneePoints).
@@ -556,33 +561,29 @@ bool SolveAdrcTmc12(
         result.kneeY[i] = w * histKneeY[i] + (1.0f - w) * anchorKneeY[i];
     }
 
-    // Preserve anchor end-point Y cleanly before monotonic clamp (note: EnforceStrictMonotonicKnots
-    // previously pinned y[4]=1.0, so preserve our smooth highlight ceiling explicitly).
-    const float targetTopY = anchorKneeY[4];
     EnforceStrictMonotonicKnots(&result.kneeX, &result.kneeY);
-    result.kneeY[kKneePointCount - 1] = std::max(targetTopY, result.kneeY[kKneePointCount - 2] + 0.05f);
     ComputePchipSlopes(result.kneeX, result.kneeY, &result.pchipSlope);
 
     // Step 8: GTM / LTM split (MaxLTMPercentageCheck).
-    const float effectiveDarkRatio = (result.kneeY[1] / std::max(result.kneeX[1], 1.0e-4f)) / kBasePreAcr3Scale;
-    const float compressionStrength = SmoothStep(1.15f, 3.0f, std::max(drcGain, effectiveDarkRatio));
+    const float effectiveDarkRatio = result.kneeY[1] / std::max(result.kneeX[1], 1.0e-4f);
+    const float compressionStrength = SmoothStep(1.15f, 3.0f, std::max(liftDrcGain, effectiveDarkRatio));
     result.drcGain = drcGain;
     result.drcGainDark = drcGainDark;
     result.ltmPercentage = ClampFloat(
         kMinLtmPercentage + (kBaseLtmPercentage - kMinLtmPercentage) * compressionStrength,
         0.0f, kBaseLtmPercentage);
-    if (drcGain <= 1.08f && drcGainDark <= 1.02f) {
+    if (liftDrcGain <= 1.08f && drcGainDark <= 1.02f) {
         result.ltmPercentage = 0.0f;
     }
     result.gtmPercentage = 1.0f - result.ltmPercentage;
 
-    // Keep contrast enhancement off when ACR3 already supplies the display S-curve toe/shoulder.
+    // Downstream Gamma15 supplies the display contrast S-curve toe/shoulder.
     result.contrastEnhanceDark = 0.0f;
     result.contrastEnhanceBright = 0.0f;
 
     // Preserve linear highlight ceiling for multi-frame HDR+ bracket captures (> 1.0).
-    result.highlightClipLimit = result.kneeY[kKneePointCount - 1] +
-                                0.16f * SmoothStep(1.05f, 3.0f, params.maxLinearIntensity * baselineGain);
+    result.highlightClipLimit = 1.0f +
+                                0.25f * SmoothStep(1.05f, 3.0f, params.maxLinearIntensity * baselineGain);
 
     *outCurve = result;
     return true;
