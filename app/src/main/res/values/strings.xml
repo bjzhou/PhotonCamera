@@ -246,8 +246,8 @@
     <string name="settings_section_professional_mode">Professional mode settings</string>
     <string name="settings_professional_parameters">Professional parameters</string>
     <string name="preset_professional_mode_only">Only available in Professional mode</string>
-    <string name="settings_professional_group_max_hdr">HDR+ Capture</string>
-    <string name="settings_professional_group_image_quality">HDR+ Image Quality</string>
+    <string name="settings_professional_group_max_hdr">Multi-frame capture</string>
+    <string name="settings_professional_group_image_quality">Image quality</string>
     <string name="settings_section_interface">Interface Styles</string>
     <string name="settings_section_system_control">System &amp; Controls</string>
     <string name="settings_section_data_maintenance">Data Maintenance</string>
@@ -273,9 +273,8 @@
     <string name="grid_style_golden_triangle">Golden Triangle</string>
     <string name="grid_style_golden_spiral">Golden Spiral</string>
     <string name="settings_use_jpg_max">Multi-frame denoise</string>
-    <string name="settings_use_raw_max">HDR+</string>
-    <string name="settings_raw_max_spatial_mode">HDR+ merge mode</string>
-    <string name="settings_raw_max_spatial_mode_description">Spatial supports bracket exposure to preserve highlight and shadow detail. Sabre merges same-exposure frames for noise reduction and disables bracket exposure.</string>
+    <string name="settings_raw_max_spatial_mode">Merge mode</string>
+    <string name="settings_raw_max_spatial_mode_description">Spatial supports exposure bracketing to preserve highlight and shadow detail. Sabre merges frames with the same exposure to reduce noise.</string>
     <string name="settings_raw_max_mode_sabre">Sabre</string>
     <string name="settings_raw_max_mode_spatial">Spatial</string>
     <string name="settings_use_multiple_exposure">Multiple Exposure</string>
@@ -284,15 +283,15 @@
     <string name="multiple_exposure_cancel">Cancel Session</string>
     <string name="settings_multiple_exposure_count">Multiple Exposure Count</string>
     <string name="settings_multiple_exposure_count_description">How many exposures to combine for one final image. Default is 2 for a classic double exposure workflow.</string>
-    <string name="settings_raw_max_output_scale">HDR+ output scale</string>
-    <string name="settings_raw_max_output_scale_description">Adjusts the size of HDR+ photos. A higher scale produces larger photos and files, and may take longer to process.</string>
+    <string name="settings_raw_max_output_scale">Output scale</string>
+    <string name="settings_raw_max_output_scale_description">1× keeps the original dimensions. Higher values increase image dimensions and file size and may take longer to process.</string>
     <string name="settings_raw_max_output_scale_value">%1$.2f×</string>
     <string name="settings_raw_output_upscale_mode">Super resolution</string>
     <string name="settings_raw_output_upscale_mode_description">Selects the super-resolution algorithm for professional mode. RAISR and Lanczos-3 magnification are mutually exclusive.</string>
     <string name="settings_raw_output_upscale_mode_lanczos">Lanczos-3</string>
     <string name="settings_raw_output_upscale_mode_raisr">RAISR</string>
     <string name="settings_raw_color_calibration_mode">Color calibration</string>
-    <string name="settings_raw_color_calibration_mode_description">Selects the source of the RAW color matrices. Auto detects and ignores placeholder matrices reported by the camera; DNG default prefers ForwardMatrix without placeholder detection; Built-in fix always uses a built-in calibration matrix.</string>
+    <string name="settings_raw_color_calibration_mode_description">Choose which color matrix to use. Auto ignores placeholder matrices reported by the camera. DNG default prefers ForwardMatrix and skips the placeholder check. Built-in fix always uses the built-in matrix.</string>
     <string name="settings_raw_color_calibration_mode_auto">Auto</string>
     <string name="settings_raw_color_calibration_mode_dng_default">DNG default</string>
     <string name="settings_raw_color_calibration_mode_built_in">Built-in fix</string>
@@ -302,11 +301,11 @@
     <string name="settings_jpg_multi_frame_denoise_output_scale">Multi-frame denoise output scale</string>
     <string name="settings_jpg_multi_frame_denoise_output_scale_description">1x keeps the original dimensions. Up to 2x width and height. Applies only to multi-frame denoising.</string>
     <string name="settings_jpg_multi_frame_denoise_output_scale_value">%1$.2f×</string>
-    <string name="settings_hdr_plus_frame_count">HDR+ frames</string>
-    <string name="settings_hdr_plus_frame_count_description">Number of frames captured by HDR+. With bracket exposure enabled, 2 frames use normal plus long exposure when available, and 3 or more use the complete bracket plan.</string>
-    <string name="settings_hdr_plus_bracket_exposure">HDR+ bracket exposure</string>
-    <string name="settings_hdr_plus_bracket_exposure_description">Capture bracketed exposures to preserve more highlight and shadow detail. Off by default.</string>
-    <string name="settings_hdr_plus_bracket_exposure_sabre_disabled">Sabre does not support bracket exposure. Select Spatial to enable it.</string>
+    <string name="settings_hdr_plus_frame_count">Capture frame count</string>
+    <string name="settings_hdr_plus_frame_count_description">With bracketing on, a 2-frame shot uses a standard exposure and a longer exposure when possible. At 3 frames or more, a shorter exposure is also captured.</string>
+    <string name="settings_hdr_plus_bracket_exposure">Exposure bracketing</string>
+    <string name="settings_hdr_plus_bracket_exposure_description">Capture frames at different exposures to preserve more detail in highlights and shadows.</string>
+    <string name="settings_hdr_plus_bracket_exposure_sabre_disabled">Switch to Spatial to use exposure bracketing.</string>
     <string name="settings_hdr_plus_long_frame_ev">Long frame exposure</string>
     <string name="settings_hdr_plus_long_frame_ev_description">Exposure offset from the normal frame. The sensor shutter and ISO limits still apply.</string>
     <string name="settings_hdr_plus_short_frame_ev">Short frame exposure</string>
@@ -922,7 +921,7 @@
     <string name="settings_raw_shadows_adjustment">Shadows</string>
     <string name="settings_raw_color_engine">Rendering Engine</string>
     <string name="settings_raw_color_engine_adobe_curve">Adobe Curve</string>
-    <string name="settings_raw_color_engine_adobe_curve_description">Classic RAW curve pipeline with DCP camera profiles.</string>
+    <string name="settings_raw_color_engine_adobe_curve_description">Classic curve-based rendering with support for DCP camera profiles.</string>
     <string name="settings_raw_color_engine_agx">AgX</string>
     <string name="settings_raw_color_engine_agx_description">Blender AgX tone formation， Soft highlight roll-off.</string>
     <string name="settings_raw_color_engine_darktable_sigmoid">Sigmoid</string>
@@ -948,8 +947,8 @@
     <string name="settings_raw_profile_tone_map_oppo_master">OPPO Master</string>
     <string name="settings_raw_photon_hdr">Dynamic Range Optimization</string>
     <string name="settings_raw_photon_hdr_edit_description">Apply HDRNet dynamic range optimization to this imported RAW. Off by default.</string>
-    <string name="settings_raw_adaptive_exposure_mode">RAW Dynamic Range Mode</string>
-    <string name="settings_raw_adaptive_exposure_mode_description">Select the adaptive exposure and local tone mapping pipeline for RAW development.</string>
+    <string name="settings_raw_adaptive_exposure_mode">Dynamic Range Mode</string>
+    <string name="settings_raw_adaptive_exposure_mode_description">Choose how exposure and local tones are adjusted to preserve highlight and shadow detail.</string>
     <string name="settings_raw_adaptive_exposure_mode_qualcomm_adrc">Qualcomm ADRC</string>
     <string name="settings_raw_adaptive_exposure_mode_photon_hdr">HDRNet</string>
     <string name="settings_raw_agx_white_relative_exposure">AgX White Relative Exposure</string>
@@ -967,31 +966,31 @@
     <string name="settings_raw_auto_exposure">Auto Exposure</string>
     <string name="settings_raw_auto_exposure_description">Automatically meters RAW linear data during development and applies exposure compensation.</string>
     <string name="settings_raw_min_shutter_speed">Minimum Shutter Speed</string>
-    <string name="settings_raw_min_shutter_speed_description">For RAW capture only, keeps the capture shutter near this limit and automatically balances ISO for the selected speed.</string>
+    <string name="settings_raw_min_shutter_speed_description">When shutter speed and ISO are both set to Auto, the camera adjusts ISO to keep the shutter speed near this setting.</string>
     <string name="settings_raw_dro">Dynamic Range Optimization</string>
     <string name="settings_raw_dro_description">Intelligently lifts shadows while protecting highlights in high-contrast scenes.</string>
     <string name="settings_raw_blacks_adjustment">Blacks</string>
     <string name="settings_raw_whites_adjustment">Whites</string>
     <string name="settings_raw_lens_shading_correction">Lens Shading Correction</string>
-    <string name="settings_raw_lens_shading_correction_description">Apply lens shading gain maps during RAW development, including RAW multi-frame processing.</string>
+    <string name="settings_raw_lens_shading_correction_description">Compensate for darkening toward the edges of the image, including in multi-frame processing.</string>
     <string name="settings_export_dng_with_raw_export">Export format</string>
     <string name="settings_export_dng_with_raw_export_description">Choose the files exported to the system gallery for Professional mode photos.</string>
     <string name="settings_professional_export_jpg">JPG</string>
     <string name="settings_professional_export_raw_jpg">RAW+JPG</string>
     <string name="settings_raw_black_level_correction">Black Level Correction</string>
-    <string name="settings_raw_black_level_correction_description">Manually set the black level for RAW development to fix color cast issues. Applied per camera lens.</string>
+    <string name="settings_raw_black_level_correction_description">Set the black level for each lens to correct color casts during development.</string>
     <string name="settings_black_level_default">Default</string>
     <string name="settings_black_level_custom">Custom</string>
     <string name="settings_raw_white_level_correction">White Level Correction</string>
-    <string name="settings_raw_white_level_correction_description">Override the RAW sensor saturation level used for DNG metadata and RAW development. Applied per camera lens.</string>
+    <string name="settings_raw_white_level_correction_description">Set the sensor saturation level used for development and DNG metadata for each lens.</string>
     <string name="settings_white_level_default">Default</string>
-    <string name="settings_white_level_raw10">RAW10</string>
-    <string name="settings_white_level_raw12">RAW12</string>
-    <string name="settings_white_level_raw14">RAW14</string>
-    <string name="settings_white_level_raw_sensor">RAW Sensor(65535)</string>
+    <string name="settings_white_level_raw10">10-bit (1023)</string>
+    <string name="settings_white_level_raw12">12-bit (4095)</string>
+    <string name="settings_white_level_raw14">14-bit (16383)</string>
+    <string name="settings_white_level_raw_sensor">16-bit (65535)</string>
     <string name="settings_white_level_custom">Custom</string>
     <string name="settings_raw_cfa_correction">CFA Channel Correction</string>
-    <string name="settings_raw_cfa_correction_description">Override the RAW CFA channel pattern written to DNG. Applied per camera lens.</string>
+    <string name="settings_raw_cfa_correction_description">Set the color filter pattern written to DNG for each lens.</string>
     <string name="settings_raw_dng_metadata_corrections">CFA, Black &amp; White Level Correction</string>
     <string name="settings_raw_dng_metadata_corrections_description">Configure the CFA pattern and black and white levels separately for each lens.</string>
     <string name="settings_raw_dng_metadata_corrections_summary">CFA: %1$s · Black: %2$s · White: %3$s</string>
@@ -1208,15 +1207,15 @@
     <string name="preset_custom_badge">Custom</string>
     <string name="preset_builtin_badge">Built-in</string>
     <string name="gallery">Gallery</string>
-    <string name="settings_raw_max_default_sharpening">HDR+ default sharpening</string>
-    <string name="settings_raw_max_default_sharpening_description">Sharpening applied by default when developing HDR+ captures.</string>
+    <string name="settings_raw_max_default_sharpening">Default sharpening</string>
+    <string name="settings_raw_max_default_sharpening_description">Set how much fine detail is sharpened during development.</string>
     <string name="settings_raw_group_development">Rendering &amp; Color</string>
     <string name="settings_raw_group_capture_output">Output</string>
     <string name="settings_raw_group_sensor_correction">Sensor Correction</string>
-    <string name="settings_raw_max_default_luma_denoise">HDR+ baked luma denoise</string>
-    <string name="settings_raw_max_default_luma_denoise_description">Adjusts luminance noise reduction for HDR+ photos.</string>
-    <string name="settings_raw_max_default_chroma_denoise">HDR+ baked chroma denoise</string>
-    <string name="settings_raw_max_default_chroma_denoise_description">Adjusts color noise reduction for HDR+ photos.</string>
+    <string name="settings_raw_max_default_luma_denoise">Luminance noise reduction</string>
+    <string name="settings_raw_max_default_luma_denoise_description">Reduce grain after merging. The result is saved in the DNG.</string>
+    <string name="settings_raw_max_default_chroma_denoise">Color noise reduction</string>
+    <string name="settings_raw_max_default_chroma_denoise_description">Reduce colored speckles after merging. The result is saved in the DNG.</string>
     <string name="preset_import">Import Preset</string>
     <string name="preset_export">Export Preset</string>
     <string name="preset_import_success">Imported %1$d presets</string>
@@ -1229,11 +1228,13 @@
     <string name="settings_language_system">Follow system</string>
     <string name="settings_language_english" translatable="false">English</string>
     <string name="settings_language_german" translatable="false">Deutsch</string>
+    <string name="settings_language_spanish" translatable="false">Español</string>
     <string name="settings_language_french" translatable="false">Français</string>
     <string name="settings_language_indonesian" translatable="false">Bahasa Indonesia</string>
     <string name="settings_language_japanese" translatable="false">日本語</string>
     <string name="settings_language_korean" translatable="false">한국어</string>
     <string name="settings_language_portuguese_brazil" translatable="false">Português (Brasil)</string>
+    <string name="settings_language_russian" translatable="false">Русский</string>
     <string name="settings_language_thai" translatable="false">ไทย</string>
     <string name="settings_language_chinese_simplified" translatable="false">简体中文</string>
     <string name="settings_language_chinese_hong_kong" translatable="false">繁體中文（香港）</string>
@@ -1362,11 +1363,11 @@
     <string name="settings_raw_color_engine_leica">Leica M9</string>
     <string name="settings_raw_color_engine_leica_description">Leica M9 color and tone.</string>
     <string name="settings_raw_canon_color_matrix">Color matrix</string>
-    <string name="settings_raw_canon_color_matrix_description">Choose the capture device or EOS R5 color matrix for RAW color calibration.</string>
+    <string name="settings_raw_canon_color_matrix_description">Use the color matrix from the camera that took the photo or from the EOS R5.</string>
     <string name="settings_raw_canon_color_matrix_device">Default</string>
     <string name="settings_raw_canon_color_matrix_r5">EOS R5</string>
     <string name="settings_raw_leica_color_matrix">Color matrix</string>
-    <string name="settings_raw_leica_color_matrix_description">Choose the capture device or M9 color matrix for RAW color calibration.</string>
+    <string name="settings_raw_leica_color_matrix_description">Use the color matrix from the camera that took the photo or from the M9.</string>
     <string name="settings_raw_leica_color_matrix_device">Default</string>
     <string name="settings_raw_leica_color_matrix_m9">M9</string>
     <string name="camera_focus_point_label">Focus</string>

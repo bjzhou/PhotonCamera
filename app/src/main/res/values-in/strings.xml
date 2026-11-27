@@ -296,8 +296,8 @@
     <string name="settings_use_p010">P010 (10-bit YUV)</string>
     <string name="settings_use_p010_description">Aktifkan output YUV 10-bit untuk presisi data gambar yang lebih baik. Efektif pada perangkat yang didukung saat RAW dinonaktifkan.</string>
     <string name="settings_raw_color_engine_hncs_description">Hasselblad Natural Colour Solution: sistem manajemen warna yang dikembangkan secara independen oleh Hasselblad</string>
-    <string name="settings_raw_max_default_sharpening">Penajaman HDR+ default</string>
-    <string name="settings_raw_max_default_sharpening_description">Penajaman yang diterapkan secara default saat memproses tangkapan HDR+.</string>
+    <string name="settings_raw_max_default_sharpening">Penajaman bawaan</string>
+    <string name="settings_raw_max_default_sharpening_description">Atur tingkat penajaman yang diterapkan saat memproses foto.</string>
     <string name="preset_import">Impor Preset</string>
     <string name="preset_export">Ekspor Preset</string>
     <string name="preset_import_success">%1$d preset berhasil diimpor</string>
@@ -365,11 +365,11 @@
     <string name="settings_raw_color_engine_fotufilm">Fotufilm</string>
     <string name="settings_raw_color_engine_fotufilm_description">Simulasi film berbasis fisika yang lengkap: eksposur spektral, pengembangan, butiran, halasi, dan cetak, dengan kontrol lab dan cetak yang lengkap.</string>
     <string name="settings_raw_canon_color_matrix">Matriks warna</string>
-    <string name="settings_raw_canon_color_matrix_description">Pilih matriks warna perangkat pengambilan gambar atau EOS R5 untuk kalibrasi warna RAW.</string>
+    <string name="settings_raw_canon_color_matrix_description">Pilih matriks warna kamera yang digunakan atau matriks EOS R5 untuk mengoreksi warna.</string>
     <string name="settings_raw_canon_color_matrix_device">Default</string>
     <string name="settings_raw_canon_color_matrix_r5">EOS R5</string>
     <string name="settings_raw_leica_color_matrix">Matriks warna</string>
-    <string name="settings_raw_leica_color_matrix_description">Pilih matriks warna perangkat pengambilan gambar atau M9 untuk kalibrasi warna RAW.</string>
+    <string name="settings_raw_leica_color_matrix_description">Pilih matriks warna kamera yang digunakan atau matriks M9 untuk mengoreksi warna.</string>
     <string name="settings_raw_leica_color_matrix_device">Default</string>
     <string name="settings_raw_leica_color_matrix_m9">M9</string>
     <string name="camera_focus_point_label">Fokus</string>

@@ -297,8 +297,8 @@
     <string name="settings_dro_dr200">DR200</string>
     <string name="settings_dro_dr400">DR400</string>
     <string name="settings_raw_color_engine_hncs_description">Hasselblad Natural Colour Solution: 핫셀블라드가 독자적으로 개발한 컬러 매니지먼트 시스템</string>
-    <string name="settings_raw_max_default_sharpening">HDR+ 기본 선명도</string>
-    <string name="settings_raw_max_default_sharpening_description">HDR+ 촬영 결과를 현상할 때 기본으로 적용할 선명도입니다.</string>
+    <string name="settings_raw_max_default_sharpening">기본 선명도</string>
+    <string name="settings_raw_max_default_sharpening_description">사진을 현상할 때 적용하는 선명도 보정 강도를 조절합니다.</string>
     <string name="preset_import">프리셋 가져오기</string>
     <string name="preset_export">프리셋 내보내기</string>
     <string name="preset_import_success">프리셋 %1$d개를 가져왔습니다</string>
@@ -366,11 +366,11 @@
     <string name="settings_raw_color_engine_fotufilm">Fotufilm</string>
     <string name="settings_raw_color_engine_fotufilm_description">물리 기반의 완전한 필름 시뮬레이션. 분광 노출, 현상, 입자, 헐레이션, 인화를 재현하며 현상과 인화를 세밀하게 조정할 수 있습니다.</string>
     <string name="settings_raw_canon_color_matrix">색상 행렬</string>
-    <string name="settings_raw_canon_color_matrix_description">RAW 색상 보정에 촬영 기기 또는 EOS R5의 색상 행렬을 사용합니다.</string>
+    <string name="settings_raw_canon_color_matrix_description">색상 보정에 사용할 색상 행렬을 촬영 기기와 EOS R5 중에서 선택합니다.</string>
     <string name="settings_raw_canon_color_matrix_device">기본값</string>
     <string name="settings_raw_canon_color_matrix_r5">EOS R5</string>
     <string name="settings_raw_leica_color_matrix">색상 행렬</string>
-    <string name="settings_raw_leica_color_matrix_description">RAW 색상 보정에 촬영 기기 또는 M9의 색상 행렬을 사용합니다.</string>
+    <string name="settings_raw_leica_color_matrix_description">색상 보정에 사용할 색상 행렬을 촬영 기기와 M9 중에서 선택합니다.</string>
     <string name="settings_raw_leica_color_matrix_device">기본값</string>
     <string name="settings_raw_leica_color_matrix_m9">M9</string>
     <string name="camera_focus_point_label">초점</string>
