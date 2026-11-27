@@ -10,26 +10,27 @@ namespace {
 
 constexpr float kEps = 1.0e-6f;
 constexpr float kLogAvgEps = 1.0e-4f;
-// Qualcomm linear AEC/ADRC luminance targets (in pure [0, 1] scene-linear domain before IPE Gamma15).
-constexpr float kTargetCameraMidLuma = 0.148f;
-constexpr float kTargetBgMidLuma = 0.204f;
+// Qualcomm linear AEC/ADRC luminance targets aligned with Chromatix tmc12_sw tone_target[2]=0.55
+// (SrgbToLinear(0.55) = 0.266 in pure [0, 1] scene-linear domain before IPE Gamma15).
+constexpr float kTargetCameraMidLuma = 0.205f;
+constexpr float kTargetBgMidLuma = 0.266f;
 
-// Qualcomm tmc12_sw.xml calibrated baseline constants.
+// Qualcomm Chromatix tmc12_sw.xml (mod_tmc12_aec_data) baseline constants.
 constexpr float kHistClipSlope = 16.0f;
-constexpr float kToneBrightAdj = 1.55f;
-constexpr float kToneDarkAdj = 2.60f;
-constexpr float kHistEnhanceClamp = 1.15f;
+constexpr float kToneBrightAdj = 1.50f;
+constexpr float kToneDarkAdj = 2.00f;
+constexpr float kHistEnhanceClamp = 1.30f;
 constexpr float kContrastDarkAdj = 1.08f;
 constexpr float kToneMaxRatio = 8.0f;
-constexpr float kBaseLtmPercentage = 0.75f;
+constexpr float kBaseLtmPercentage = 0.80f;
 constexpr float kMinLtmPercentage = 0.20f;
 
 // 5-tap symmetric smoothing kernel matching TMC12 hist_conv_kernel structure.
 constexpr float kHistConvKernel[5] = {0.36f, 0.20f, 0.08f, 0.03f, 0.01f};
 
-// Pure scene-linear Qualcomm TMC12 anchor points and histogram blend weights.
+// Pure scene-linear Qualcomm TMC12 anchor points, Chromatix tone_target, and histogram blend weights.
 constexpr float kAnchorY[kKneePointCount] = {0.0f, 0.06f, 0.20f, 0.58f, 1.0f};
-constexpr float kToneTargets[kKneePointCount] = {0.0f, 0.28f, 0.48f, 0.70f, 1.0f};
+constexpr float kToneTargets[kKneePointCount] = {0.0f, 0.30f, 0.55f, 0.70f, 1.0f};
 constexpr float kHistEnhanceRatio[kKneePointCount] = {0.0f, 0.18f, 0.25f, 0.20f, 0.0f};
 
 // DNG ProfileGainTableMap intensity weights (shared with DngPhotonProfileGainTableGenerator).
@@ -411,7 +412,7 @@ bool SolveAdrcTmc12(
     const float refIso = static_cast<float>(std::max(params.minIso, 50));
     const float isoGain = std::max(static_cast<float>(params.iso) / refIso, 1.0f);
     const float highIsoAtten = 1.0f - 0.65f * SmoothStep(4.0f, 32.0f, isoGain);
-    const float yRatioMax = ClampFloat(3.75f - 1.50f * SmoothStep(4.0f, 32.0f, isoGain), 2.10f, 3.85f);
+    const float yRatioMax = ClampFloat(5.00f - 2.00f * SmoothStep(4.0f, 32.0f, isoGain), 2.80f, 5.00f);
     result.yRatioMax = yRatioMax;
 
     // Step 4: Self-contained Qualcomm AEC/ADRC metering layer (computes DRCGain & DRCGainDark).
@@ -423,7 +424,7 @@ bool SolveAdrcTmc12(
         : 1.0f;
     const float userEvScale = std::pow(2.0f, ClampFloat(params.exposureCompensationEv, -3.0f, 3.0f));
     const bool isMultiFrameHdr = (params.frameCount > 1) || (params.maxLinearIntensity * baselineGain > 1.25f);
-    const float maxDrcGain = isMultiFrameHdr ? 4.8f : 3.8f;
+    const float maxDrcGain = isMultiFrameHdr ? 6.0f : 5.0f;
 
     const float highlightPressure = SmoothStep(0.65f, 0.96f, p992) * 0.70f +
                                     SmoothStep(0.003f, 0.05f, clippedFraction) * 0.30f;
@@ -431,10 +432,10 @@ bool SolveAdrcTmc12(
                                 (1.0f - SmoothStep(0.015f, 0.055f, effectiveLuma));
     const float targetBgLuma = ClampFloat(
         kTargetBgMidLuma * (1.0f - 0.35f * darkNightDamp) * userEvScale,
-        0.09f, 0.40f);
+        0.12f, 0.48f);
     const float targetMidLuma = ClampFloat(
         kTargetCameraMidLuma * (1.0f - 0.35f * darkNightDamp) * userEvScale,
-        0.07f, 0.32f);
+        0.09f, 0.40f);
 
     const float bgNeededGain = ClampFloat(
         targetBgLuma / std::max(effectiveBgLuma, 0.025f),
@@ -519,7 +520,7 @@ bool SolveAdrcTmc12(
     const float lwMin = (cntMin > kEps) ? static_cast<float>(std::exp(sumMin / cntMin)) : 350.0f;
     const float lwMax = (cntMax > kEps) ? static_cast<float>(std::exp(sumMax / cntMax)) : 8000.0f;
 
-    const float targetMidLinear = SrgbToLinear(kToneTargets[2]) * 0.82f * userEvScale;
+    const float targetMidLinear = SrgbToLinear(kToneTargets[2]) * userEvScale;
     const float epsHist = 1.0f;
     const float histF = ClampFloat(
         (2.0f * std::log(lwAvg + epsHist) - std::log(1.0f) - std::log(16383.0f + epsHist)) /
