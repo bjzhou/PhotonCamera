@@ -397,8 +397,6 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
         private set
     var editRawExposureCompensation = MutableStateFlow(0f)
         private set
-    var editRawAutoExposure = MutableStateFlow(true)
-        private set
     var editRawHighlightsAdjustment = MutableStateFlow(0f)
         private set
     var editRawShadowsAdjustment = MutableStateFlow(0f)
@@ -1191,12 +1189,7 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
 
     private fun rawDevelopEditStateMatches(metadata: MediaMetadata?): Boolean {
         if (metadata == null) return false
-        val metadataExposureMode = RawAdaptiveExposureMode.resolve(
-            usePhotonHdr = metadata.rawToneMappingParameters.usePhotonHdr,
-            useLegacyAutoExposure = metadata.rawAutoExposure ?: true,
-        )
         return editRawExposureCompensation.value == (metadata.rawExposureCompensation ?: 0f) &&
-            editRawAutoExposure.value == metadataExposureMode.usesLegacyAutoExposure &&
             editRawHighlightsAdjustment.value == (metadata.rawHighlightsAdjustment ?: 0f) &&
             editRawShadowsAdjustment.value == (metadata.rawShadowsAdjustment ?: 0f) &&
             editRawLensShadingCorrectionEnabled.value == resolveRawLensShadingCorrectionForEdit(metadata) &&
@@ -1479,10 +1472,6 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                 photonDenoiseEditStrengths[it.id] = editNoiseReduction.value to editChromaNoiseReduction.value
             }
             editRawExposureCompensation.value = m.rawExposureCompensation ?: 0f
-            editRawAutoExposure.value = RawAdaptiveExposureMode.resolve(
-                usePhotonHdr = m.rawToneMappingParameters.usePhotonHdr,
-                useLegacyAutoExposure = m.rawAutoExposure ?: true,
-            ).usesLegacyAutoExposure
             editRawHighlightsAdjustment.value = m.rawHighlightsAdjustment ?: 0f
             editRawShadowsAdjustment.value = m.rawShadowsAdjustment ?: 0f
             editRawBlackPointCorrection.value = m.rawBlackPointCorrection ?: 0f
@@ -2094,10 +2083,6 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
 
     private fun applyRawDevelopMetadataToEditState(metadata: MediaMetadata) {
         editRawExposureCompensation.value = metadata.rawExposureCompensation ?: 0f
-        editRawAutoExposure.value = RawAdaptiveExposureMode.resolve(
-            usePhotonHdr = metadata.rawToneMappingParameters.usePhotonHdr,
-            useLegacyAutoExposure = metadata.rawAutoExposure ?: true,
-        ).usesLegacyAutoExposure
         editRawHighlightsAdjustment.value = metadata.rawHighlightsAdjustment ?: 0f
         editRawShadowsAdjustment.value = metadata.rawShadowsAdjustment ?: 0f
         editRawLensShadingCorrectionEnabled.value = resolveRawLensShadingCorrectionForEdit(metadata)
@@ -2162,10 +2147,6 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                     metadata.chromaNoiseReduction
                 )
                 editRawExposureCompensation.value = metadata.rawExposureCompensation ?: 0f
-                editRawAutoExposure.value = RawAdaptiveExposureMode.resolve(
-                    usePhotonHdr = metadata.rawToneMappingParameters.usePhotonHdr,
-                    useLegacyAutoExposure = metadata.rawAutoExposure ?: true,
-                ).usesLegacyAutoExposure
                 editRawHighlightsAdjustment.value = metadata.rawHighlightsAdjustment ?: 0f
                 editRawShadowsAdjustment.value = metadata.rawShadowsAdjustment ?: 0f
                 editRawBlackPointCorrection.value = metadata.rawBlackPointCorrection ?: 0f
@@ -2193,7 +2174,6 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                 editNoiseReduction.value = 0f
                 editChromaNoiseReduction.value = 0f
                 editRawExposureCompensation.value = 0f
-                editRawAutoExposure.value = true
                 editRawHighlightsAdjustment.value = 0f
                 editRawShadowsAdjustment.value = 0f
                 editRawBlackPointCorrection.value = 0f
@@ -2323,7 +2303,6 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
         editStraightenDegrees.value = 0f
         editMirrorHorizontal.value = false
         editRawExposureCompensation.value = 0f
-        editRawAutoExposure.value = true
         editRawHighlightsAdjustment.value = 0f
         editRawShadowsAdjustment.value = 0f
         editRawBlackPointCorrection.value = 0f
@@ -2889,7 +2868,6 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
         val noiseReduction = editNoiseReduction.value
         val chromaNoiseReduction = editChromaNoiseReduction.value
         val exposure = editRawExposureCompensation.value
-        val autoExposure = editRawAutoExposure.value
         val highlights = editRawHighlightsAdjustment.value
         val shadows = editRawShadowsAdjustment.value
         val blackPoint = editRawBlackPointCorrection.value
@@ -2929,7 +2907,7 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                     noiseReduction = noiseReduction,
                     chromaNoiseReduction = chromaNoiseReduction,
                     rawExposureCompensation = exposure,
-                    rawAutoExposure = autoExposure,
+                    rawAutoExposure = false,
                     rawHighlightsAdjustment = highlights,
                     rawShadowsAdjustment = shadows,
                     rawBlackPointCorrection = blackPoint,
@@ -2992,9 +2970,6 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
     ) {
         val updated = value.normalized()
         editRawToneMappingParameters.value = updated
-        if (updated.usePhotonHdr) {
-            editRawAutoExposure.value = false
-        }
         persistRawEditMetadata(
             mediaData = mediaData,
             onComplete = onComplete,
@@ -3002,9 +2977,8 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
     }
 
     fun selectRawAdaptiveExposureModeForEdit(mode: RawAdaptiveExposureMode) {
-        editRawAutoExposure.value = mode.usesLegacyAutoExposure
         editRawToneMappingParameters.value = editRawToneMappingParameters.value
-            .withPhotonHdr(mode.usesPhotonHdr)
+            .withAdaptiveExposureMode(mode)
     }
 
     /** Selects one embedded DNG profile; the caller commits the combined edit state. */
@@ -3014,33 +2988,23 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
         var updatedToneMapping = editRawToneMappingParameters.value
             .withProfileToneMapMode(RawProfileToneMapMode.Profile)
         if (hasProfileGainTableMap) {
-            updatedToneMapping = updatedToneMapping.withPhotonHdr(false)
+            updatedToneMapping = updatedToneMapping.withAdaptiveExposureMode(RawAdaptiveExposureMode.OFF)
         }
         editRawToneMappingParameters.value = updatedToneMapping
-        if (updatedToneMapping.usePhotonHdr) {
-            editRawAutoExposure.value = false
-        }
     }
 
     fun saveRawExposureCompensationValue(mediaData: MediaData, value: Float, onComplete: ((Boolean) -> Unit)? = null) {
         editRawExposureCompensation.value = value
-        if (value != 0f) {
-            editRawAutoExposure.value = false
-        }
         persistRawEditMetadata(mediaData, onComplete)
     }
 
     fun resetRawExposureCompensationValue(mediaData: MediaData, onComplete: ((Boolean) -> Unit)? = null) {
-        editRawAutoExposure.value = false
         editRawExposureCompensation.value = 0f
         persistRawEditMetadata(mediaData, onComplete)
     }
 
     fun saveRawHighlightsAdjustmentValue(mediaData: MediaData, value: Float, onComplete: ((Boolean) -> Unit)? = null) {
         editRawHighlightsAdjustment.value = value
-        if (value != 0f) {
-            editRawAutoExposure.value = false
-        }
         persistRawEditMetadata(mediaData, onComplete)
     }
 
@@ -3620,7 +3584,7 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                         noiseReduction = editNoiseReduction.value,
                         chromaNoiseReduction = editChromaNoiseReduction.value,
                         rawExposureCompensation = editRawExposureCompensation.value,
-                        rawAutoExposure = editRawAutoExposure.value,
+                        rawAutoExposure = false,
                         rawHighlightsAdjustment = editRawHighlightsAdjustment.value,
                         rawShadowsAdjustment = editRawShadowsAdjustment.value,
                         rawBlackPointCorrection = editRawBlackPointCorrection.value,
@@ -3986,7 +3950,7 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                         noiseReduction = editNoiseReduction.value,
                         chromaNoiseReduction = editChromaNoiseReduction.value,
                         rawExposureCompensation = editRawExposureCompensation.value,
-                        rawAutoExposure = editRawAutoExposure.value,
+                        rawAutoExposure = false,
                         rawHighlightsAdjustment = editRawHighlightsAdjustment.value,
                         rawShadowsAdjustment = editRawShadowsAdjustment.value,
                         rawBlackPointCorrection = editRawBlackPointCorrection.value,

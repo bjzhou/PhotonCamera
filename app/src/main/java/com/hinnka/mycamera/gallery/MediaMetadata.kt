@@ -30,17 +30,7 @@ import java.text.SimpleDateFormat
 import java.util.*
 import kotlin.math.log2
 
-private fun JSONObject.optCompatibleRawAutoExposure(): Boolean? {
-    if (!isNull("rawAutoExposureMode")) {
-        when (optString("rawAutoExposureMode")) {
-            "OFF" -> return false
-            "PHOTON_HDR" -> return false
-            "LEGACY_AUTO_EXPOSURE" -> return true
-            "VIEWFINDER_MATCH", "DYNAMIC_SCENE_ESTIMATION" -> return true
-        }
-    }
-    return if (isNull("rawAutoExposure")) null else optBoolean("rawAutoExposure")
-}
+private fun JSONObject.optCompatibleRawAutoExposure(): Boolean = false
 
 /**
  * 照片元数据
@@ -416,10 +406,15 @@ data class MediaMetadata(
                         canonUseR5ColorMatrix = obj.optBoolean("rawCanonUseR5ColorMatrix", false),
                         leicaUseM9ColorMatrix = obj.optBoolean("rawLeicaUseM9ColorMatrix", false),
                         useOppoMasterToneMap = obj.optBoolean("rawOppoMasterToneMap", false),
+                        useQualcommAdrc = obj.optString("rawAutoExposureMode")
+                            .equals("QUALCOMM_ADRC", ignoreCase = true) ||
+                            obj.optBoolean("rawQualcommAdrc", false),
                         usePhotonHdr =
-                            obj.optBoolean("rawPhotonHdr", false) ||
-                                obj.optBoolean("rawPhotonPgtmToneMap", false) ||
-                                obj.optBoolean("rawGooglePixelToneMap", false)
+                            !obj.optString("rawAutoExposureMode")
+                                .equals("QUALCOMM_ADRC", ignoreCase = true) &&
+                                (obj.optBoolean("rawPhotonHdr", false) ||
+                                    obj.optBoolean("rawPhotonPgtmToneMap", false) ||
+                                    obj.optBoolean("rawGooglePixelToneMap", false))
                     ).normalized(),
                     rawBlackLevelMode = if (obj.isNull("rawBlackLevelMode")) null else obj.optString("rawBlackLevelMode"),
                     rawCustomBlackLevel = if (obj.isNull("rawCustomBlackLevel")) null else obj.optDouble("rawCustomBlackLevel").toFloat(),

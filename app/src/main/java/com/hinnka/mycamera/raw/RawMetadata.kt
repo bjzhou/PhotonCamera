@@ -193,6 +193,8 @@ data class RawMetadata(
     val profileGainTableMap: DngProfileGainTableMap? = null,
     /** Whether the exact CaptureResult paired with this RAW reported at least one face. */
     val sceneHasFace: Boolean = false,
+    /** Normalized [0, 1] face bounds relative to activeArray for scene-linear ADRC metering. */
+    val faceRects: List<android.graphics.RectF> = emptyList(),
 ) {
     fun withNoiseProfileSelection(selection: RawNoiseProfileSelection): RawMetadata {
         val profile = when (selection) {
@@ -557,7 +559,31 @@ data class RawMetadata(
                 sensorPixelArrayHeight = sensorPixelArraySize?.height ?: 0,
                 sceneHasFace = captureResult.get(CaptureResult.STATISTICS_FACES)
                     ?.isNotEmpty() == true,
+                faceRects = extractNormalizedFaceRects(captureResult, activeArray, width, height),
             )
+        }
+
+        private fun extractNormalizedFaceRects(
+            captureResult: CaptureResult,
+            activeArray: android.graphics.Rect?,
+            rawWidth: Int,
+            rawHeight: Int,
+        ): List<android.graphics.RectF> {
+            val faces = captureResult.get(CaptureResult.STATISTICS_FACES) ?: return emptyList()
+            if (faces.isEmpty()) return emptyList()
+            val refLeft = activeArray?.left?.toFloat() ?: 0f
+            val refTop = activeArray?.top?.toFloat() ?: 0f
+            val refWidth = (activeArray?.width()?.takeIf { it > 0 } ?: rawWidth).toFloat()
+            val refHeight = (activeArray?.height()?.takeIf { it > 0 } ?: rawHeight).toFloat()
+            if (refWidth <= 0f || refHeight <= 0f) return emptyList()
+            return faces.mapNotNull { face ->
+                val bounds = face.bounds ?: return@mapNotNull null
+                val l = ((bounds.left - refLeft) / refWidth).coerceIn(0f, 1f)
+                val t = ((bounds.top - refTop) / refHeight).coerceIn(0f, 1f)
+                val r = ((bounds.right - refLeft) / refWidth).coerceIn(0f, 1f)
+                val b = ((bounds.bottom - refTop) / refHeight).coerceIn(0f, 1f)
+                if (r > l && b > t) android.graphics.RectF(l, t, r, b) else null
+            }
         }
 
         private fun extractChannelNoiseProfile(captureResult: CaptureResult): FloatArray {

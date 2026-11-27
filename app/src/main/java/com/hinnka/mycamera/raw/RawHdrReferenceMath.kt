@@ -32,20 +32,15 @@ object RawHdrReferenceMath {
     private const val MIN_INTERVAL = 1e-4f
     private const val MIN_WHITE = 1e-4f
 
-    /** RAW -> HDRNet long reference; new input exposure takes precedence over legacy post EV. */
+    /** RAW -> HDRNet long reference from ML AE physical short gain and HDR ratio. */
     internal fun hdrNetSceneExposureGain(
         hdrRatio: Float?,
         sourceToShortGain: Float?,
-        postExposureEv: Float?,
-        inputExposureEv: Float? = null,
     ): Float? {
         if (hdrRatio == null || !hdrRatio.isFinite() || hdrRatio < 1f ||
             sourceToShortGain == null || !sourceToShortGain.isFinite() || sourceToShortGain <= 0f
         ) return null
-        val exposureEv = inputExposureEv ?: postExposureEv ?: 0f
-        if (!exposureEv.isFinite()) return null
-        return (sourceToShortGain * hdrRatio * 2f.pow(exposureEv))
-            .takeIf { it.isFinite() && it > 0f }
+        return (sourceToShortGain * hdrRatio).takeIf { it.isFinite() && it > 0f }
     }
 
     data class CurveExtension(

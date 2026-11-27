@@ -10,6 +10,7 @@ data class RawToneMappingParameters(
     val useProfileToneMap: Boolean = true,
     val useOppoMasterToneMap: Boolean = false,
     val usePhotonHdr: Boolean = PHOTON_HDR_DEFAULT,
+    val useQualcommAdrc: Boolean = QUALCOMM_ADRC_DEFAULT,
     val lumixPhotoStyle: LumixPhotoStyle = LumixPhotoStyle.Standard,
     val canonPictureStyle: CanonPictureStyle = CanonPictureStyle.Standard,
     val canonExposureCompensationEv: Float = CANON_EXPOSURE_COMPENSATION_DEFAULT,
@@ -76,7 +77,8 @@ data class RawToneMappingParameters(
             agxToe = agxToe.coerceIn(AGX_TOE_MIN, AGX_TOE_MAX),
             agxShoulder = agxShoulder.coerceIn(AGX_SHOULDER_MIN, AGX_SHOULDER_MAX),
             filmicBlackRelativeExposure = minOf(blackFilmic, whiteFilmic - MIN_DYNAMIC_RANGE_EV),
-            filmicWhiteRelativeExposure = maxOf(whiteFilmic, blackFilmic + MIN_DYNAMIC_RANGE_EV)
+            filmicWhiteRelativeExposure = maxOf(whiteFilmic, blackFilmic + MIN_DYNAMIC_RANGE_EV),
+            usePhotonHdr = if (useQualcommAdrc) false else usePhotonHdr,
         )
     }
 
@@ -87,7 +89,24 @@ data class RawToneMappingParameters(
     }
 
     fun withPhotonHdr(enabled: Boolean): RawToneMappingParameters {
-        return copy(usePhotonHdr = enabled).normalized()
+        return copy(
+            usePhotonHdr = enabled,
+            useQualcommAdrc = if (enabled) false else useQualcommAdrc,
+        ).normalized()
+    }
+
+    fun withQualcommAdrc(enabled: Boolean): RawToneMappingParameters {
+        return copy(
+            useQualcommAdrc = enabled,
+            usePhotonHdr = if (enabled) false else usePhotonHdr,
+        ).normalized()
+    }
+
+    fun withAdaptiveExposureMode(mode: RawAdaptiveExposureMode): RawToneMappingParameters {
+        return copy(
+            usePhotonHdr = mode.usesPhotonHdr,
+            useQualcommAdrc = mode.usesQualcommAdrc,
+        ).normalized()
     }
 
     fun withProfileToneMapMode(mode: RawProfileToneMapMode): RawToneMappingParameters {
@@ -106,7 +125,8 @@ data class RawToneMappingParameters(
             if (value.isFinite()) value.coerceIn(CANON_EXPOSURE_COMPENSATION_MIN, CANON_EXPOSURE_COMPENSATION_MAX)
             else CANON_EXPOSURE_COMPENSATION_DEFAULT
 
-        const val PHOTON_HDR_DEFAULT = true
+        const val QUALCOMM_ADRC_DEFAULT = true
+        const val PHOTON_HDR_DEFAULT = false
         const val MIN_DYNAMIC_RANGE_EV = 0.2f
 
         const val AGX_BLACK_RELATIVE_EXPOSURE_MIN = -20f

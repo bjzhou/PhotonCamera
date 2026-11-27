@@ -169,7 +169,6 @@ private data class PreviewRenderSignature(
     val editNoiseReduction: Float,
     val editChromaNoiseReduction: Float,
     val editRawExposureCompensation: Float,
-    val editRawAutoExposure: Boolean,
     val editRawHighlightsAdjustment: Float,
     val editRawShadowsAdjustment: Float,
     val editRawBlackPointCorrection: Float,
@@ -303,7 +302,6 @@ fun GalleryEditScreen(
     val editNoiseReduction by viewModel.editNoiseReduction.collectAsState()
     val editChromaNoiseReduction by viewModel.editChromaNoiseReduction.collectAsState()
     val editRawExposureCompensation by viewModel.editRawExposureCompensation.collectAsState()
-    val editRawAutoExposure by viewModel.editRawAutoExposure.collectAsState()
     val editRawHighlightsAdjustment by viewModel.editRawHighlightsAdjustment.collectAsState()
     val editRawShadowsAdjustment by viewModel.editRawShadowsAdjustment.collectAsState()
     val editRawBlackPointCorrection by viewModel.editRawBlackPointCorrection.collectAsState()
@@ -453,7 +451,6 @@ fun GalleryEditScreen(
             editNoiseReduction = 0f,
             editChromaNoiseReduction = 0f,
             editRawExposureCompensation = if (fast || rawDevelopIsBaked) 0f else editRawExposureCompensation,
-            editRawAutoExposure = if (fast || rawDevelopIsBaked) false else editRawAutoExposure,
             editRawHighlightsAdjustment = if (fast || rawDevelopIsBaked) 0f else editRawHighlightsAdjustment,
             editRawShadowsAdjustment = if (fast || rawDevelopIsBaked) 0f else editRawShadowsAdjustment,
             editRawBlackPointCorrection = if (fast || rawDevelopIsBaked) 0f else editRawBlackPointCorrection,
@@ -1299,7 +1296,8 @@ fun GalleryEditScreen(
                                         // edit setting or enabling HDR reuses the embedded map.
                                         requestRawPreviewRefresh(
                                             showResultToast = true,
-                                            forceRegeneratePhotonPgtm = editRawToneMappingParameters.usePhotonHdr,
+                                            forceRegeneratePhotonPgtm = editRawToneMappingParameters.usePhotonHdr ||
+                                                editRawToneMappingParameters.useQualcommAdrc,
                                         )
                                     },
                                     enabled = !isRefreshingRawPreview
@@ -1863,7 +1861,8 @@ fun GalleryEditScreen(
                                             rawAdaptiveExposureMode = RawAdaptiveExposureMode.resolve(
                                                 usePhotonHdr =
                                                     editRawToneMappingParameters.usePhotonHdr,
-                                                useLegacyAutoExposure = editRawAutoExposure,
+                                                useQualcommAdrc =
+                                                    editRawToneMappingParameters.useQualcommAdrc,
                                             ),
                                             rawHighlightsAdjustment = editRawHighlightsAdjustment,
                                             rawShadowsAdjustment = editRawShadowsAdjustment,
@@ -1927,7 +1926,10 @@ fun GalleryEditScreen(
                                                     currentEditSourcePhoto
                                                 ) { success ->
                                                     if (success) {
-                                                        requestRawPreviewRefresh()
+                                                        requestRawPreviewRefresh(
+                                                            forceRegeneratePhotonPgtm =
+                                                                mode.usesPhotonHdr || mode.usesQualcommAdrc,
+                                                        )
                                                     }
                                                 }
                                             },
@@ -2007,7 +2009,7 @@ fun GalleryEditScreen(
                                             onOpenBaselineLutSheet = {
                                                 showRawBaselineLutSelectorSheet = true
                                             },
-                                            showAdaptiveExposureControl = isImportedRaw,
+                                            showAdaptiveExposureControl = true,
                                             showDngMetadataControls = true,
                                             contentMode = RawEditPanelContentMode.FULL,
                                             compactLayout = true,

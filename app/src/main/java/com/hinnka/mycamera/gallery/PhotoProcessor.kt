@@ -725,8 +725,6 @@ class PhotoProcessor(
             includeHdrReference = true,
             photonHdrRatio = RawPhotonHdrMetadata.read(metadata.customProperties),
             photonSourceToShortGain = RawPhotonHdrMetadata.readFinalShortGain(metadata.customProperties),
-            photonHdrNetPostExposureEv = RawPhotonHdrMetadata.readPostExposureEv(metadata.customProperties),
-            photonHdrNetInputExposureEv = RawPhotonHdrMetadata.readInputExposureEv(metadata.customProperties),
             aspectRatio = resolveRawAspectRatio(metadata),
             cropRegion = metadata.cropRegion,
             rotation = metadata.rotation,

@@ -205,7 +205,9 @@ private data class RawSpectralFilmSettings(
     val tuning: SpectralFilmTuning
 )
 
-private fun resolveEffectiveRawAutoExposure(): Boolean = false
+private fun resolveEffectiveRawAutoExposure(
+    userPrefs: UserPreferences? = null,
+): Boolean = false
 
 private fun rawProcessingMetadataProperties(
     userPrefs: UserPreferences?,
@@ -1159,7 +1161,9 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         userPrefs: UserPreferences?
     ): RawToneMappingParameters {
         val base = userPrefs?.rawToneMappingParameters ?: RawToneMappingParameters.DEFAULT
-        return base.withPhotonHdr(true)
+        val mode = userPrefs?.rawAdaptiveExposureMode
+            ?: com.hinnka.mycamera.raw.RawAdaptiveExposureMode.DEFAULT
+        return base.withAdaptiveExposureMode(mode)
     }
 
     fun savePreset(preset: com.hinnka.mycamera.model.CameraPreset) {
@@ -2678,7 +2682,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             target = baselineTarget,
             userPrefs = userPrefs,
         )
-        val effectiveRawAutoExposure = resolveEffectiveRawAutoExposure()
+        val effectiveRawAutoExposure = resolveEffectiveRawAutoExposure(userPrefs)
 
         val spectralFilmSettings = resolveRawSpectralFilmSettings(userPrefs)
 
@@ -5238,7 +5242,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 userPrefs = userPrefs,
             )
             val baselineMetadata = resolveBaselineMetadata(baselineTarget, userPrefs)
-            val effectiveRawAutoExposure = resolveEffectiveRawAutoExposure()
+            val effectiveRawAutoExposure = resolveEffectiveRawAutoExposure(userPrefs)
             val spectralFilmSettings = resolveRawSpectralFilmSettings(userPrefs)
             val captureExposureBias = settings.state.exposureBias
             val captureExposureCompensationEv = captureInfo.exposureCompensation ?: 0f
@@ -5387,7 +5391,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             val photoQualityValue = userPreferencesRepository.latest().photoQuality
             val userPrefs = userPreferencesRepository.userPreferences.firstOrNull()
             val currentCameraId = captureState.currentCameraId
-            val effectiveRawAutoExposure = resolveEffectiveRawAutoExposure()
+            val effectiveRawAutoExposure = resolveEffectiveRawAutoExposure(userPrefs)
             val spectralFilmSettings = resolveRawSpectralFilmSettings(userPrefs)
             val captureInfo = cameraController.rebuildCaptureInfo(
                 result = null,
@@ -5654,7 +5658,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 userPrefs = userPrefs,
             )
             val baselineMetadata = resolveBaselineMetadata(baselineTarget, userPrefs)
-            val effectiveRawAutoExposure = resolveEffectiveRawAutoExposure()
+            val effectiveRawAutoExposure = resolveEffectiveRawAutoExposure(userPrefs)
             val spectralFilmSettings = resolveRawSpectralFilmSettings(userPrefs)
             val captureExposureBias = settings.state.exposureBias
             val captureExposureCompensationEv = captureInfo.exposureCompensation ?: 0f
@@ -5980,7 +5984,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             userPrefs = userPrefs,
         )
         val baselineMetadata = resolveBaselineMetadata(baselineTarget, userPrefs)
-        val effectiveRawAutoExposure = resolveEffectiveRawAutoExposure()
+        val effectiveRawAutoExposure = resolveEffectiveRawAutoExposure(userPrefs)
         val spectralFilmSettings = resolveRawSpectralFilmSettings(userPrefs)
 
         // 创建统一的 PhotoMetadata，包含编辑配置和拍摄信息

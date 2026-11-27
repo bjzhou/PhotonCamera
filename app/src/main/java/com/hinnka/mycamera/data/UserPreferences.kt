@@ -267,8 +267,6 @@ class UserPreferences internal constructor(
                 ?: RawToneMappingParameters.FILMIC_WHITE_RELATIVE_EXPOSURE_DEFAULT,
             useProfileToneMap = p[K.RAW_PROFILE_TONE_MAP_KEY] ?: true,
             useOppoMasterToneMap = p[K.RAW_OPPO_MASTER_TONE_MAP_KEY] ?: false,
-            // Capture development has one supported adaptive-exposure path: HDRNet.
-            // Photo-level metadata may still disable it for an imported DNG.
             lumixPhotoStyle = LumixPhotoStyle.fromPersistedValue(p[K.RAW_LUMIX_PHOTO_STYLE_KEY]),
             canonPictureStyle = CanonPictureStyle.fromPersistedValue(p[K.RAW_CANON_PICTURE_STYLE_KEY]),
             canonExposureCompensationEv = p[K.RAW_CANON_EXPOSURE_COMPENSATION_KEY]
@@ -277,10 +275,12 @@ class UserPreferences internal constructor(
             hncsColorMatchingEnabled = p[K.RAW_HNCS_COLOR_MATCHING_KEY] ?: true,
             canonUseR5ColorMatrix = p[K.RAW_CANON_USE_R5_COLOR_MATRIX_KEY] ?: false,
             leicaUseM9ColorMatrix = p[K.RAW_LEICA_USE_M9_COLOR_MATRIX_KEY] ?: false,
-            usePhotonHdr = true
+            usePhotonHdr = resolveRawAdaptiveExposureMode(p).usesPhotonHdr,
+            useQualcommAdrc = resolveRawAdaptiveExposureMode(p).usesQualcommAdrc,
         ).normalized()
     }) { p, value ->
-        val v = value.withPhotonHdr(true)
+        val mode = resolveRawAdaptiveExposureMode(p)
+        val v = value.withAdaptiveExposureMode(mode)
         p[K.RAW_AGX_BLACK_RELATIVE_EXPOSURE_KEY] = v.agxBlackRelativeExposure
         p[K.RAW_AGX_WHITE_RELATIVE_EXPOSURE_KEY] = v.agxWhiteRelativeExposure
         p[K.RAW_AGX_TOE_KEY] = v.agxToe
@@ -297,7 +297,11 @@ class UserPreferences internal constructor(
         p[K.RAW_CANON_USE_R5_COLOR_MATRIX_KEY] = v.canonUseR5ColorMatrix
         p[K.RAW_LEICA_USE_M9_COLOR_MATRIX_KEY] = v.leicaUseM9ColorMatrix
     }
-    val rawAutoExposure: Boolean get() = false
+    var rawAdaptiveExposureMode: com.hinnka.mycamera.raw.RawAdaptiveExposureMode by stored({ p ->
+        resolveRawAdaptiveExposureMode(p)
+    }) { p, v ->
+        p[K.RAW_ADAPTIVE_EXPOSURE_MODE_KEY] = v.persistedValue
+    }
     /** 以下五项按 cameraId 存储 DNG 元数据校正。 */
     var rawBlackLevelModes: Map<String, String> by stored({ p -> parseMapString(p[K.RAW_BLACK_LEVEL_MODES_KEY]) }) { p, v ->
         p[K.RAW_BLACK_LEVEL_MODES_KEY] = serializeMapString(v)
@@ -748,6 +752,16 @@ private class JsonField<T : Any>(
     }
 }
 
+private fun resolveRawAdaptiveExposureMode(
+    p: Preferences,
+): com.hinnka.mycamera.raw.RawAdaptiveExposureMode {
+    val raw = p[K.RAW_ADAPTIVE_EXPOSURE_MODE_KEY]
+    return com.hinnka.mycamera.raw.RawAdaptiveExposureMode.fromPersistedValue(
+        value = raw,
+        fallback = com.hinnka.mycamera.raw.RawAdaptiveExposureMode.DEFAULT,
+    )
+}
+
 private fun bool(key: String, default: Boolean): ReadWriteProperty<UserPreferences, Boolean> =
     KeyField(booleanPreferencesKey(key), default, { it }, { it })
 
@@ -819,6 +833,7 @@ internal object PreferenceKeys {
     val RAW_FILMIC_WHITE_RELATIVE_EXPOSURE_KEY = floatPreferencesKey("raw_filmic_white_relative_exposure")
     val RAW_PROFILE_TONE_MAP_KEY = booleanPreferencesKey("raw_profile_tone_map")
     val RAW_OPPO_MASTER_TONE_MAP_KEY = booleanPreferencesKey("raw_oppo_master_tone_map")
+    val RAW_ADAPTIVE_EXPOSURE_MODE_KEY = stringPreferencesKey("raw_adaptive_exposure_mode")
     val RAW_LUMIX_PHOTO_STYLE_KEY = stringPreferencesKey("raw_lumix_photo_style")
     val RAW_CANON_PICTURE_STYLE_KEY = stringPreferencesKey("raw_canon_picture_style")
     val RAW_CANON_EXPOSURE_COMPENSATION_KEY = floatPreferencesKey("raw_canon_exposure_compensation_ev")

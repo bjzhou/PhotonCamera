@@ -1,7 +1,6 @@
 package com.hinnka.mycamera.raw
 
 import android.content.Context
-import android.graphics.Bitmap
 import android.graphics.Rect
 import com.hinnka.mycamera.camera.AspectRatio
 import com.hinnka.mycamera.camera.RawBlackBorderCrop
@@ -17,10 +16,7 @@ internal object RawCaptureProfileCoordinator {
         aspectRatio: AspectRatio?,
         cropRegion: Rect?,
         rotation: Int,
-        capturePreviewThumbnail: Bitmap?,
         capturePortraitMask: PortraitMaskSnapshot?,
-        viewfinderMirroredHorizontally: Boolean,
-        viewfinderPreviewToCaptureRotationDegrees: Int,
         statsBounds: Rect?,
         rawBlackPointCorrection: Float = 0f,
         rawWhitePointCorrection: Float = 0f,
@@ -40,18 +36,6 @@ internal object RawCaptureProfileCoordinator {
         } else {
             null
         }
-        val legacyRequest = RawLegacyAutoExposureMatcher.createRequest(
-            capturePreviewThumbnail = capturePreviewThumbnail,
-            capturePortraitMask = capturePortraitMask,
-            viewfinderMirroredHorizontally = viewfinderMirroredHorizontally,
-            viewfinderPreviewToCaptureRotationDegrees =
-                viewfinderPreviewToCaptureRotationDegrees,
-            highlightClippingConstraint = if (mode == RawAdaptiveExposureMode.OFF) {
-                RawLegacyHighlightClippingConstraint.HDR_PLUS_DISABLED
-            } else {
-                null
-            },
-        )
         return renderer.prepareCaptureProfile(
             context = context,
             input = input,
@@ -59,8 +43,8 @@ internal object RawCaptureProfileCoordinator {
             cropRegion = cropRegion,
             rotation = rotation,
             sceneExposureRequest = photonRequest,
-            legacyAutoExposureRequest = legacyRequest,
-            generatePhotonPgtm = mode.usesPhotonHdr || mode.usesLegacyAutoExposure,
+            generatePhotonPgtm = mode.generatesProfileGainTableMap,
+            useQualcommAdrcPgtm = mode.usesQualcommAdrc,
             statsBounds = statsBounds,
             rawBlackPointCorrection = rawBlackPointCorrection,
             rawWhitePointCorrection = rawWhitePointCorrection,

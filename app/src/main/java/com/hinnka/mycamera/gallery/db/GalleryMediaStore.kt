@@ -229,10 +229,10 @@ object GalleryMediaStore {
             rawDenoiseValue = metadata.rawDenoiseValue,
             rawChromaDenoiseValue = metadata.rawChromaDenoiseValue,
             rawExposureCompensation = metadata.rawExposureCompensation,
-            rawAutoExposure = metadata.rawAutoExposure,
+            rawAutoExposure = false,
             rawAutoExposureMode = RawAdaptiveExposureMode.resolve(
                 usePhotonHdr = metadata.rawToneMappingParameters.usePhotonHdr,
-                useLegacyAutoExposure = metadata.rawAutoExposure ?: true,
+                useQualcommAdrc = metadata.rawToneMappingParameters.useQualcommAdrc,
             ).persistedValue,
             rawHighlightsAdjustment = metadata.rawHighlightsAdjustment,
             rawShadowsAdjustment = metadata.rawShadowsAdjustment,
@@ -414,14 +414,9 @@ object GalleryMediaStore {
     }
 
     private fun GalleryMediaEntity.toMetadata(): MediaMetadata {
-        val resolvedRawAutoExposure = rawAutoExposureMode?.let { mode ->
-            when {
-                mode.equals(RawAdaptiveExposureMode.PHOTON_HDR.persistedValue, true) -> false
-                mode.equals(RawAdaptiveExposureMode.LEGACY_AUTO_EXPOSURE.persistedValue, true) ->
-                    true
-                else -> !mode.equals("OFF", ignoreCase = true)
-            }
-        } ?: rawAutoExposure
+        val isQualcommAdrcMode = rawAutoExposureMode
+            ?.equals(RawAdaptiveExposureMode.QUALCOMM_ADRC.persistedValue, true) == true
+        val resolvedRawAutoExposure = false
         return MediaMetadata(
             version = version.takeIf { it > 0 } ?: MediaMetadata().version,
             mediaType = runCatching { MediaType.valueOf(mediaType) }.getOrDefault(MediaType.IMAGE),
@@ -473,7 +468,8 @@ object GalleryMediaStore {
                 hncsColorMatchingEnabled = rawHncsColorMatchingEnabled,
                 canonUseR5ColorMatrix = rawCanonUseR5ColorMatrix,
                 leicaUseM9ColorMatrix = rawLeicaUseM9ColorMatrix,
-                usePhotonHdr = rawPhotonHdr || legacyPhotonToneMap
+                useQualcommAdrc = isQualcommAdrcMode,
+                usePhotonHdr = !isQualcommAdrcMode && (rawPhotonHdr || legacyPhotonToneMap)
             ).normalized(),
             frameId = frameId,
             width = width,

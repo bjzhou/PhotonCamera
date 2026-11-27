@@ -143,7 +143,7 @@ fun RawEditPanel(
     onRawExposureCompensationReset: ((Float) -> Unit)? = null,
     onOpenBaselineLutSheet: (() -> Unit)? = null,
     showAdaptiveExposureControl: Boolean = false,
-    rawAdaptiveExposureMode: RawAdaptiveExposureMode = RawAdaptiveExposureMode.PHOTON_HDR,
+    rawAdaptiveExposureMode: RawAdaptiveExposureMode = RawAdaptiveExposureMode.DEFAULT,
     onRawAdaptiveExposureModeChange: (RawAdaptiveExposureMode) -> Unit = {},
     showDngMetadataControls: Boolean = false,
     contentMode: RawEditPanelContentMode = RawEditPanelContentMode.FULL,
@@ -159,17 +159,22 @@ fun RawEditPanel(
         verticalArrangement = Arrangement.SpaceBetween
     ) {
         if (showAdaptiveExposureControl) {
-            RawSwitchSettingItem(
-                title = stringResource(R.string.settings_raw_photon_hdr),
-                description = stringResource(R.string.settings_raw_photon_hdr_edit_description),
-                checked = rawAdaptiveExposureMode.usesPhotonHdr,
-                onCheckedChange = { enabled ->
+            val modeOptions = listOf(
+                RawAdaptiveExposureMode.QUALCOMM_ADRC.persistedValue to
+                    stringResource(R.string.settings_raw_adaptive_exposure_mode_qualcomm_adrc),
+                RawAdaptiveExposureMode.PHOTON_HDR.persistedValue to
+                    stringResource(R.string.settings_raw_adaptive_exposure_mode_photon_hdr),
+                RawAdaptiveExposureMode.OFF.persistedValue to
+                    stringResource(R.string.video_option_off),
+            )
+            RawChoiceSetting(
+                title = stringResource(R.string.settings_raw_adaptive_exposure_mode),
+                description = stringResource(R.string.settings_raw_adaptive_exposure_mode_description),
+                levels = modeOptions,
+                currentLevel = rawAdaptiveExposureMode.persistedValue,
+                onLevelSelected = { selected ->
                     onRawAdaptiveExposureModeChange(
-                        if (enabled) {
-                            RawAdaptiveExposureMode.PHOTON_HDR
-                        } else {
-                            RawAdaptiveExposureMode.OFF
-                        }
+                        RawAdaptiveExposureMode.fromPersistedValue(selected)
                     )
                 },
             )

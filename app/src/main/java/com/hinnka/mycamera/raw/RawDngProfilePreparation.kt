@@ -108,16 +108,10 @@ data class GpuDemosaicedRawSource(
 )
 
 data class RawDngCaptureProfileResult(
-    /** Scalar viewfinder-match EV relative to the source baseline; null for Photon HDR. */
-    val exposureOffsetEv: Float?,
-    /** Photon HDR long/short TET ratio; always null for classic auto exposure. */
+    /** HDRNet long/short TET ratio from ML AE; null outside HDRNet mode. */
     val hdrRatio: Float?,
-    /** Physical source/short gain before the independent HDRNet input exposure. */
+    /** Physical source/short gain from ML AE; null outside HDRNet mode. */
     val finalShortGain: Float?,
-    /** Legacy downstream exposure, retained only to reconstruct older rendering targets. */
-    val hdrNetPostExposureEv: Float? = null,
-    /** Exposure applied before HDRNet inference, independently of the physical short gain. */
-    val hdrNetInputExposureEv: Float? = null,
     /** Capture-time MGC AE inputs and results serialized as photon:SummaryText in the DNG XMP. */
     val rawSceneExposureSummaryText: String? = null,
     val profileGainTableMap: DngProfileGainTableMap?,
@@ -139,9 +133,6 @@ data class RawDngProfilePreparation(
     val baselineExposureEv: Float,
     val hdrRatio: Float?,
     val finalShortGain: Float?,
-    val hdrNetPostExposureEv: Float? = null,
-    /** Exposure applied before HDRNet inference, independently of the physical short gain. */
-    val hdrNetInputExposureEv: Float? = null,
     val rawSceneExposureSummaryText: String? = null,
     val profileGainTableMap: DngProfileGainTableMap?,
     val gpuDemosaicedRawSource: GpuDemosaicedRawSource? = null,

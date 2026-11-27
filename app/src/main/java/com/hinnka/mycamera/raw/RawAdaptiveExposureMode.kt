@@ -3,51 +3,52 @@ package com.hinnka.mycamera.raw
 /**
  * The mutually exclusive capture/development modes for adaptive RAW exposure handling.
  *
- * [PHOTON_HDR] runs ML AE plus HDRNet and spatially matches the result to the complete viewfinder
- * only when the capture shutter does not exceed the preview limit. Longer exposures retain the
- * ML AE result without viewfinder matching. Other modes match through BaselineExposure.
- * [LEGACY_AUTO_EXPOSURE] also generates the historical Local Laplacian profile gain table. [OFF]
- * applies no HDR mapping and constrains its scalar viewfinder match with a RAW highlight guard.
+ * [QUALCOMM_ADRC] is the default mode: it runs pure scene-linear Qualcomm ADRC/TMC12 curve solving
+ * plus multi-scale Guided Filter LTM directly into a standard DNG ProfileGainTableMap2.
+ * [PHOTON_HDR] (displayed as HDRNet) runs ML AE metering plus HDRNet into a ProfileGainTableMap2.
+ * [OFF] disables adaptive exposure and local tone mapping.
  */
 enum class RawAdaptiveExposureMode(val persistedValue: String) {
-    OFF("OFF"),
+    QUALCOMM_ADRC("QUALCOMM_ADRC"),
     PHOTON_HDR("PHOTON_HDR"),
-    LEGACY_AUTO_EXPOSURE("LEGACY_AUTO_EXPOSURE");
+    OFF("OFF");
+
+    val usesQualcommAdrc: Boolean
+        get() = this == QUALCOMM_ADRC
 
     val usesPhotonHdr: Boolean
         get() = this == PHOTON_HDR
 
-    val usesLegacyAutoExposure: Boolean
-        get() = this == LEGACY_AUTO_EXPOSURE
+    val generatesProfileGainTableMap: Boolean
+        get() = usesQualcommAdrc || usesPhotonHdr
 
     companion object {
+        val DEFAULT: RawAdaptiveExposureMode = QUALCOMM_ADRC
+
         fun resolve(
             usePhotonHdr: Boolean,
-            useLegacyAutoExposure: Boolean,
+            useQualcommAdrc: Boolean = false,
         ): RawAdaptiveExposureMode {
-            // Photon HDR wins when reading historical states in which both independent switches
-            // were enabled. Every new write persists one mutually exclusive mode.
             return when {
+                useQualcommAdrc -> QUALCOMM_ADRC
                 usePhotonHdr -> PHOTON_HDR
-                useLegacyAutoExposure -> LEGACY_AUTO_EXPOSURE
                 else -> OFF
             }
         }
 
         fun fromPersistedValue(
             value: String?,
-            usePhotonHdr: Boolean,
-            useLegacyAutoExposure: Boolean,
+            fallback: RawAdaptiveExposureMode = DEFAULT,
         ): RawAdaptiveExposureMode {
-            return entries.firstOrNull { it.persistedValue.equals(value, ignoreCase = true) }
-                ?: when {
-                    usePhotonHdr -> PHOTON_HDR
-                    value.equals("VIEWFINDER_MATCH", ignoreCase = true) -> LEGACY_AUTO_EXPOSURE
-                    value.equals("DYNAMIC_SCENE_ESTIMATION", ignoreCase = true) ->
-                        LEGACY_AUTO_EXPOSURE
-                    useLegacyAutoExposure -> LEGACY_AUTO_EXPOSURE
-                    else -> OFF
-                }
+            if (value == null) return fallback
+            return when {
+                value.equals(QUALCOMM_ADRC.persistedValue, ignoreCase = true) -> QUALCOMM_ADRC
+                value.equals(PHOTON_HDR.persistedValue, ignoreCase = true) ||
+                    value.equals("HDRNET", ignoreCase = true) ||
+                    value.equals("HDR_NET", ignoreCase = true) -> PHOTON_HDR
+                value.equals(OFF.persistedValue, ignoreCase = true) -> OFF
+                else -> fallback
+            }
         }
     }
 }

@@ -2384,8 +2384,6 @@ object GalleryManager {
                     updatedMetadata.customProperties,
                     preparedProfile.hdrRatio,
                     preparedProfile.finalShortGain,
-                    preparedProfile.hdrNetPostExposureEv,
-                    preparedProfile.hdrNetInputExposureEv,
                 ),
             )
 
@@ -2528,8 +2526,6 @@ object GalleryManager {
                     includeHdrReference = updatedMetadata.manualHdrEffectEnabled,
                     photonHdrRatio = preparedProfile.hdrRatio,
                     photonSourceToShortGain = preparedProfile.finalShortGain,
-                    photonHdrNetPostExposureEv = preparedProfile.hdrNetPostExposureEv,
-                    photonHdrNetInputExposureEv = preparedProfile.hdrNetInputExposureEv,
                     rawData = rawBuffer.duplicate(),
                     width = rawWidth,
                     height = rawHeight,
@@ -2627,6 +2623,28 @@ object GalleryManager {
             }
             saveMetadata(context, photoId, updatedMetadata)
             markProcessingPhotoDisplayReady(photoId, photoFile, updatedMetadata, isRawSource = true)
+            if (com.hinnka.mycamera.raw.RawAdrcReplayCapture.isEnabled()) {
+                com.hinnka.mycamera.raw.RawAdrcReplayCapture.captureIfEnabled(
+                    context = context,
+                    captureId = photoId,
+                    captureType = "SINGLE_RAW",
+                    mediaMetadata = updatedMetadata,
+                    rawMetadata = renderMetadata ?: sourceRawMetadata,
+                    dngFile = dngFile,
+                    sdrJpegFile = photoFile,
+                    viewfinderBitmap = dngThumbnail,
+                    rotation = rotation,
+                    viewfinderRotationDegrees = viewfinderPreviewToCaptureRotationDegrees(
+                        rotation,
+                        characteristics,
+                    ),
+                    viewfinderMirroredHorizontally = characteristics.get(
+                        CameraCharacteristics.LENS_FACING,
+                    ) == CameraCharacteristics.LENS_FACING_FRONT,
+                    rendererBaselineExposureEv = preparedProfile.baselineExposureEv,
+                    statsBounds = profileOptions.statsBounds,
+                )
+            }
             val bokehBitmap = renderAndSaveBokehPhoto(context, photoId, updatedMetadata, bitmap)
             val preparedUltraHdrSource = if (updatedMetadata.manualHdrEffectEnabled) {
                 photoProcessor.prepareUltraHdrSourceFromRawResult(
@@ -3691,6 +3709,9 @@ object GalleryManager {
             val rawNoiseReduction = resolveNoiseReduction(updatedMetadata, noiseReductionValue)
             val rawChromaNoiseReduction = updatedMetadata.chromaNoiseReduction
                 ?: ChromaDenoiseDefaults.forRawCapture(chromaNoiseReductionValue)
+            var adrcReplayRawMeta: RawMetadata = rawMetadata
+            var adrcReplayBaselineEv: Float = finalStackResult.baselineExposureEv ?: 0f
+            var adrcReplayStatsBounds: Rect? = null
             val rawResult = try {
                 val imageLayout = SuperResolutionDngWriter.ImageLayout.LINEAR_RAW_RGB
                 val inputSamplesPerPixel = 3
@@ -3755,14 +3776,14 @@ object GalleryManager {
                     PLog.e(TAG, "Failed to prepare shared RAW render/DNG profile")
                     return@withContext
                 }
+                adrcReplayBaselineEv = dngProfilePreparation.baselineExposureEv
+                adrcReplayStatsBounds = profileOptions.statsBounds
                 updatedMetadata = updatedMetadata.copy(
                     customProperties = RawMgcTuningSnr.write(
                         RawPhotonHdrMetadata.write(
                             updatedMetadata.customProperties,
                             dngProfilePreparation.hdrRatio,
                             dngProfilePreparation.finalShortGain,
-                            dngProfilePreparation.hdrNetPostExposureEv,
-                            dngProfilePreparation.hdrNetInputExposureEv,
                         ),
                         sharpen = finalStackResult.mgcSharpenTuningSnr,
                         denoise = finalStackResult.mgcDenoiseTuningSnr,
@@ -3878,6 +3899,9 @@ object GalleryManager {
                 } else {
                     null
                 }
+                if (renderMetadata != null) {
+                    adrcReplayRawMeta = renderMetadata
+                }
                 val embeddedRenderPlan = renderMetadata?.let { preparedMetadata ->
                     SuperResolutionDngWriter.resolveEmbeddedRenderPlan(
                         characteristics = characteristics,
@@ -3900,8 +3924,6 @@ object GalleryManager {
                         includeHdrReference = updatedMetadata.manualHdrEffectEnabled,
                         photonHdrRatio = dngProfilePreparation.hdrRatio,
                         photonSourceToShortGain = dngProfilePreparation.finalShortGain,
-                        photonHdrNetPostExposureEv = dngProfilePreparation.hdrNetPostExposureEv,
-                        photonHdrNetInputExposureEv = dngProfilePreparation.hdrNetInputExposureEv,
                         rawData = null,
                         width = finalStackResult.width,
                         height = finalStackResult.height,
@@ -4097,6 +4119,31 @@ object GalleryManager {
                 if (!jpegExported) {
                     PLog.e(TAG, "Stacked RAW JPEG auto-export failed for photo $photoId")
                 }
+            }
+            if (com.hinnka.mycamera.raw.RawAdrcReplayCapture.isEnabled()) {
+                pendingDngWrite?.let { write ->
+                    runCatching { write.await() }
+                }
+                com.hinnka.mycamera.raw.RawAdrcReplayCapture.captureIfEnabled(
+                    context = context,
+                    captureId = photoId,
+                    captureType = "MULTI_FRAME_RAW",
+                    mediaMetadata = updatedMetadata,
+                    rawMetadata = adrcReplayRawMeta,
+                    dngFile = dngFile,
+                    sdrJpegFile = photoFile,
+                    viewfinderBitmap = capturePreviewThumbnail,
+                    rotation = rotation,
+                    viewfinderRotationDegrees = viewfinderPreviewToCaptureRotationDegrees(
+                        rotation,
+                        characteristics,
+                    ),
+                    viewfinderMirroredHorizontally = characteristics.get(
+                        CameraCharacteristics.LENS_FACING,
+                    ) == CameraCharacteristics.LENS_FACING_FRONT,
+                    rendererBaselineExposureEv = adrcReplayBaselineEv,
+                    statsBounds = adrcReplayStatsBounds,
+                )
             }
             preparedUltraHdrSource?.hdrReference?.bitmap?.let {
                 if (!it.isRecycled) {
@@ -4627,13 +4674,9 @@ object GalleryManager {
             ?: RawSceneExposureMath.FAST_MOMENTS_MAX_HDR_RATIO
         val exposureMode = RawAdaptiveExposureMode.resolve(
             usePhotonHdr = metadata.rawToneMappingParameters.usePhotonHdr,
-            useLegacyAutoExposure = metadata.rawAutoExposure ?: true,
+            useQualcommAdrc = metadata.rawToneMappingParameters.useQualcommAdrc,
         )
-        val generatePhotonPgtm = exposureMode.usesPhotonHdr
-        val scalarViewfinderMatchingEnabled =
-            exposureMode == RawAdaptiveExposureMode.OFF ||
-                (exposureMode.usesLegacyAutoExposure &&
-                    kotlin.math.abs(metadata.rawExposureCompensation ?: 0f) <= 0.0001f)
+        val generatePhotonPgtm = exposureMode.generatesProfileGainTableMap
         val blackBorderDefaultCrop =
             RawDefaultCropOverride.resolveRawBlackBorderDefaultCrop(
                 width = width,
@@ -4648,9 +4691,7 @@ object GalleryManager {
             userCrop = cropRegion,
             metadataDefaultCrop = blackBorderDefaultCrop ?: defaultCrop,
         ).takeUnless { it.hasSameBounds(Rect(0, 0, width, height)) }
-        val captureProfileRequired = generatePhotonPgtm ||
-            (scalarViewfinderMatchingEnabled && capturePreviewThumbnail != null)
-        val captureProfilePreparer = if (captureProfileRequired) {
+        val captureProfilePreparer = if (generatePhotonPgtm) {
             RawDngCaptureProfilePreparer { input ->
                 RawCaptureProfileCoordinator.prepareCaptureProfile(
                     renderer = RawDemosaicProcessor.getInstance(),
@@ -4660,11 +4701,7 @@ object GalleryManager {
                     aspectRatio = aspectRatio,
                     cropRegion = cropRegion,
                     rotation = rotation,
-                    capturePreviewThumbnail = capturePreviewThumbnail,
                     capturePortraitMask = capturePortraitMask,
-                    viewfinderMirroredHorizontally = viewfinderMirroredHorizontally,
-                    viewfinderPreviewToCaptureRotationDegrees =
-                        viewfinderPreviewToCaptureRotationDegrees,
                     statsBounds = statsBounds,
                     rawBlackPointCorrection = metadata.rawBlackPointCorrection ?: 0f,
                     rawWhitePointCorrection = metadata.rawWhitePointCorrection ?: 0f,
@@ -4685,8 +4722,6 @@ object GalleryManager {
             "RAW_ADAPTIVE_EXPOSURE stage=DNG_PREPARE mode=$exposureMode " +
                 "curve=DEFAULT blackBorderDefaultCrop=$blackBorderDefaultCrop " +
                 "photonPgtm=$generatePhotonPgtm processingBounds=$statsBounds " +
-                "scalarViewfinderMatching=$scalarViewfinderMatchingEnabled " +
-                "capturePreview=${capturePreviewThumbnail != null} " +
                 "portraitMask=${capturePortraitMask != null} " +
                 "additionalExposureEv=${metadata.rawExposureCompensation ?: 0f}"
         )
@@ -5832,12 +5867,6 @@ object GalleryManager {
                         rawMetadata.customProperties,
                     ),
                     photonSourceToShortGain = RawPhotonHdrMetadata.readFinalShortGain(
-                        rawMetadata.customProperties,
-                    ),
-                    photonHdrNetPostExposureEv = RawPhotonHdrMetadata.readPostExposureEv(
-                        rawMetadata.customProperties,
-                    ),
-                    photonHdrNetInputExposureEv = RawPhotonHdrMetadata.readInputExposureEv(
                         rawMetadata.customProperties,
                     ),
                     rawCfaCorrectionMode = updatedMetadata?.rawCfaCorrectionMode,

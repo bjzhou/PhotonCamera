@@ -370,6 +370,7 @@ fun SettingsScreen(
     val hdrPlusBracketExposureEnabled by preferenceValue { it.hdrPlusBracketExposureEnabled }
     val hdrPlusLongFrameExposureEv by preferenceValue { it.hdrPlusLongFrameExposureEv }
     val hdrPlusShortFrameExposureEv by preferenceValue { it.hdrPlusShortFrameExposureEv }
+    var rawAdaptiveExposureMode by rememberPreference(UserPreferences::rawAdaptiveExposureMode)
     val mlAeMaxHdrRatio by preferenceValue { it.mlAeMaxHdrRatio }
     val effectiveHdrPlusBracketExposure = hdrPlusMergeMode.supportsBracketExposure &&
         hdrPlusBracketExposureEnabled
@@ -2172,17 +2173,38 @@ fun SettingsScreen(
                             color = Color.White.copy(alpha = 0.1f),
                             modifier = Modifier.padding(vertical = 12.dp)
                         )
-                        SliderSettingItem(
-                            title = stringResource(R.string.settings_ml_ae_max_hdr_ratio),
-                            description = stringResource(R.string.settings_ml_ae_max_hdr_ratio_description),
-                            value = mlAeMaxHdrRatioUi,
-                            valueRange = RawSceneExposureMath.MIN_CONFIGURED_MAX_HDR_RATIO..
-                                RawSceneExposureMath.MAX_CONFIGURED_MAX_HDR_RATIO,
-                            onValueChange = { mlAeMaxHdrRatioUi = (it * 10f).roundToInt() / 10f },
-                            onValueChangeFinished = { preferencesRepository.updateAsync { this.mlAeMaxHdrRatio = mlAeMaxHdrRatioUi } },
-                            resetValue = RawSceneExposureMath.FAST_MOMENTS_MAX_HDR_RATIO,
-                            valueTextFormatter = { String.format(Locale.getDefault(), "%.1f×", it) },
+                        QualityLevelSetting(
+                            title = stringResource(R.string.settings_raw_adaptive_exposure_mode),
+                            description = stringResource(R.string.settings_raw_adaptive_exposure_mode_description),
+                            levels = listOf(
+                                com.hinnka.mycamera.raw.RawAdaptiveExposureMode.QUALCOMM_ADRC to
+                                    stringResource(R.string.settings_raw_adaptive_exposure_mode_qualcomm_adrc),
+                                com.hinnka.mycamera.raw.RawAdaptiveExposureMode.PHOTON_HDR to
+                                    stringResource(R.string.settings_raw_adaptive_exposure_mode_photon_hdr),
+                                com.hinnka.mycamera.raw.RawAdaptiveExposureMode.OFF to
+                                    stringResource(R.string.video_option_off),
+                            ),
+                            currentLevel = rawAdaptiveExposureMode,
+                            onLevelSelected = { rawAdaptiveExposureMode = it },
                         )
+
+                        if (rawAdaptiveExposureMode.usesPhotonHdr) {
+                            HorizontalDivider(
+                                color = Color.White.copy(alpha = 0.1f),
+                                modifier = Modifier.padding(vertical = 12.dp)
+                            )
+                            SliderSettingItem(
+                                title = stringResource(R.string.settings_ml_ae_max_hdr_ratio),
+                                description = stringResource(R.string.settings_ml_ae_max_hdr_ratio_description),
+                                value = mlAeMaxHdrRatioUi,
+                                valueRange = RawSceneExposureMath.MIN_CONFIGURED_MAX_HDR_RATIO..
+                                    RawSceneExposureMath.MAX_CONFIGURED_MAX_HDR_RATIO,
+                                onValueChange = { mlAeMaxHdrRatioUi = (it * 10f).roundToInt() / 10f },
+                                onValueChangeFinished = { preferencesRepository.updateAsync { this.mlAeMaxHdrRatio = mlAeMaxHdrRatioUi } },
+                                resetValue = RawSceneExposureMath.FAST_MOMENTS_MAX_HDR_RATIO,
+                                valueTextFormatter = { String.format(Locale.getDefault(), "%.1f×", it) },
+                            )
+                        }
 
                         HorizontalDivider(
                             color = Color.White.copy(alpha = 0.1f),

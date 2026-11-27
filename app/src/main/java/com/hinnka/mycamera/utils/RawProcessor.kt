@@ -790,16 +790,7 @@ object RawProcessor {
                     .fromCameraCharacteristics(characteristics),
             )
         )
-        val viewfinderExposureOffsetEv = captureProfile?.exposureOffsetEv
-            ?.takeIf { it.isFinite() }
-            ?.coerceIn(
-                com.hinnka.mycamera.raw.MeteringSystem.RAW_EXPOSURE_MIN_EV,
-                com.hinnka.mycamera.raw.MeteringSystem.RAW_EXPOSURE_MAX_EV,
-            )
-        val finalBaselineExposureEv = DngBaselineExposure.resolveCaptureBaseline(
-            sourceBaselineEv = sourceBaselineExposureEv,
-            legacyExposureOffsetEv = viewfinderExposureOffsetEv,
-        )
+        val finalBaselineExposureEv = DngBaselineExposure.sanitize(sourceBaselineExposureEv)
         val profileRequired = options.generatePhotonPgtm
         if (profileRequired && captureProfile?.profileGainTableMap == null) {
             PLog.e(
@@ -820,8 +811,6 @@ object RawProcessor {
             baselineExposureEv = finalBaselineExposureEv,
             hdrRatio = captureProfile?.hdrRatio,
             finalShortGain = captureProfile?.finalShortGain,
-            hdrNetPostExposureEv = captureProfile?.hdrNetPostExposureEv,
-            hdrNetInputExposureEv = captureProfile?.hdrNetInputExposureEv,
             rawSceneExposureSummaryText = captureProfile?.rawSceneExposureSummaryText,
             profileGainTableMap = preparedProfileGainTableMap,
             gpuDemosaicedRawSource = captureProfile?.gpuDemosaicedRawSource,
@@ -830,16 +819,8 @@ object RawProcessor {
                 TAG,
                 "RAW_SCENE_EXPOSURE stage=SHARED_PROFILE_READY " +
                     "enabled=${options.captureProfilePreparer != null} " +
-                    "viewfinderBrightnessMatch=${viewfinderExposureOffsetEv != null} " +
                     "sourceBaselineEv=$sourceBaselineExposureEv " +
                     "sourceBaselineGain=${DngBaselineExposure.exactGain(sourceBaselineExposureEv)} " +
-                    "viewfinderExposureOffsetEv=$viewfinderExposureOffsetEv " +
-                    "baselineExposureSource=" +
-                    "${if (viewfinderExposureOffsetEv != null) {
-                        "SOURCE_PLUS_VIEWFINDER_MATCH"
-                    } else {
-                        "SOURCE_METADATA"
-                    }} " +
                     "finalBaselineEv=${finalProfile.baselineExposureEv} " +
                     "finalBaselineGain=${DngBaselineExposure.exactGain(finalProfile.baselineExposureEv)} " +
                     "pgtm=${finalProfile.profileGainTableMap != null} " +

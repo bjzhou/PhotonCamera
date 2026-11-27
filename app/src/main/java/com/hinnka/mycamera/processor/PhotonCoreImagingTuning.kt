@@ -6,8 +6,6 @@ object PhotonCoreImagingTuning {
     val denoise: PhotonDenoiseTuning = PhotonDenoiseTuning.DEFAULT
     /** Local SNR/contrast curves for the original MGC final sharpening kernel. */
     val sharpen: PhotonSharpenTuning = PhotonSharpenTuning.DEFAULT
-    /** Dehaze + DHA baked into HDRNet's ProfileGainTableMap output. */
-    val dehaze: PhotonDehazeTuning = PhotonDehazeTuning.DEFAULT
 }
 
 /** Controls frame admission and propagated noise behavior in multi-frame fusion. */
@@ -189,39 +187,5 @@ data class PhotonSabreLumaTuningNodes(
         const val SNR_20 = 20f
         const val SNR_40 = 40f
         val DEFAULT = PhotonSabreLumaTuningNodes()
-    }
-}
-
-/**
- * Controls for Dehaze + DHA applied to HDRNet output and baked into its PGTM.
- *
- * [strength] scales the two estimated atmospheric haze points before curve construction.
- * [dynamicHighlightStrength] controls how much of the histogram-derived highlight scale is used;
- * zero preserves the original white scale and one applies the complete dynamic adjustment.
- */
-data class PhotonDehazeTuning(
-    val enabled: Boolean = true,
-    val strength: Float = 1f,
-    val dynamicHighlightStrength: Float = 1f,
-) {
-    fun normalized(): PhotonDehazeTuning = copy(
-        strength = strength
-            .takeIf(Float::isFinite)
-            ?.coerceIn(0f, 4f)
-            ?: 1f,
-        dynamicHighlightStrength = dynamicHighlightStrength
-            .takeIf(Float::isFinite)
-            ?.coerceIn(0f, 1f)
-            ?: 1f,
-    )
-
-    val isActive: Boolean
-        get() = normalized().let {
-            it.enabled && (it.strength > 0f || it.dynamicHighlightStrength > 0f)
-        }
-
-    companion object {
-        val DEFAULT = PhotonDehazeTuning()
-        val DISABLED = PhotonDehazeTuning(enabled = false)
     }
 }

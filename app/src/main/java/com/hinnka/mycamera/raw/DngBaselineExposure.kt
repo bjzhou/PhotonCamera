@@ -12,20 +12,4 @@ object DngBaselineExposure {
     fun exactGain(ev: Float): Float {
         return 2.0f.pow(sanitize(ev)).coerceIn(1e-6f, 65536f)
     }
-
-    /**
-     * Resolves ownership of the BaselineExposure written for a captured RAW.
-     *
-     * [sourceBaselineEv] preserves source-domain normalization such as a multi-frame stack that
-     * was normalized to its ultra-short frame. The viewfinder matcher returns the display exposure
-     * offset relative to that source baseline for both the unmapped and Local Tone Mapping paths.
-     * HDRNet uses the written source baseline as its reproducible global-exposure anchor.
-     */
-    fun resolveCaptureBaseline(
-        sourceBaselineEv: Float,
-        legacyExposureOffsetEv: Float?,
-    ): Float {
-        val offset = legacyExposureOffsetEv?.takeIf(Float::isFinite) ?: 0f
-        return sanitize(sourceBaselineEv + offset)
-    }
 }
