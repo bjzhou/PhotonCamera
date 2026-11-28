@@ -1685,7 +1685,7 @@ class RawDemosaicProcessor {
      * @param dngFilePath DNG 文件路径
      * @param aspectRatio 目标宽高比
      * @param cropRegion 可选裁切区域（在 RAW 纹理空间）
-     * @param sharpeningValue 锐化强度 (0.0-1.0)
+     * @param sharpeningValue 锐化强度，范围见 [RawSharpeningDefaults.valueRange]
      * @return 处理后的 Bitmap，失败返回 null
      */
     suspend fun process(
@@ -1705,7 +1705,7 @@ class RawDemosaicProcessor {
         rawCustomBlackLevel: Float? = null,
         rawWhiteLevelMode: String? = null,
         rawCustomWhiteLevel: Float? = null,
-        sharpeningValue: Float = 0f,
+        sharpeningValue: Float = RawSharpeningDefaults.DEFAULT_STRENGTH,
         denoiseValue: Float? = null,
         chromaDenoiseValue: Float? = null,
         rawDcpId: String? = null,
@@ -1809,7 +1809,7 @@ class RawDemosaicProcessor {
         rawBlackPointCorrection: Float = 0f,
         rawWhitePointCorrection: Float = 0f,
         applyLensShadingCorrection: Boolean = true,
-        sharpeningValue: Float = 0f,
+        sharpeningValue: Float = RawSharpeningDefaults.DEFAULT_STRENGTH,
         denoiseValue: Float? = null,
         chromaDenoiseValue: Float? = null,
         rawDcpId: String? = null,
@@ -1958,7 +1958,7 @@ class RawDemosaicProcessor {
         rawCustomBlackLevel: Float? = null,
         rawWhiteLevelMode: String? = null,
         rawCustomWhiteLevel: Float? = null,
-        sharpeningValue: Float = 0f,
+        sharpeningValue: Float = RawSharpeningDefaults.DEFAULT_STRENGTH,
         processLocalMgcSharpenTuningSnr: Float? = null,
         processLocalMgcSharpenAttenuationScale: Float? = null,
         denoiseValue: Float? = null,
@@ -2076,7 +2076,7 @@ class RawDemosaicProcessor {
         rawCustomBlackLevel: Float? = null,
         rawWhiteLevelMode: String? = null,
         rawCustomWhiteLevel: Float? = null,
-        sharpeningValue: Float = 0f,
+        sharpeningValue: Float = RawSharpeningDefaults.DEFAULT_STRENGTH,
         denoiseValue: Float? = null,
         chromaDenoiseValue: Float? = null,
         rawDcpId: String? = null,
@@ -7433,18 +7433,16 @@ class RawDemosaicProcessor {
         inputTextureId: Int,
         stackCompletionTimeline: GpuStackCompletionTimeline? = null,
     ) {
-        val sliderValue = RawSharpeningDefaults.normalize(sharpeningValue)
-        val algorithmStrength = RawSharpeningDefaults.toMgcStrength(sliderValue)
-        val runtimeAttenuation = metadata.mgcSharpenAttenuationScale?.also { attenuation ->
-            check(attenuation.isFinite() && attenuation >= 0f) {
-                "MGC sharpen attenuation is invalid: $attenuation"
-            }
-        } ?: 1f
-        val effectiveStrength = algorithmStrength * runtimeAttenuation
-        if (effectiveStrength <= 0f && !mgcSharpen.guided.isPrepared) {
+        val curveStrength = RawSharpeningDefaults.normalize(sharpeningValue)
+        if (curveStrength == 0f && !mgcSharpen.guided.isPrepared) {
             renderSharpenPass(metadata, 0f, inputTextureId)
             return
         }
+        val haloSuppression = metadata.mgcSharpenAttenuationScale?.also { attenuation ->
+            check(attenuation.isFinite() && attenuation >= 0f) {
+                "MGC sharpen halo bound is invalid: $attenuation"
+            }
+        } ?: 1f
         val snr = checkNotNull(metadata.mgcSharpenTuningSnr) { "MGC finish tuning was not prepared" }
         check(snr.isFinite() && snr >= 0f) { "MGC sharpen reference SNR is invalid: $snr" }
         check(inputTextureId == combinedTextureId) { "MGC sharpen requires the encoded combined output" }
@@ -7457,7 +7455,8 @@ class RawDemosaicProcessor {
             width = metadata.width,
             height = metadata.height,
             snr = snr,
-            attenuation = effectiveStrength,
+            curveStrength = curveStrength,
+            haloSuppression = haloSuppression,
         )
     }
 

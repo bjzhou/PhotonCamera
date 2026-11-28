@@ -8,17 +8,24 @@ internal class MgcSharpen {
     val guided = MgcGuidedUpsample()
     private val sharpen = GlesMgcSharpen()
 
-    fun render(sourceTexture: Int, targetTexture: Int, width: Int, height: Int,
-               snr: Float, attenuation: Float,
-               tuning: PhotonSharpenTuning = PhotonCoreImagingTuning.sharpen) {
+    fun render(
+        sourceTexture: Int,
+        targetTexture: Int,
+        width: Int,
+        height: Int,
+        snr: Float,
+        curveStrength: Float,
+        haloSuppression: Float,
+        tuning: PhotonSharpenTuning = PhotonCoreImagingTuning.sharpen,
+    ) {
         require(width > 0 && height > 0 && snr.isFinite() && snr >= 0f)
-        require(attenuation.isFinite() && attenuation >= 0f)
-        val curves = MgcSharpenCurveBuilder.build(snr, tuning)
+        require(haloSuppression.isFinite() && haloSuppression >= 0f)
+        val curves = MgcSharpenCurveBuilder.build(snr, tuning, curveStrength)
         if (guided.isPrepared) {
-            guided.render(sourceTexture, targetTexture, width, height, attenuation, curves.points)
+            guided.render(sourceTexture, targetTexture, width, height, haloSuppression, curves.points)
             return
         }
-        sharpen.render(sourceTexture, targetTexture, width, height, curves.points, attenuation)
+        sharpen.render(sourceTexture, targetTexture, width, height, curves.points, haloSuppression)
     }
 
     fun releaseBuffers() {

@@ -2,6 +2,7 @@ package com.hinnka.mycamera.model
 
 import androidx.annotation.Keep
 import com.google.gson.Gson
+import com.google.gson.annotations.SerializedName
 import com.hinnka.mycamera.camera.AspectRatio
 import com.hinnka.mycamera.raw.HncsFilmCurveMode
 import com.hinnka.mycamera.raw.HncsRenderIntent
@@ -33,6 +34,7 @@ data class CameraPreset(
     val rawHncsRenderIntent: String = HncsRenderIntent.Standard.assetValue,
     val rawHncsFilmCurveMode: String = HncsFilmCurveMode.Standard.persistedValue,
     val rawRenderingEngine: String = RawRenderingEngine.AdobeCurve.name,
+    @SerializedName(CameraPresetJsonCodec.RAW_SHARPENING_KEY)
     val rawMaxSharpening: Float = RawSharpeningDefaults.DEFAULT_STRENGTH,
     val rawMaxNoiseReduction: Float = RawDenoiseDefaults.RAW_MAX_LUMA_STRENGTH,
     val rawMaxChromaNoiseReduction: Float = RawDenoiseDefaults.RAW_MAX_CHROMA_STRENGTH,

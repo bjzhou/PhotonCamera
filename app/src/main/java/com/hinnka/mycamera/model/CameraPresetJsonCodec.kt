@@ -20,6 +20,8 @@ import com.hinnka.mycamera.raw.RawToneMappingParameters
  * Unknown fields are ignored and missing fields use current defaults.
  */
 internal object CameraPresetJsonCodec {
+    const val RAW_SHARPENING_KEY = "rawSharpeningCurveAmount"
+
     fun fromJson(json: String): CameraPreset? {
         if (json.isBlank()) return null
         return runCatching {
@@ -66,7 +68,7 @@ internal object CameraPresetJsonCodec {
                 obj.stringOrNull("rawRenderingEngine") ?: obj.stringOrNull("rawColorEngine")
             ),
             rawMaxSharpening = RawSharpeningDefaults.normalize(
-                obj.float("rawMaxSharpening", RawSharpeningDefaults.DEFAULT_STRENGTH)
+                obj.float(RAW_SHARPENING_KEY, RawSharpeningDefaults.DEFAULT_STRENGTH)
             ),
             rawMaxNoiseReduction = RawDenoiseDefaults.normalize(
                 obj.float("rawMaxNoiseReduction", RawDenoiseDefaults.RAW_MAX_LUMA_STRENGTH)

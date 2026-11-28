@@ -845,7 +845,7 @@ internal object PreferenceKeys {
     val RAW_WHITE_LEVEL_MODES_KEY = stringPreferencesKey("raw_white_level_modes")
     val RAW_CUSTOM_WHITE_LEVELS_KEY = stringPreferencesKey("raw_custom_white_levels")
     val RAW_CFA_CORRECTION_MODES_KEY = stringPreferencesKey("raw_cfa_correction_modes")
-    val RAW_MAX_SHARPENING_KEY = floatPreferencesKey("raw_max_sharpening")
+    val RAW_MAX_SHARPENING_KEY = floatPreferencesKey("raw_sharpening_curve_amount")
     val RAW_MAX_NOISE_REDUCTION_KEY = floatPreferencesKey("raw_max_noise_reduction")
     val RAW_MAX_CHROMA_NOISE_REDUCTION_KEY = floatPreferencesKey("raw_max_chroma_noise_reduction")
     val GRID_STYLE = stringPreferencesKey("grid_style")

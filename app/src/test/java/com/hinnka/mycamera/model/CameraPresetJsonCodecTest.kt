@@ -207,13 +207,14 @@ class CameraPresetJsonCodecTest {
     }
 
     @Test
-    fun fromJson_ignoresRemovedStandaloneRawDetailFields() {
+    fun fromJson_ignoresLegacyRawDetailFields() {
         val preset = CameraPreset.fromJson(
             """
             {
               "id": "preset_legacy_raw_detail",
               "name": "Legacy RAW Detail",
               "rawSharpening": 0.1,
+              "rawMaxSharpening": 0.7,
               "rawNoiseReduction": 0.2,
               "rawChromaNoiseReduction": 0.3
             }
@@ -221,7 +222,7 @@ class CameraPresetJsonCodecTest {
         )
 
         requireNotNull(preset)
-        assertEquals(0.4f, preset.rawMaxSharpening, 0.0001f)
+        assertEquals(1f, preset.rawMaxSharpening, 0f)
         assertEquals(RawDenoiseDefaults.RAW_MAX_LUMA_STRENGTH, preset.rawMaxNoiseReduction, 0f)
         assertEquals(
             RawDenoiseDefaults.RAW_MAX_CHROMA_STRENGTH,
@@ -230,6 +231,7 @@ class CameraPresetJsonCodecTest {
         )
         val json = preset.toJson()
         assertFalse(json.contains("\"rawSharpening\""))
+        assertFalse(json.contains("\"rawMaxSharpening\""))
         assertFalse(json.contains("\"rawNoiseReduction\""))
         assertFalse(json.contains("\"rawChromaNoiseReduction\""))
     }
@@ -351,7 +353,7 @@ class CameraPresetJsonCodecTest {
         assertEquals(RawRenderingEngine.AdobeCurve.name, preset.rawRenderingEngine)
         assertEquals(AspectRatio.RATIO_4_3.name, preset.aspectRatio)
         assertFalse(preset.ultraHdrGainMapEnabled)
-        assertEquals(0.4f, preset.rawMaxSharpening, 0.0001f)
+        assertEquals(1f, preset.rawMaxSharpening, 0f)
         assertEquals(
             RawDenoiseDefaults.RAW_MAX_LUMA_STRENGTH,
             preset.rawMaxNoiseReduction,

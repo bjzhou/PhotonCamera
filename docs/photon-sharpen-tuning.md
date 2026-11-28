@@ -2,10 +2,10 @@
 
 本地入口：`PhotonCoreImagingTuning.sharpen`。默认表定义在
 `processor/PhotonSharpenTuning.kt`，通过 `raw/MgcSharpenCurveBuilder.kt` 构造五点曲线，
-经 JNI 传入原版 `GuidedUpsampleS16To16BitHalide`（无重建输入时为直接 `SharpenTo16BitHalide`）。
-不增加持久化读写或设置界面。
+传入 GLES 引导重建和锐化内核。无需引导重建时使用独立锐化内核。
 
-默认值保持此前 MGC 通用锐化曲线的结果。
+默认曲线基于 MGC 通用表。第一频段的 `lowContrastInput` 在所有 SNR 节点均为 `0.008`，
+让曲线从更低的局部对比度开始过渡到主要增强段。
 RAISR/Polysharp 和降噪参数不属于这张锐化表。
 
 用户输出倍率在 `RawOutputPass` 中执行：原生融合 → 原生降噪 → 低频颜色处理 →
@@ -17,7 +17,7 @@ GuidedUpsample（含锐化）恢复原生网格 → Lanczos-3 放大并裁切／
 的较大比值作为 scale，将 (0.9,1.1) 归一为 1，再计算
 `level = ceil(log2f(4/scale)) > 1 ? 2 : 1`，倍率为 `1 << level`。
 因此原生宽 4000、1× 输出时颜色分支宽约 1000；2× 输出时约 2000。
-`MgcFinishResolution.kt` 独立管理该策略；JNI、guide、Filmic box 和 tile 相位使用同一个倍率。
+`MgcFinishResolution.kt` 独立管理该策略。Guide、Filmic box 和 tile 相位使用同一个倍率。
 完整地址证据和原二进制对照见 [GuidedUpsample 复核](research/mgc-guided-upsample-integration.md)。
 
 缺失 SNR 时沿用原版 EstimateSnr 的公式；没有可测 mean 和 MGC unapplied gain 时，
@@ -95,11 +95,11 @@ sharp_big=.9 的曲线作用；Sabre selector=0 最终钳为1，选第一套表�
 
 | 参考帧 SNR | lowContrastInput | lowContrastGain | mainContrastGain |
 | --- | --- | --- | --- |
-| 5 | `.05 / .03 / .02` | `1 / 1 / 1` | `1.6 / 1.8 / 1.2` |
-| 10 | `.05 / .03 / .02` | `1.25 / 1.1 / 1` | `2.5 / 2.2 / 1.3` |
-| 20 | `.05 / .03 / .02` | `1.6 / 1.3 / 1` | `3.2 / 2.6 / 1.4` |
-| 40 | `.02 / .02 / .02` | `2.6 / 1.05 / 1` | `5.2 / 2.1 / 1.4` |
-| 80 | `.02 / .02 / .02` | `2.35 / 1.05 / 1` | `4.7 / 2.1 / 1.4` |
+| 5 | `.008 / .03 / .02` | `1 / 1 / 1` | `1.6 / 1.8 / 1.2` |
+| 10 | `.008 / .03 / .02` | `1.25 / 1.1 / 1` | `2.5 / 2.2 / 1.3` |
+| 20 | `.008 / .03 / .02` | `1.6 / 1.3 / 1` | `3.2 / 2.6 / 1.4` |
+| 40 | `.008 / .02 / .02` | `2.6 / 1.05 / 1` | `5.2 / 2.1 / 1.4` |
+| 80 | `.008 / .02 / .02` | `2.35 / 1.05 / 1` | `4.7 / 2.1 / 1.4` |
 
 所有节点的 `mainContrastInput=1`、`highContrastInput=2`、`highContrastGain=1`、`tailSpan=1`。
 节点可增删，但必须保持 SNR 递增；只有一个节点时，对所有 SNR 使用该曲线。
@@ -116,18 +116,13 @@ P3 = (highContrastInput, highContrastInput × highContrastGain)
 P4 = (P3.x + tailSpan,   P3.y + tailSpan)
 ```
 
-先在相邻 SNR 节点的五点坐标之间插值，再对 y 应用该频段的 `amount`。
+先在相邻 SNR 节点的五点坐标之间插值，再对 y 应用 `y′ = x + (y − x) × amount × 滑杆值`。
 禁止把 amount 乘到 SNR 插值系数上；这样会错误地改变噪声适配，且在端点失去作用。
 也不直接插值增益：当两个节点的 x 不同时，“先插值增益再乘 x”不是相同曲线。
 
-内核仍单独接收既有的 `用户滑杆映射强度 × runtimeAttenuation`。
-MGC 滑杆映射为 `normalize(value) / 0.4`：`0 → 0`、默认 `0.4 → 1`、`1 → 2.5`。
-因此默认位置不额外缩放原版运行时强度；若 runtimeAttenuation 不为1，最终仍保留原版衰减。
-缺少参考 SNR 时先按原版 EstimateSnr 补齐输入，不再切换到 GLES USM。
-这个输入与曲线参数分别生效，不能不经验证就把两者乘积宣称为最终锐化倍数。
-将所有 amount 设为 0 只让曲线恒等，仍会经过内核和 RGB/YUV 数值域转换；
-已经准备低分辨率输入时，用户锐化强度为 0 仍通过 GuidedUpsample 重建，不能绕过重建。
-格式、上游和验证见 [GuidedUpsample 接入](research/mgc-guided-upsample-integration.md)。
+滑杆范围为 0 到 2，默认 1。0 使曲线成为恒等响应，1 应用设定的三频段曲线，2 将曲线相对恒等线的偏移加倍。
+内核单独接收 `haloSuppression`，用于 5×5 邻域的过冲限幅。Photon 沿用既有的合成元数据值，缺省为 1。
+已经准备低分辨率输入时，锐化强度为 0 仍执行 GuidedUpsample 重建。独立锐化路径在强度为 0 时直接复制输入。
 
 ## 本地调节示例
 
@@ -152,5 +147,4 @@ val sharpen = PhotonSharpenTuning.DEFAULT.copy(
 - 原来混杂在 `sharp_depth_1/2` 中的影响改为显式控制点、增益及 tailSpan，不保留一项同时修改多处无关常数的接口。
 - AGC Sabre 表需要独立填写其实际节点和曲线。不能把 `sharp_mini=10` 直接称作全局增强10倍。
 - `sharp_legibility` 属于降噪参数构造，RAISR/Polysharp 属于另外阶段，均不在本表中。
-- 当前 MGC AOT 使用 Photon 编码 RGBA16F 转来的 U12 YUV。参数曲线可以对齐，不能因此保证整个 AGC 成片逐像素一致。
-- 没有参考 SNR 的 GPU 来源仍走原有 USM 回退，不应用这张 MGC 参数表，并记录回退原因。
+- 当前 GLES 内核在 Photon 编码 RGBA16F 上运行浮点锐化。V25 的原版内核使用定点运算。

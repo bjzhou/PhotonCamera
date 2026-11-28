@@ -2330,7 +2330,7 @@ fun SettingsScreen(
                                 R.string.settings_raw_max_default_sharpening_description
                             ),
                             value = rawMaxSharpeningUi,
-                            valueRange = 0f..1f,
+                            valueRange = RawSharpeningDefaults.valueRange,
                             resetValue = RawSharpeningDefaults.DEFAULT_STRENGTH,
                             onValueChange = {
                                 isRawSliderAdjusting = true

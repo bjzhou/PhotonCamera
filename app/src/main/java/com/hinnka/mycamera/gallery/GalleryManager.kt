@@ -5632,10 +5632,12 @@ object GalleryManager {
                         }
                     }
 
+                    val rawSharpening = metadata.sharpening ?: RawSharpeningDefaults.DEFAULT_STRENGTH
                     var updatedMetadata: MediaMetadata = metadata
                         .withImportedRawToneMapPreference(context, isDng, dngFile)
                         .let { rawMetadata ->
                             rawMetadata.copy(
+                                sharpening = rawSharpening,
                                 chromaNoiseReduction = rawMetadata.chromaNoiseReduction
                                     ?: ChromaDenoiseDefaults.RAW_CAPTURE_DEFAULT_STRENGTH
                             )
@@ -5665,7 +5667,7 @@ object GalleryManager {
                             rawCustomBlackLevel = updatedMetadata.rawCustomBlackLevel,
                             rawWhiteLevelMode = updatedMetadata.rawWhiteLevelMode,
                             rawCustomWhiteLevel = updatedMetadata.rawCustomWhiteLevel,
-                            sharpeningValue = RawSharpeningDefaults.DEFAULT_STRENGTH,
+                            sharpeningValue = rawSharpening,
                             denoiseValue = rawNoiseReduction,
                             chromaDenoiseValue = rawChromaNoiseReduction,
                             rawDcpId = updatedMetadata.rawDcpId,

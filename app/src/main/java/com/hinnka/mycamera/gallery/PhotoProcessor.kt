@@ -33,6 +33,7 @@ import com.hinnka.mycamera.raw.RawMetadata
 import com.hinnka.mycamera.raw.RawPhotonHdrMetadata
 import com.hinnka.mycamera.raw.RawMgcTuningSnr
 import com.hinnka.mycamera.raw.RawNoiseProfileManager
+import com.hinnka.mycamera.raw.RawSharpeningDefaults
 import com.hinnka.mycamera.utils.BitmapUtils
 import com.hinnka.mycamera.raw.fotufilm.FotufilmDocumentStorage
 import com.hinnka.mycamera.utils.PLog
@@ -237,7 +238,7 @@ class PhotoProcessor(
         context: Context,
         photoId: String,
         metadata: MediaMetadata,
-        sharpening: Float = 0f,
+        sharpening: Float? = null,
         noiseReduction: Float = 0f,
         chromaNoiseReduction: Float = 0f
     ): GainmapSourceSet? {
@@ -254,7 +255,7 @@ class PhotoProcessor(
                 photoId = photoId,
                 dngPath = dngFile.absolutePath,
                 metadata = metadata,
-                sharpening = sharpening,
+                sharpening = sharpening ?: RawSharpeningDefaults.DEFAULT_STRENGTH,
                 noiseReduction = noiseReduction,
                 chromaNoiseReduction = chromaNoiseReduction
             )
@@ -288,7 +289,7 @@ class PhotoProcessor(
                     context, photoId, aiFile, resolveNoiseReduction(metadata, 0f), 0f, metadata.iso
                 ) ?: BitmapFactory.decodeFile(aiFile.absolutePath)
                 if (bitmap != null) {
-                    val finalSharpening = metadata.sharpening ?: (if (metadata.isImported) 0f else sharpening)
+                    val finalSharpening = metadata.sharpening ?: if (metadata.isImported) 0f else sharpening ?: 0f
 
                     var lutLuminanceGainBitmap: Bitmap? = null
                     val sdrBitmap = processBitmap(
@@ -335,7 +336,7 @@ class PhotoProcessor(
             GalleryManager.getOriginalImageFile(context, photoId)
         }
         val sdrBitmap = fallbackFile?.let { file ->
-            processBitmapSource(context, photoId, file, metadata, sharpening, applyFrameWatermark = false) {
+            processBitmapSource(context, photoId, file, metadata, sharpening ?: 0f, applyFrameWatermark = false) {
                 if (metadata.hasAiDenoisedBase) BitmapFactory.decodeFile(file.absolutePath)
                 else GalleryManager.loadOriginalBitmap(context, photoId)
             }
@@ -634,7 +635,7 @@ class PhotoProcessor(
 
     suspend fun process(
         context: Context, photoId: String, metadata: MediaMetadata,
-        sharpening: Float = 0f,
+        sharpening: Float? = null,
         noiseReduction: Float = 0f,
         chromaNoiseReduction: Float = 0f,
         onRawMetadata: ((RawMetadata) -> Unit)? = null
@@ -644,7 +645,7 @@ class PhotoProcessor(
         if (metadata.hasAiDenoisedBase) {
             val aiFile = GalleryManager.getAiDenoiseFile(context, photoId)
             if (aiFile.exists()) {
-                return processBitmapSource(context, photoId, aiFile, metadata, sharpening) {
+                return processBitmapSource(context, photoId, aiFile, metadata, sharpening ?: 0f) {
                     GalleryManager.loadBitmap(context, Uri.fromFile(aiFile))
                 }
             }
@@ -657,14 +658,14 @@ class PhotoProcessor(
                 photoId,
                 dngFile.absolutePath,
                 metadata,
-                sharpening,
+                sharpening ?: RawSharpeningDefaults.DEFAULT_STRENGTH,
                 noiseReduction,
                 chromaNoiseReduction,
                 onRawMetadata
             )
         } else {
             val originalFile = GalleryManager.getOriginalImageFile(context, photoId) ?: return null
-            return processBitmapSource(context, photoId, originalFile, metadata, sharpening) {
+            return processBitmapSource(context, photoId, originalFile, metadata, sharpening ?: 0f) {
                 GalleryManager.loadOriginalBitmap(context, photoId)
             }
         }
@@ -712,11 +713,12 @@ class PhotoProcessor(
         photoId: String?,
         dngPath: String,
         metadata: MediaMetadata,
-        sharpening: Float = 0f,
+        sharpening: Float,
         noiseReduction: Float = 0f,
         chromaNoiseReduction: Float = 0f
     ): GainmapSourceSet? = withContext(Dispatchers.IO) {
-        val rawSharpening = metadata.sharpening ?: (if (metadata.isImported) 0f else sharpening)
+        val rawSharpening = metadata.sharpening
+            ?: if (metadata.isImported) RawSharpeningDefaults.DEFAULT_STRENGTH else sharpening
         val rawNoiseReduction = resolveNoiseReduction(metadata, noiseReduction)
         val rawChromaNoiseReduction = resolveChromaNoiseReduction(metadata, chromaNoiseReduction)
         val rawResult = RawDemosaicProcessor.getInstance().processForHdrSources(
@@ -870,16 +872,15 @@ class PhotoProcessor(
         photoId: String?,
         dngPath: String,
         metadata: MediaMetadata,
-        sharpening: Float = 0f,
+        sharpening: Float = RawSharpeningDefaults.DEFAULT_STRENGTH,
         noiseReduction: Float = 0f,
         chromaNoiseReduction: Float = 0f,
         onRawMetadata: ((RawMetadata) -> Unit)? = null
     ): Bitmap? = withContext(Dispatchers.IO) {
         var result: Bitmap?
 
-        // 优先从元数据中获取软件处理参数
-        // 智能回退：如果是导入的照片且元数据中没存过，则默认值为 0，不应用额外处理
-        val finalSharpening = metadata.sharpening ?: (if (metadata.isImported) 0f else sharpening)
+        val finalSharpening = metadata.sharpening
+            ?: if (metadata.isImported) RawSharpeningDefaults.DEFAULT_STRENGTH else sharpening
         val finalNoiseReduction = resolveNoiseReduction(metadata, noiseReduction)
         val finalChromaNoiseReduction = resolveChromaNoiseReduction(metadata, chromaNoiseReduction)
 

@@ -44,12 +44,11 @@ responseOffset `0.9375`、噪声谱初值 `0.5`，以及 dl/dm/dh 的 strength/r
 
 ## 锐化与除雾
 
-具备参考帧 SNR 的 RAW 使用 MGC 9.6 原版
-`SharpenTo16BitHalide`。`PhotonCoreImagingTuning.sharpen` 提供本地 SNR 节点、三频段增强倍率
-及显式对比度控制点，默认值等效于原 `sharpen_default.binarypb` 曲线；参数含义、完整默认表及
-公式见 [Photon 锐化参数表](photon-sharpen-tuning.md)。用户 sharpening 滑杆与融合 attenuation
-继续控制内核外层强度。锐化选择曲线使用参考帧 SNR，降噪使用融合后 SNR，两者不可混用。
-没有参考帧统计且无法访问原始 RAW 的其他 GPU 来源保留 GLES USM，并记录原因。
+RAW 使用 `SharpenTo16Bit` 和 `GuidedUpsample` 的 GLES 实现。
+`PhotonCoreImagingTuning.sharpen` 提供本地 SNR 节点、三频段增强倍率及显式对比度控制点。
+默认值源自 `sharpen_default.binarypb`，第一频段的低对比度拐点设为 `0.008`。
+用户滑杆缩放曲线增益，内核单独处理光晕限幅。参数含义、完整默认表及公式见 [Photon 锐化参数表](photon-sharpen-tuning.md)。
+锐化选择曲线使用参考帧 SNR，合成后的降噪使用融合后 SNR。
 HDRNet Dehaze/DHA 继续使用本地默认值。完整链路见
 [Photon HDRNet Dehaze + DHA 链路](photon-dehaze-pipeline.md)。
 

@@ -15,8 +15,9 @@ internal object MgcSharpenCurveBuilder {
             get() = (0..2).map { points[17 + 5 * it] / points[2 + 5 * it] }
     }
 
-    fun build(snr: Float, tuning: PhotonSharpenTuning): Selection {
+    fun build(snr: Float, tuning: PhotonSharpenTuning, curveStrength: Float = 1f): Selection {
         require(snr.isFinite() && snr >= 0f)
+        require(curveStrength in RawSharpeningDefaults.valueRange)
         val nodes = tuning.nodes
         // Revalidate the list at the boundary: callers may have supplied a mutable List.
         require(nodes.isNotEmpty() && nodes.zipWithNext().all { (a, b) -> a.snr < b.snr })
@@ -31,7 +32,7 @@ internal object MgcSharpenCurveBuilder {
         for (band in 0..2) {
             val a = points(lower[band])
             val b = points(upper[band])
-            val amount = tuning.amount[band]
+            val amount = tuning.amount[band] * curveStrength
             for (point in 0..4) {
                 // Interpolate actual x/y points, never gains or an amount-scaled SNR fraction.
                 val x = a[point] * (1f - t) + b[point] * t

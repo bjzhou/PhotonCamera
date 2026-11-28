@@ -39,12 +39,14 @@ class MgcSharpenCurveBuilderTest {
     }
 
     @Test
-    fun defaultSnr20PreservesOriginalNativeCurveAndHalideLayout() {
-        val actual = MgcSharpenCurveBuilder.build(20f, PhotonSharpenTuning.DEFAULT)
-        // Original MGC generic SNR20 five-point curves, x blocks followed by y blocks.
+    fun defaultFineKneePreservesHalideLayoutAtSnr20() {
+        val tuning = PhotonSharpenTuning.DEFAULT
+        assertEquals(List(tuning.nodes.size) { .008f }, tuning.nodes.map { it.band0.lowContrastInput })
+        val actual = MgcSharpenCurveBuilder.build(20f, tuning)
+        // Five-point curves with the x blocks followed by the y blocks.
         val expected = floatArrayOf(
-            0f, .05f, 1f, 2f, 3f, 0f, .03f, 1f, 2f, 3f, 0f, .02f, 1f, 2f, 3f,
-            0f, .05f * 1.6f, 3.2f, 2f, 3f,
+            0f, .008f, 1f, 2f, 3f, 0f, .03f, 1f, 2f, 3f, 0f, .02f, 1f, 2f, 3f,
+            0f, .008f * 1.6f, 3.2f, 2f, 3f,
             0f, .03f * 1.3f, 2.6f, 2f, 3f,
             0f, .02f, 1.4f, 2f, 3f,
         )
@@ -57,8 +59,9 @@ class MgcSharpenCurveBuilderTest {
         assertEquals(20f, selected.lowerSnr, 0f)
         assertEquals(40f, selected.upperSnr, 0f)
         assertEquals(.5f, selected.interpolation, 0f)
-        assertEquals(.035f, selected.points[1], 1e-8f)
-        assertEquals(.066f, selected.points[16], 1e-8f)
+        // Band 1 has different knot positions at SNR 20 and 40.
+        assertEquals(.025f, selected.points[6], 1e-8f)
+        assertEquals(.030f, selected.points[21], 1e-8f)
         assertEquals(4.2f, selected.points[17], 1e-6f)
     }
 

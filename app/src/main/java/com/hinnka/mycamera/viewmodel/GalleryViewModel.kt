@@ -61,6 +61,7 @@ import com.hinnka.mycamera.raw.RawAdaptiveExposureMode
 import com.hinnka.mycamera.raw.RawRenderingEngine
 import com.hinnka.mycamera.raw.RawProfileToneMapMode
 import com.hinnka.mycamera.raw.RawProcessingPreferences
+import com.hinnka.mycamera.raw.RawSharpeningDefaults
 import com.hinnka.mycamera.raw.RawToneMappingParameters
 import com.hinnka.mycamera.raw.RawWhiteLevelCorrection
 import com.hinnka.mycamera.raw.SpectralFilmSelection
@@ -2115,6 +2116,11 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
         isEditing = true
         editSyncAdjustmentsToLut = false
         publishEditLook(restoreEditLook(currentMediaMetadata), targetPhoto.isVideo)
+        val defaultSharpening = if (isRawMedia(targetPhoto) && currentMediaMetadata?.hasAiDenoisedBase != true) {
+            RawSharpeningDefaults.DEFAULT_STRENGTH
+        } else {
+            0f
+        }
         // 从当前元数据恢复编辑状态
         currentMediaMetadata?.let { metadata ->
             editFrameId.value = metadata.frameId
@@ -2139,7 +2145,7 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
                     PostEditGeometry.normalizeStraightenDegrees(metadata.postStraightenDegrees)
                 editMirrorHorizontal.value = metadata.postMirrorHorizontal
                 restoreCropEditState(targetPhoto, metadata)
-                editSharpening.value = metadata.sharpening ?: 0f
+                editSharpening.value = metadata.sharpening ?: defaultSharpening
                 editNoiseReduction.value = DenoiseStrength.clamp(
                     metadata.noiseReduction
                 )
@@ -2170,7 +2176,7 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
             editApplyEffectsToVideo.value = false
             
             if (!targetPhoto.isVideo) {
-                editSharpening.value = 0f
+                editSharpening.value = defaultSharpening
                 editNoiseReduction.value = 0f
                 editChromaNoiseReduction.value = 0f
                 editRawExposureCompensation.value = 0f

@@ -416,7 +416,7 @@ fun PresetEditorScreen(
                         R.string.settings_raw_max_default_sharpening_description
                     ),
                     value = rawMaxSharpening,
-                    valueRange = 0f..1f,
+                    valueRange = RawSharpeningDefaults.valueRange,
                     resetValue = RawSharpeningDefaults.DEFAULT_STRENGTH,
                     onValueChange = { rawMaxSharpening = it },
                 )

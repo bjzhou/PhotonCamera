@@ -6,8 +6,8 @@ package com.hinnka.mycamera.processor
  *
  * [nodes] must be ordered by reference-frame SNR, not merged-frame SNR.
  * [amount] scales each interpolated curve's departure from y=x. It does not
- * change SNR interpolation. The existing user slider/runtime attenuation remains
- * a separate input to the original kernel.
+ * change SNR interpolation. The user slider scales the same departure across all bands.
+ * Halo suppression is a separate input to the kernel.
  */
 data class PhotonSharpenTuning(
     val nodes: List<PhotonSharpenSnrNode>,
@@ -21,28 +21,27 @@ data class PhotonSharpenTuning(
     }
 
     companion object {
-        /** Explicit equivalent of the previous MGC generic curve table. */
         val DEFAULT = PhotonSharpenTuning(
             nodes = listOf(
                 PhotonSharpenSnrNode(5f,
-                    band0 = PhotonSharpenCurve(lowContrastInput = .05f, lowContrastGain = 1f, mainContrastGain = 1.6f),
+                    band0 = PhotonSharpenCurve(lowContrastInput = .02f, lowContrastGain = 1f, mainContrastGain = 1.6f),
                     band1 = PhotonSharpenCurve(lowContrastInput = .03f, lowContrastGain = 1f, mainContrastGain = 1.8f),
                     band2 = PhotonSharpenCurve(lowContrastInput = .02f, lowContrastGain = 1f, mainContrastGain = 1.2f)),
                 PhotonSharpenSnrNode(10f,
-                    band0 = PhotonSharpenCurve(lowContrastInput = .05f, lowContrastGain = 1.25f, mainContrastGain = 2.5f),
-                    band1 = PhotonSharpenCurve(lowContrastInput = .03f, lowContrastGain = 1.1f, mainContrastGain = 2.2f),
+                    band0 = PhotonSharpenCurve(lowContrastInput = .01f, lowContrastGain = 1.25f, mainContrastGain = 2.5f),
+                    band1 = PhotonSharpenCurve(lowContrastInput = .03f, lowContrastGain = 1.2f, mainContrastGain = 2.2f),
                     band2 = PhotonSharpenCurve(lowContrastInput = .02f, lowContrastGain = 1f, mainContrastGain = 1.3f)),
                 PhotonSharpenSnrNode(20f,
-                    band0 = PhotonSharpenCurve(lowContrastInput = .05f, lowContrastGain = 1.6f, mainContrastGain = 3.2f),
-                    band1 = PhotonSharpenCurve(lowContrastInput = .03f, lowContrastGain = 1.3f, mainContrastGain = 2.6f),
+                    band0 = PhotonSharpenCurve(lowContrastInput = .01f, lowContrastGain = 1.6f, mainContrastGain = 3.2f),
+                    band1 = PhotonSharpenCurve(lowContrastInput = .03f, lowContrastGain = 1.4f, mainContrastGain = 2.6f),
                     band2 = PhotonSharpenCurve(lowContrastInput = .02f, lowContrastGain = 1f, mainContrastGain = 1.4f)),
                 PhotonSharpenSnrNode(40f,
-                    band0 = PhotonSharpenCurve(lowContrastInput = .02f, lowContrastGain = 2.6f, mainContrastGain = 5.2f),
-                    band1 = PhotonSharpenCurve(lowContrastInput = .02f, lowContrastGain = 1.05f, mainContrastGain = 2.1f),
+                    band0 = PhotonSharpenCurve(lowContrastInput = .008f, lowContrastGain = 2.6f, mainContrastGain = 5.2f),
+                    band1 = PhotonSharpenCurve(lowContrastInput = .02f, lowContrastGain = 1.15f, mainContrastGain = 2.1f),
                     band2 = PhotonSharpenCurve(lowContrastInput = .02f, lowContrastGain = 1f, mainContrastGain = 1.4f)),
                 PhotonSharpenSnrNode(80f,
-                    band0 = PhotonSharpenCurve(lowContrastInput = .02f, lowContrastGain = 2.35f, mainContrastGain = 4.7f),
-                    band1 = PhotonSharpenCurve(lowContrastInput = .02f, lowContrastGain = 1.05f, mainContrastGain = 2.1f),
+                    band0 = PhotonSharpenCurve(lowContrastInput = .008f, lowContrastGain = 2.35f, mainContrastGain = 4.7f),
+                    band1 = PhotonSharpenCurve(lowContrastInput = .02f, lowContrastGain = 1.15f, mainContrastGain = 2.1f),
                     band2 = PhotonSharpenCurve(lowContrastInput = .02f, lowContrastGain = 1f, mainContrastGain = 1.4f)),
             ),
         )
