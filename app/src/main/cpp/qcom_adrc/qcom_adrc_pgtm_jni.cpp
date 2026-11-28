@@ -21,7 +21,11 @@ Java_com_hinnka_mycamera_raw_DngQualcommAdrcNative_nativeGenerateQualcommAdrcPgt
     jint height,
     jint iso,
     jint minIso,
+    jint maxIso,
     jint maxAnalogIso,
+    jlong shutterSpeedNs,
+    jlong maxExposureTimeNs,
+    jfloat aperture,
     jint aeMode,
     jfloat postRawSensitivityBoost,
     jfloat exposureCompensationEv,
@@ -54,7 +58,11 @@ Java_com_hinnka_mycamera_raw_DngQualcommAdrcNative_nativeGenerateQualcommAdrcPgt
     params.height = height;
     params.iso = iso;
     params.minIso = minIso;
+    params.maxIso = maxIso;
     params.maxAnalogIso = maxAnalogIso;
+    params.shutterSpeedNs = static_cast<int64_t>(shutterSpeedNs);
+    params.maxExposureTimeNs = static_cast<int64_t>(maxExposureTimeNs);
+    params.aperture = aperture;
     params.aeMode = aeMode;
     params.postRawSensitivityBoost = postRawSensitivityBoost;
     params.exposureCompensationEv = exposureCompensationEv;

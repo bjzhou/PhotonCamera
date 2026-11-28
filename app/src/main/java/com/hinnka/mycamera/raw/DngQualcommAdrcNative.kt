@@ -101,7 +101,7 @@ internal object DngQualcommAdrcNative {
                 mapInputScale
         }
 
-        val faceRects = packFaceRects(metadata.faceRects)
+        val faceRects = packFaceRects(metadata.faceRects, samplingArea)
         val diagnosticsOut = FloatArray(8)
         val gains = nativeGenerateQualcommAdrcPgtm(
             linearRgba = linearRgba,
@@ -109,7 +109,11 @@ internal object DngQualcommAdrcNative {
             height = INPUT_HEIGHT,
             iso = metadata.iso,
             minIso = metadata.minimumSensitivityIso.takeIf { it > 0 } ?: 100,
+            maxIso = metadata.maximumSensitivityIso,
             maxAnalogIso = metadata.maxAnalogSensitivity,
+            shutterSpeedNs = metadata.shutterSpeed,
+            maxExposureTimeNs = metadata.maxExposureTimeNs,
+            aperture = metadata.aperture,
             aeMode = metadata.aeMode,
             postRawSensitivityBoost = metadata.postRawSensitivityBoost,
             exposureCompensationEv = metadata.exposureCompensation,
@@ -162,8 +166,15 @@ internal object DngQualcommAdrcNative {
         return Result(map = map, diagnostics = diagnostics)
     }
 
-    private fun packFaceRects(faceRects: List<RectF>): FloatArray? {
+    private fun packFaceRects(
+        faceRects: List<RectF>,
+        samplingArea: PhotonPgtmSamplingArea,
+    ): FloatArray? {
         if (faceRects.isEmpty()) return null
+        val originH = samplingArea.originH.toFloat()
+        val originV = samplingArea.originV.toFloat()
+        val extentH = samplingArea.extentH.toFloat().coerceAtLeast(1e-6f)
+        val extentV = samplingArea.extentV.toFloat().coerceAtLeast(1e-6f)
         val out = FloatArray(faceRects.size * 4)
         var count = 0
         for (rect in faceRects) {
@@ -171,12 +182,18 @@ internal object DngQualcommAdrcNative {
                 rect.right.isFinite() && rect.bottom.isFinite() &&
                 rect.right > rect.left && rect.bottom > rect.top
             ) {
-                val base = count * 4
-                out[base] = rect.left.coerceIn(0f, 1f)
-                out[base + 1] = rect.top.coerceIn(0f, 1f)
-                out[base + 2] = rect.right.coerceIn(0f, 1f)
-                out[base + 3] = rect.bottom.coerceIn(0f, 1f)
-                count++
+                val localLeft = ((rect.left - originH) / extentH).coerceIn(0f, 1f)
+                val localTop = ((rect.top - originV) / extentV).coerceIn(0f, 1f)
+                val localRight = ((rect.right - originH) / extentH).coerceIn(0f, 1f)
+                val localBottom = ((rect.bottom - originV) / extentV).coerceIn(0f, 1f)
+                if (localRight > localLeft && localBottom > localTop) {
+                    val base = count * 4
+                    out[base] = localLeft
+                    out[base + 1] = localTop
+                    out[base + 2] = localRight
+                    out[base + 3] = localBottom
+                    count++
+                }
             }
         }
         return if (count == 0) null else out.copyOf(count * 4)
@@ -188,7 +205,11 @@ internal object DngQualcommAdrcNative {
         height: Int,
         iso: Int,
         minIso: Int,
+        maxIso: Int,
         maxAnalogIso: Int,
+        shutterSpeedNs: Long,
+        maxExposureTimeNs: Long,
+        aperture: Float,
         aeMode: Int,
         postRawSensitivityBoost: Float,
         exposureCompensationEv: Float,

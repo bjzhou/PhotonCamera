@@ -162,9 +162,13 @@ data class RawMetadata(
     val iso: Int = 100,
     /** CameraCharacteristics.SENSOR_INFO_SENSITIVITY_RANGE lower bound. */
     val minimumSensitivityIso: Int = 0,
+    /** CameraCharacteristics.SENSOR_INFO_SENSITIVITY_RANGE upper bound. */
+    val maximumSensitivityIso: Int = 0,
     /** CameraCharacteristics.SENSOR_MAX_ANALOG_SENSITIVITY for GCam noise-model digital gain. */
     val maxAnalogSensitivity: Int = 0,
     val shutterSpeed: Long = 0L,
+    /** CameraCharacteristics.SENSOR_INFO_EXPOSURE_TIME_RANGE upper bound in nanoseconds. */
+    val maxExposureTimeNs: Long = 0L,
     val aperture: Float = FALLBACK_APERTURE_F_NUMBER,
     /** CameraCharacteristics sensor geometry used only for adaptive noise-model estimation. */
     val sensorPhysicalWidthMm: Float = 0f,
@@ -495,14 +499,18 @@ data class RawMetadata(
 
             // 10. 获取 ISO 和快门
             val iso = captureResult.get(CaptureResult.SENSOR_SENSITIVITY) ?: 100
-            val minimumSensitivityIso = characteristics
+            val sensitivityRange = characteristics
                 .readMetadataOrNull(CameraCharacteristics.SENSOR_INFO_SENSITIVITY_RANGE)
-                ?.lower
-                ?: 0
+            val minimumSensitivityIso = sensitivityRange?.lower ?: 0
+            val maximumSensitivityIso = sensitivityRange?.upper ?: 0
             val maxAnalogSensitivity = characteristics.get(
                 CameraCharacteristics.SENSOR_MAX_ANALOG_SENSITIVITY,
             ) ?: 0
             val shutterSpeed = captureResult.get(CaptureResult.SENSOR_EXPOSURE_TIME) ?: 0L
+            val maxExposureTimeNs = characteristics
+                .readMetadataOrNull(CameraCharacteristics.SENSOR_INFO_EXPOSURE_TIME_RANGE)
+                ?.upper
+                ?: 0L
             val aperture = resolveRawApertureFNumber(
                 frameAperture = captureResult.get(CaptureResult.LENS_APERTURE),
                 availableApertures = characteristics.get(
@@ -550,8 +558,10 @@ data class RawMetadata(
                 exposureBias = userExposureBias ?: exposureCompensation,
                 iso = iso,
                 minimumSensitivityIso = minimumSensitivityIso,
+                maximumSensitivityIso = maximumSensitivityIso,
                 maxAnalogSensitivity = maxAnalogSensitivity,
                 shutterSpeed = shutterSpeed,
+                maxExposureTimeNs = maxExposureTimeNs,
                 aperture = aperture,
                 sensorPhysicalWidthMm = sensorPhysicalSize?.width ?: 0f,
                 sensorPhysicalHeightMm = sensorPhysicalSize?.height ?: 0f,
@@ -1197,8 +1207,10 @@ data class RawMetadata(
         if (shadowScale != other.shadowScale) return false
         if (iso != other.iso) return false
         if (minimumSensitivityIso != other.minimumSensitivityIso) return false
+        if (maximumSensitivityIso != other.maximumSensitivityIso) return false
         if (maxAnalogSensitivity != other.maxAnalogSensitivity) return false
         if (shutterSpeed != other.shutterSpeed) return false
+        if (maxExposureTimeNs != other.maxExposureTimeNs) return false
         if (frameCount != other.frameCount) return false
         if (!channelNoiseProfile.contentEquals(other.channelNoiseProfile)) return false
         if (noiseProfileLayout != other.noiseProfileLayout) return false
@@ -1244,8 +1256,10 @@ data class RawMetadata(
         result = 31 * result + shadowScale.hashCode()
         result = 31 * result + iso
         result = 31 * result + minimumSensitivityIso
+        result = 31 * result + maximumSensitivityIso
         result = 31 * result + maxAnalogSensitivity
         result = 31 * result + shutterSpeed.hashCode()
+        result = 31 * result + maxExposureTimeNs.hashCode()
         result = 31 * result + frameCount
         result = 31 * result + channelNoiseProfile.contentHashCode()
         result = 31 * result + noiseProfileLayout.hashCode()

@@ -269,6 +269,25 @@ inline float SampleOutputCurve(float y, const float* outputCurve, int outputCurv
     return outputCurve[i0] + (outputCurve[i0 + 1] - outputCurve[i0]) * t;
 }
 
+inline float EvaluateFaceProtectionMask(
+    float u,
+    float v,
+    const std::vector<NormalizedFaceRect>& faceRects) {
+    float mask = 0.0f;
+    for (const auto& face : faceRects) {
+        const float w = std::max(face.right - face.left, 1.0e-4f);
+        const float h = std::max(face.bottom - face.top, 1.0e-4f);
+        const float featherX = std::max(w * 0.15f, 0.01f);
+        const float featherY = std::max(h * 0.15f, 0.01f);
+        const float wx = SmoothStep(face.left - featherX, face.left + featherX, u) *
+                         (1.0f - SmoothStep(face.right - featherX, face.right + featherX, u));
+        const float wy = SmoothStep(face.top - featherY, face.top + featherY, v) *
+                         (1.0f - SmoothStep(face.bottom - featherY, face.bottom + featherY, v));
+        mask = std::max(mask, wx * wy);
+    }
+    return mask;
+}
+
 }  // namespace
 
 bool GenerateQualcommAdrcPgtm(
@@ -315,138 +334,148 @@ bool GenerateQualcommAdrcPgtm(
         maxEffIntensity,
         std::max(params.maxLinearIntensity, 1.0f) * baselineGain);
 
-    // Step 1: Multi-scale edge-preserving Guided Filter in log-intensity domain.
-    // Combines medium-scale (local contrast halo-free) and large-scale (regional illumination)
-    // illumination estimates, mirroring Qualcomm LTM14 mask filter + 3D cell distribution.
-    std::vector<float> baseMedium;
-    std::vector<float> baseLarge;
-    SelfGuidedFilter(logIntensity, width, height, /*radius=*/7, /*eps=*/0.035f, &baseMedium);
-    SelfGuidedFilter(logIntensity, width, height, /*radius=*/20, /*eps=*/0.050f, &baseLarge);
-
     const float ltmPct = ClampFloat(curve.ltmPercentage, 0.0f, 0.85f);
     const float gtmPct = 1.0f - ltmPct;
     const float refIso = static_cast<float>(std::max(params.minIso, 50));
     const float isoGain = std::max(static_cast<float>(params.iso) / refIso, 1.0f);
     const float lceStrength = 0.12f * (1.0f - 0.70f * SmoothStep(4.0f, 24.0f, isoGain)) *
                               SmoothStep(0.05f, 0.45f, ltmPct);
+    const bool pureGlobalMode = (ltmPct <= 1.0e-4f && lceStrength <= 1.0e-4f);
 
-    // Step 2: Compute per-pixel LTM + GTM + LCE target linear intensity and splat into 16x12x16 BGU grid.
-    std::vector<BguCellStats> bguGrid(
-        static_cast<size_t>(kBilateralGridW * kBilateralGridH * kBilateralGridZ));
+    // Step 1-3: Multi-scale edge-preserving Guided Filter + BGU grid (skipped when pure global GTM).
+    std::vector<BguAffine> affineGrid;
+    if (!pureGlobalMode) {
+        std::vector<float> baseMedium;
+        std::vector<float> baseLarge;
+        SelfGuidedFilter(logIntensity, width, height, /*radius=*/7, /*eps=*/0.035f, &baseMedium);
+        SelfGuidedFilter(logIntensity, width, height, /*radius=*/20, /*eps=*/0.050f, &baseLarge);
 
-    for (int y = 0; y < height; ++y) {
-        const float gy = (static_cast<float>(y) + 0.5f) * static_cast<float>(kBilateralGridH) /
-                         static_cast<float>(height) - 0.5f;
-        const int y0 = static_cast<int>(ClampFloat(std::floor(gy), 0.0f, static_cast<float>(kBilateralGridH - 1)));
-        const int y1 = std::min(y0 + 1, kBilateralGridH - 1);
-        const float ty = ClampFloat(gy - static_cast<float>(y0), 0.0f, 1.0f);
+        // Step 2: Compute per-pixel LTM + GTM + LCE target linear intensity and splat into 16x12x16 BGU grid.
+        std::vector<BguCellStats> bguGrid(
+            static_cast<size_t>(kBilateralGridW * kBilateralGridH * kBilateralGridZ));
 
-        for (int x = 0; x < width; ++x) {
-            const int idx = y * width + x;
-            const float xLin = effIntensity[static_cast<size_t>(idx)];
-            const float baseLog = 0.45f * baseMedium[static_cast<size_t>(idx)] +
-                                  0.55f * baseLarge[static_cast<size_t>(idx)];
-            const float detailLog = logIntensity[static_cast<size_t>(idx)] - baseLog;
-            const float baseLin = std::max(std::exp(baseLog) - kLogFloor, 0.0f);
+        for (int y = 0; y < height; ++y) {
+            const float v = (static_cast<float>(y) + 0.5f) / static_cast<float>(height);
+            const float gy = (static_cast<float>(y) + 0.5f) * static_cast<float>(kBilateralGridH) /
+                             static_cast<float>(height) - 0.5f;
+            const int y0 = static_cast<int>(ClampFloat(std::floor(gy), 0.0f, static_cast<float>(kBilateralGridH - 1)));
+            const int y1 = std::min(y0 + 1, kBilateralGridH - 1);
+            const float ty = ClampFloat(gy - static_cast<float>(y0), 0.0f, 1.0f);
 
-            // Split total compression into global (pixel-based GTM) + local (base-layer LTM).
-            const float gtmGain = EvaluateTmc12Gain(curve, xLin, 0.05f);
-            const float ltmGain = EvaluateTmc12Gain(curve, baseLin, 0.05f);
-            float combinedGain = std::pow(gtmGain, gtmPct) * std::pow(ltmGain, ltmPct);
+            for (int x = 0; x < width; ++x) {
+                const float u = (static_cast<float>(x) + 0.5f) / static_cast<float>(width);
+                const int idx = y * width + x;
+                const float xLin = effIntensity[static_cast<size_t>(idx)];
+                const float baseLog = 0.45f * baseMedium[static_cast<size_t>(idx)] +
+                                      0.55f * baseLarge[static_cast<size_t>(idx)];
+                const float detailLog = logIntensity[static_cast<size_t>(idx)] - baseLog;
+                const float baseLin = std::max(std::exp(baseLog) - kLogFloor, 0.0f);
 
-            // Subtle Qualcomm LCE (local contrast enhancement), attenuated in deep shadows & clipped highlights.
-            if (lceStrength > 1.0e-4f) {
-                const float shadowMask = SmoothStep(0.008f, 0.06f, baseLin);
-                const float highlightMask = 1.0f - SmoothStep(0.75f, 1.05f, baseLin);
-                const float clampedDetail = ClampFloat(detailLog, -0.35f, 0.35f);
-                const float lceGain = std::exp(lceStrength * shadowMask * highlightMask * clampedDetail);
-                combinedGain *= lceGain;
-            }
+                // Split total compression into global (pixel-based GTM) + local (base-layer LTM).
+                const float gtmGain = EvaluateTmc12Gain(curve, xLin, 0.05f);
+                const float ltmGain = EvaluateTmc12Gain(curve, baseLin, 0.05f);
+                float combinedGain = std::pow(gtmGain, gtmPct) * std::pow(ltmGain, ltmPct);
 
-            // Clamp gain to Qualcomm y_ratio_max to prevent noise explosion in deep shadows.
-            combinedGain = ClampFloat(combinedGain, 0.05f, curve.yRatioMax);
-            const float yTarget = std::max(xLin * combinedGain, 0.0f);
+                // Subtle Qualcomm LCE (local contrast enhancement), attenuated in deep shadows,
+                // clipped highlights, and detected face skin regions.
+                if (lceStrength > 1.0e-4f) {
+                    const float shadowMask = SmoothStep(0.008f, 0.06f, baseLin);
+                    const float highlightMask = 1.0f - SmoothStep(0.75f, 1.05f, baseLin);
+                    const float faceMask = params.faceRects.empty()
+                        ? 0.0f
+                        : EvaluateFaceProtectionMask(u, v, params.faceRects);
+                    const float faceAtten = 1.0f - 0.70f * faceMask;
+                    const float clampedDetail = ClampFloat(detailLog, -0.35f, 0.35f);
+                    const float lceGain = std::exp(
+                        lceStrength * faceAtten * shadowMask * highlightMask * clampedDetail);
+                    combinedGain *= lceGain;
+                }
 
-            const float gx = (static_cast<float>(x) + 0.5f) * static_cast<float>(kBilateralGridW) /
-                             static_cast<float>(width) - 0.5f;
-            const int x0 = static_cast<int>(ClampFloat(std::floor(gx), 0.0f, static_cast<float>(kBilateralGridW - 1)));
-            const int x1 = std::min(x0 + 1, kBilateralGridW - 1);
-            const float tx = ClampFloat(gx - static_cast<float>(x0), 0.0f, 1.0f);
+                // Clamp gain to Qualcomm y_ratio_max to prevent noise explosion in deep shadows.
+                combinedGain = ClampFloat(combinedGain, 0.05f, curve.yRatioMax);
+                const float yTarget = std::max(xLin * combinedGain, 0.0f);
 
-            const float gz = IntensityToZCoord(xLin, tableMaxEffIntensity) *
-                             static_cast<float>(kBilateralGridZ - 1);
-            const int z0 = static_cast<int>(ClampFloat(std::floor(gz), 0.0f, static_cast<float>(kBilateralGridZ - 1)));
-            const int z1 = std::min(z0 + 1, kBilateralGridZ - 1);
-            const float tz = ClampFloat(gz - static_cast<float>(z0), 0.0f, 1.0f);
+                const float gx = (static_cast<float>(x) + 0.5f) * static_cast<float>(kBilateralGridW) /
+                                 static_cast<float>(width) - 0.5f;
+                const int x0 = static_cast<int>(ClampFloat(std::floor(gx), 0.0f, static_cast<float>(kBilateralGridW - 1)));
+                const int x1 = std::min(x0 + 1, kBilateralGridW - 1);
+                const float tx = ClampFloat(gx - static_cast<float>(x0), 0.0f, 1.0f);
 
-            const float wx[2] = {1.0f - tx, tx};
-            const float wy[2] = {1.0f - ty, ty};
-            const float wz[2] = {1.0f - tz, tz};
-            const int xs[2] = {x0, x1};
-            const int ys[2] = {y0, y1};
-            const int zs[2] = {z0, z1};
+                const float gz = IntensityToZCoord(xLin, tableMaxEffIntensity) *
+                                 static_cast<float>(kBilateralGridZ - 1);
+                const int z0 = static_cast<int>(ClampFloat(std::floor(gz), 0.0f, static_cast<float>(kBilateralGridZ - 1)));
+                const int z1 = std::min(z0 + 1, kBilateralGridZ - 1);
+                const float tz = ClampFloat(gz - static_cast<float>(z0), 0.0f, 1.0f);
 
-            for (int dy = 0; dy < 2; ++dy) {
-                for (int dx = 0; dx < 2; ++dx) {
-                    const float wxy = wy[dy] * wx[dx];
-                    for (int dz = 0; dz < 2; ++dz) {
-                        const float w = wxy * wz[dz];
-                        if (w <= 0.0f) continue;
-                        BguCellStats& cell = bguGrid[static_cast<size_t>(GridIndex(xs[dx], ys[dy], zs[dz]))];
-                        cell.sw += w;
-                        cell.sx += w * xLin;
-                        cell.sxx += w * xLin * xLin;
-                        cell.sy += w * yTarget;
-                        cell.sxy += w * xLin * yTarget;
+                const float wx[2] = {1.0f - tx, tx};
+                const float wy[2] = {1.0f - ty, ty};
+                const float wz[2] = {1.0f - tz, tz};
+                const int xs[2] = {x0, x1};
+                const int ys[2] = {y0, y1};
+                const int zs[2] = {z0, z1};
+
+                for (int dy = 0; dy < 2; ++dy) {
+                    for (int dx = 0; dx < 2; ++dx) {
+                        const float wxy = wy[dy] * wx[dx];
+                        for (int dz = 0; dz < 2; ++dz) {
+                            const float w = wxy * wz[dz];
+                            if (w <= 0.0f) continue;
+                            BguCellStats& cell = bguGrid[static_cast<size_t>(GridIndex(xs[dx], ys[dy], zs[dz]))];
+                            cell.sw += w;
+                            cell.sx += w * xLin;
+                            cell.sxx += w * xLin * xLin;
+                            cell.sy += w * yTarget;
+                            cell.sxy += w * xLin * yTarget;
+                        }
                     }
                 }
             }
         }
-    }
 
-    // Step 3: Smooth BGU statistics grid and solve regularized affine model per cell
-    // with TMC12 global curve prior so empty/sparse bins gracefully fall back to TMC12.
-    BlurBguGrid(&bguGrid);
+        // Step 3: Smooth BGU statistics grid and solve regularized affine model per cell
+        // with TMC12 global curve prior so empty/sparse bins gracefully fall back to TMC12.
+        BlurBguGrid(&bguGrid);
 
-    std::vector<BguAffine> affineGrid(bguGrid.size());
-    constexpr float kPriorWeight = 2.0f;
-    constexpr float kSlopeReg = 0.02f;
-    const float kLogK = 12.0f;
-    const float kLogDenom = std::log1p(kLogK * std::max(tableMaxEffIntensity, 1.0f));
+        affineGrid.resize(bguGrid.size());
+        constexpr float kPriorWeight = 2.0f;
+        constexpr float kSlopeReg = 0.02f;
+        const float kLogK = 12.0f;
+        const float kLogDenom = std::log1p(kLogK * std::max(tableMaxEffIntensity, 1.0f));
 
-    for (int z = 0; z < kBilateralGridZ; ++z) {
-        const float zNorm = static_cast<float>(z) / static_cast<float>(kBilateralGridZ - 1);
-        const float zCenterIntensity = std::expm1(zNorm * kLogDenom) / kLogK;
-        const float priorGain = EvaluateTmc12Gain(curve, zCenterIntensity, 0.05f);
-        const float priorY = zCenterIntensity * priorGain;
+        for (int z = 0; z < kBilateralGridZ; ++z) {
+            const float zNorm = static_cast<float>(z) / static_cast<float>(kBilateralGridZ - 1);
+            const float zCenterIntensity = std::expm1(zNorm * kLogDenom) / kLogK;
+            const float priorGain = EvaluateTmc12Gain(curve, zCenterIntensity, 0.05f);
+            const float priorY = zCenterIntensity * priorGain;
 
-        for (int y = 0; y < kBilateralGridH; ++y) {
-            for (int x = 0; x < kBilateralGridW; ++x) {
-                const size_t cIdx = static_cast<size_t>(GridIndex(x, y, z));
-                const BguCellStats& s = bguGrid[cIdx];
+            for (int y = 0; y < kBilateralGridH; ++y) {
+                for (int x = 0; x < kBilateralGridW; ++x) {
+                    const size_t cIdx = static_cast<size_t>(GridIndex(x, y, z));
+                    const BguCellStats& s = bguGrid[cIdx];
 
-                // Regularized 2x2 least squares for y ≈ slope * x + offset anchored toward (priorGain, 0).
-                const float a00 = s.sxx + kPriorWeight * zCenterIntensity * zCenterIntensity + kSlopeReg;
-                const float a01 = s.sx + kPriorWeight * zCenterIntensity;
-                const float a11 = s.sw + kPriorWeight + 1.0e-3f;
-                const float b0 = s.sxy + kPriorWeight * zCenterIntensity * priorY + kSlopeReg * priorGain;
-                const float b1 = s.sy + kPriorWeight * priorY;
+                    // Regularized 2x2 least squares for y ≈ slope * x + offset anchored toward (priorGain, 0).
+                    const float a00 = s.sxx + kPriorWeight * zCenterIntensity * zCenterIntensity + kSlopeReg;
+                    const float a01 = s.sx + kPriorWeight * zCenterIntensity;
+                    const float a11 = s.sw + kPriorWeight + 1.0e-3f;
+                    const float b0 = s.sxy + kPriorWeight * zCenterIntensity * priorY + kSlopeReg * priorGain;
+                    const float b1 = s.sy + kPriorWeight * priorY;
 
-                const float det = a00 * a11 - a01 * a01;
-                float slope = priorGain;
-                float offset = 0.0f;
-                if (det > 1.0e-9f) {
-                    slope = (a11 * b0 - a01 * b1) / det;
-                    offset = (-a01 * b0 + a00 * b1) / det;
+                    const float det = a00 * a11 - a01 * a01;
+                    float slope = priorGain;
+                    float offset = 0.0f;
+                    if (det > 1.0e-9f) {
+                        slope = (a11 * b0 - a01 * b1) / det;
+                        offset = (-a01 * b0 + a00 * b1) / det;
+                    }
+                    if (!std::isfinite(slope) || !std::isfinite(offset)) {
+                        slope = priorGain;
+                        offset = 0.0f;
+                    }
+                    affineGrid[cIdx] = {
+                        ClampFloat(slope, 0.05f, curve.yRatioMax * 1.25f),
+                        ClampFloat(offset, -0.15f, 0.35f),
+                    };
                 }
-                if (!std::isfinite(slope) || !std::isfinite(offset)) {
-                    slope = priorGain;
-                    offset = 0.0f;
-                }
-                affineGrid[cIdx] = {
-                    ClampFloat(slope, 0.05f, curve.yRatioMax * 1.25f),
-                    ClampFloat(offset, -0.15f, 0.35f),
-                };
             }
         }
     }
@@ -488,13 +517,16 @@ bool GenerateQualcommAdrcPgtm(
             for (int n = 1; n < pointCount; ++n) {
                 const float xEff = knotEffX[static_cast<size_t>(n)];
                 const float globalY = knotGlobalY[static_cast<size_t>(n)];
-                const BguAffine affine = SampleTrilinearBgu(affineGrid, gx, gy, knotZCoord[static_cast<size_t>(n)]);
-                float localY = affine.slope * xEff + affine.offset;
+                float yVal = globalY;
+                if (!pureGlobalMode) {
+                    const BguAffine affine = SampleTrilinearBgu(affineGrid, gx, gy, knotZCoord[static_cast<size_t>(n)]);
+                    const float localY = affine.slope * xEff + affine.offset;
 
-                // Blend back smoothly to global TMC12 shoulder above 0.95 to guarantee clean
-                // highlight convergence across spatial cells without color/highlight banding.
-                const float highlightBlend = SmoothStep(0.92f, 1.35f, xEff);
-                float yVal = localY * (1.0f - highlightBlend) + globalY * highlightBlend;
+                    // Blend back smoothly to global TMC12 shoulder above 0.95 to guarantee clean
+                    // highlight convergence across spatial cells without color/highlight banding.
+                    const float highlightBlend = SmoothStep(0.92f, 1.35f, xEff);
+                    yVal = localY * (1.0f - highlightBlend) + globalY * highlightBlend;
+                }
 
                 // Bound scalar gain to [0.05, yRatioMax].
                 yVal = ClampFloat(yVal, xEff * 0.05f, xEff * curve.yRatioMax);

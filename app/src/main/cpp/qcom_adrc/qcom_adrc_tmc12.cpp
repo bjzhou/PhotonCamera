@@ -319,7 +319,18 @@ bool SolveAdrcTmc12(
     double faceWeightedLogSum = 0.0;
     double faceLinearLumaSum = 0.0;
     double faceWeightSum = 0.0;
+    double facePixelCount = 0.0;
     int highlightClipCount = 0;
+
+    // Precompute Qualcomm Face.xml FaceROILocationWeight (center=0.95 -> edge=0.05) per face.
+    std::vector<float> faceLocWeights(params.faceRects.size(), 1.0f);
+    for (size_t fi = 0; fi < params.faceRects.size(); ++fi) {
+        const auto& face = params.faceRects[fi];
+        const float cx = 0.5f * (face.left + face.right) - 0.5f;
+        const float cy = 0.5f * (face.top + face.bottom) - 0.5f;
+        const float normDist = ClampFloat(std::sqrt(cx * cx + cy * cy) * 2.0f, 0.0f, 1.0f);
+        faceLocWeights[fi] = 0.95f - 0.90f * SmoothStep(0.15f, 0.95f, normDist);
+    }
 
     // Step 1: Collect linear intensity, luminance, BG-stats unsaturated mean, weighted log-avg and 256-bin histogram.
     for (int y = 0; y < params.height; ++y) {
@@ -345,14 +356,14 @@ bool SolveAdrcTmc12(
 
             // Center-weighted metering prior.
             const float centerWeight = 0.45f + 0.55f * std::exp(-(dx * dx + dy * dy) / (2.0f * 0.36f * 0.36f));
-            bool inFace = false;
-            for (const auto& face : params.faceRects) {
+            float faceLocWeight = 0.0f;
+            for (size_t fi = 0; fi < params.faceRects.size(); ++fi) {
+                const auto& face = params.faceRects[fi];
                 if (u >= face.left && u <= face.right && v >= face.top && v <= face.bottom) {
-                    inFace = true;
-                    break;
+                    faceLocWeight = std::max(faceLocWeight, faceLocWeights[fi]);
                 }
             }
-            const float totalWeight = inFace ? (centerWeight + 3.0f) : centerWeight;
+            const float totalWeight = centerWeight + 3.0f * faceLocWeight;
             const double safeLuma = static_cast<double>(std::max(luma, 0.0f));
             const double logL = std::log(safeLuma + kLogAvgEps);
             weightedLogSum += static_cast<double>(totalWeight) * logL;
@@ -361,10 +372,11 @@ bool SolveAdrcTmc12(
                 bgUnsatLumaSum += static_cast<double>(totalWeight) * safeLuma;
                 bgUnsatWeightSum += static_cast<double>(totalWeight);
             }
-            if (inFace) {
-                faceWeightedLogSum += logL;
-                faceLinearLumaSum += safeLuma;
-                faceWeightSum += 1.0;
+            if (faceLocWeight > 0.0f) {
+                faceWeightedLogSum += static_cast<double>(faceLocWeight) * logL;
+                faceLinearLumaSum += static_cast<double>(faceLocWeight) * safeLuma;
+                faceWeightSum += static_cast<double>(faceLocWeight);
+                facePixelCount += 1.0;
             }
 
             // Qualcomm BHIST-style histogram mapped in sRGB gamma domain for perceptual spacing.
@@ -386,15 +398,9 @@ bool SolveAdrcTmc12(
     const float weightedLogAvg = (weightSum > 0.0)
         ? static_cast<float>(std::exp(weightedLogSum / weightSum))
         : p50;
-    const float effectiveLuma = (faceWeightSum > 16.0)
-        ? (0.60f * weightedLogAvg + 0.40f * static_cast<float>(std::exp(faceWeightedLogSum / faceWeightSum)))
-        : weightedLogAvg;
     const float bgUnsatMean = (bgUnsatWeightSum > 16.0)
         ? static_cast<float>(bgUnsatLumaSum / bgUnsatWeightSum)
         : weightedLogAvg;
-    const float effectiveBgLuma = (faceWeightSum > 16.0)
-        ? (0.60f * bgUnsatMean + 0.40f * static_cast<float>(faceLinearLumaSum / faceWeightSum))
-        : bgUnsatMean;
 
     const float sceneDrEv = std::max(0.0f, std::log2(p992 / p05));
     const float clippedFraction = static_cast<float>(highlightClipCount) / static_cast<float>(pixelCount);
@@ -407,58 +413,160 @@ bool SolveAdrcTmc12(
     result.lumaP05 = p05;
     result.lumaP992 = p992;
 
-    // Step 3: ISO-aware noise attenuation & y_ratio_max (mirrors Qualcomm Chromatix gain triggers).
-    // Expressed directly in Qualcomm's scene-linear domain before downstream IPE Gamma15.
+    // Step 3: Physical exposure index (CamX Arbitration.xml / Metering.xml luxIndex),
+    // exposure ceiling detection, and low-light triggers (ADRCCapForGain / CappedQLLADRC).
+    // Both auto and manual captures go through the exact same exposure-metadata + RAW-stats
+    // formulation: tone mapping / DRC depends on scene exposure and RAW dynamic range, not on
+    // whether AE mode is ON or OFF.
     const float refIso = static_cast<float>(std::max(params.minIso, 50));
     const float isoGain = std::max(static_cast<float>(params.iso) / refIso, 1.0f);
     const float highIsoAtten = 1.0f - 0.65f * SmoothStep(4.0f, 32.0f, isoGain);
-    const float yRatioMax = ClampFloat(5.00f - 2.00f * SmoothStep(4.0f, 32.0f, isoGain), 2.80f, 5.00f);
+
+    const float shutterMs = (params.shutterSpeedNs > 0)
+        ? (static_cast<float>(params.shutterSpeedNs) * 1.0e-6f)
+        : 10.0f;
+    const float apertureF = (std::isfinite(params.aperture) && params.aperture > 0.5f && params.aperture < 32.0f)
+        ? params.aperture
+        : 1.8f;
+    const float apertureScale = (1.8f / apertureF) * (1.8f / apertureF);
+    const float tetMsNorm = shutterMs * (static_cast<float>(std::max(params.iso, 50)) / 100.0f) * apertureScale;
+    const float tetNorm = tetMsNorm / 1000.0f;
+    // CamX Arbitration.xml expKneeEntries mapping: (gain=2, 11.11ms -> 260.6), +23.45 per +1 EV.
+    // Metering.xml luxLumaTarget transitions from daylight (63) to night (45) over luxIndex [360, 420].
+    const float camxExpIndex = 260.57f + 23.45f * std::log2(std::max(tetMsNorm, 0.01f) / 22.22f);
+    const float lowLightBlend = std::max(
+        SmoothStep(360.0f, 420.0f, camxExpIndex),
+        SmoothStep(8.0f, 32.0f, isoGain));
+
+    // Exposure saturation detection: when shutter and ISO both approach hardware/handheld ceilings,
+    // exposure headroom is exhausted rather than intentionally underexposed to protect highlights.
+    const float isoCapSat = (params.maxIso > static_cast<int>(refIso))
+        ? SmoothStep(0.65f, 0.92f, static_cast<float>(params.iso) / static_cast<float>(params.maxIso))
+        : 0.0f;
+    const float analogSat = (params.maxAnalogIso > static_cast<int>(refIso))
+        ? SmoothStep(0.75f, 1.15f, static_cast<float>(params.iso) / static_cast<float>(params.maxAnalogIso))
+        : 0.0f;
+    const float absIsoSat = SmoothStep(24.0f, 64.0f, isoGain);
+    const float isoSaturation = std::max(std::max(isoCapSat, analogSat), absIsoSat);
+
+    const float shutterMsSat = SmoothStep(28.0f, 80.0f, shutterMs);
+    const float shutterCapSat = (params.maxExposureTimeNs > 0 && params.shutterSpeedNs > 0)
+        ? SmoothStep(0.65f, 0.92f,
+                     static_cast<float>(params.shutterSpeedNs) / static_cast<float>(params.maxExposureTimeNs))
+        : 0.0f;
+    const float shutterSaturation = std::max(shutterMsSat, shutterCapSat);
+
+    const float exposureCeiling = isoSaturation * shutterSaturation;
+    const float extremeDarkTet = SmoothStep(1.5f, 6.0f, tetNorm) * SmoothStep(16.0f, 48.0f, isoGain);
+    const float lowLightCeiling = ClampFloat(std::max(exposureCeiling, extremeDarkTet), 0.0f, 1.0f);
+
+    // Highlight presence check: ADRC lift is justified when bright highlights exist in the RAW
+    // (meaning exposure was held down to preserve highlights / high DR). Require both peak (p992)
+    // and upper-body (p95) evidence so tiny hot pixels or isolated LEDs in a pitch-black frame
+    // do not trigger global amplification.
+    const float highlightPresence = 0.55f * SmoothStep(0.08f, 0.45f, p992) +
+                                    0.45f * SmoothStep(0.04f, 0.25f, p95);
+    const float darkNoHighlight = (1.0f - highlightPresence) *
+                                  std::max(lowLightCeiling, SmoothStep(6.0f, 20.0f, isoGain));
+    const float pitchBlackGuard = (1.0f - SmoothStep(0.03f, 0.14f, p992)) *
+                                  (1.0f - SmoothStep(0.01f, 0.04f, bgUnsatMean));
+    const float nightNoLift = ClampFloat(std::max(darkNoHighlight, pitchBlackGuard), 0.0f, 1.0f);
+
+    const float yRatioMax = ClampFloat(
+        (5.00f - 2.00f * SmoothStep(4.0f, 32.0f, isoGain)) * (1.0f - 0.50f * lowLightCeiling),
+        1.40f,
+        5.00f);
     result.yRatioMax = yRatioMax;
 
-    // Step 4: Self-contained Qualcomm AEC/ADRC metering layer (computes DRCGain & DRCGainDark).
-    // Standard/moderate-DR scenes track Qualcomm BG-stats unsaturated arithmetic mean (including
-    // smooth attenuation < 1.0 on bright high-key scenes). High-DR backlit scenes transition
-    // smoothly to shadow-aware log-average ADRC lift.
+    // Step 4: Unified Qualcomm AEC/ADRC metering layer (DRCGain, DRCGainDark, FaceSA & QLL).
     const float postBoost = std::isfinite(params.postRawSensitivityBoost)
         ? ClampFloat(params.postRawSensitivityBoost, 1.0f, 8.0f)
         : 1.0f;
     const float userEvScale = std::pow(2.0f, ClampFloat(params.exposureCompensationEv, -3.0f, 3.0f));
     const bool isMultiFrameHdr = (params.frameCount > 1) || (params.maxLinearIntensity * baselineGain > 1.25f);
-    const float maxDrcGain = isMultiFrameHdr ? 6.0f : 5.0f;
+    const float baseMaxDrcGain = isMultiFrameHdr ? 6.0f : 5.0f;
+
+    // Qualcomm Face.xml (FaceROISizeWeight * FaceROILocationWeight) + ALowLightFaceControl:
+    // smooth area/location confidence weighting, backlit portrait detection, and low-light
+    // attenuation so dark faces never blow up night noise.
+    const float faceAreaFraction = static_cast<float>(facePixelCount) / static_cast<float>(pixelCount);
+    const float faceAreaConf = SmoothStep(0.002f, 0.04f, faceAreaFraction);
+    const float avgFaceLocWeight = (facePixelCount > 0.0)
+        ? static_cast<float>(faceWeightSum / facePixelCount)
+        : 0.0f;
+    const float faceSpatialConf = faceAreaConf * ClampFloat(avgFaceLocWeight, 0.0f, 1.0f);
+    const float lowLightFaceAtten = (1.0f - 0.80f * lowLightCeiling) * (1.0f - nightNoLift);
+    const float faceLogMean = (faceWeightSum > 8.0)
+        ? static_cast<float>(std::exp(faceWeightedLogSum / faceWeightSum))
+        : weightedLogAvg;
+    const float faceLinearMean = (faceWeightSum > 8.0)
+        ? static_cast<float>(faceLinearLumaSum / faceWeightSum)
+        : bgUnsatMean;
+    const float backlitFaceFactor = faceSpatialConf * lowLightFaceAtten *
+                                    SmoothStep(0.60f, 0.90f, p992) *
+                                    (1.0f - SmoothStep(0.10f, 0.22f, faceLinearMean)) *
+                                    SmoothStep(1.25f, 2.50f, bgUnsatMean / std::max(faceLinearMean, 0.01f));
+    const float faceBlend = (0.40f + 0.15f * backlitFaceFactor) * faceSpatialConf * lowLightFaceAtten;
+    const float effectiveLuma = weightedLogAvg * (1.0f - faceBlend) + faceLogMean * faceBlend;
+    const float effectiveBgLuma = bgUnsatMean * (1.0f - faceBlend) + faceLinearMean * faceBlend;
+
+    // ADRCCapForGain & CappedQLLADRC: cap allowed ADRC lift as ISO rises and collapse toward
+    // 1.0 when exposure has reached its ceiling or when no highlights exist to justify ADRC.
+    const float highIsoCap = isMultiFrameHdr ? 1.85f : 1.55f;
+    const float gainCapForIso = baseMaxDrcGain -
+        (baseMaxDrcGain - highIsoCap) * SmoothStep(6.0f, 28.0f, isoGain);
+    const float capWithCeiling = gainCapForIso + (1.15f - gainCapForIso) * lowLightCeiling;
+    const float effectiveMaxDrcGain = ClampFloat(
+        capWithCeiling + (1.0f - capWithCeiling) * nightNoLift,
+        1.0f,
+        baseMaxDrcGain);
 
     const float highlightPressure = SmoothStep(0.65f, 0.96f, p992) * 0.70f +
                                     SmoothStep(0.003f, 0.05f, clippedFraction) * 0.30f;
     const float darkNightDamp = (1.0f - highlightPressure) *
                                 (1.0f - SmoothStep(0.015f, 0.055f, effectiveLuma));
+    // CamX Metering.xml drops luxLumaTarget from 63 -> 45 (ratio 0.714 in luma / ~0.50 in scene-linear)
+    // and tmc12_sw shifts tone_target[2] from 0.55 -> 0.40 in low light so night scenes keep dark mood.
+    const float lowLightTargetScale = 1.0f - 0.50f * lowLightBlend;
     const float targetBgLuma = ClampFloat(
-        kTargetBgMidLuma * (1.0f - 0.35f * darkNightDamp) * userEvScale,
-        0.12f, 0.48f);
+        kTargetBgMidLuma * lowLightTargetScale * (1.0f - 0.35f * darkNightDamp) * userEvScale,
+        0.08f, 0.48f);
     const float targetMidLuma = ClampFloat(
-        kTargetCameraMidLuma * (1.0f - 0.35f * darkNightDamp) * userEvScale,
-        0.09f, 0.40f);
+        kTargetCameraMidLuma * lowLightTargetScale * (1.0f - 0.35f * darkNightDamp) * userEvScale,
+        0.06f, 0.40f);
 
     const float bgNeededGain = ClampFloat(
         targetBgLuma / std::max(effectiveBgLuma, 0.025f),
         0.72f,
-        maxDrcGain);
+        effectiveMaxDrcGain);
     const float logNeededGain = ClampFloat(
         targetMidLuma / std::max(effectiveLuma, 0.018f),
         1.0f,
-        maxDrcGain);
-    const float adrcBlend = SmoothStep(5.6f, 7.2f, sceneDrEv);
-    const float neededGain = bgNeededGain * (1.0f - adrcBlend) +
-                             std::max(bgNeededGain, logNeededGain) * adrcBlend;
+        effectiveMaxDrcGain);
+    const float adrcBlend = std::max(
+        SmoothStep(5.6f, 7.2f, sceneDrEv),
+        0.85f * backlitFaceFactor);
+    float neededGain = bgNeededGain * (1.0f - adrcBlend) +
+                       std::max(bgNeededGain, logNeededGain) * adrcBlend;
+    // Only suppress unwarranted amplification (> 1.0) in dark/ceiling frames.
+    if (neededGain > 1.0f) {
+        neededGain = 1.0f + (neededGain - 1.0f) * (1.0f - nightNoLift);
+    }
     const float drcGain = ClampFloat(
         (postBoost > 1.01f) ? std::max(postBoost, neededGain) : neededGain,
         0.72f,
-        maxDrcGain);
+        std::max(postBoost, effectiveMaxDrcGain));
 
-    // Dark boost (DRCGainDark): lifts shadows in moderate/high-DR scenes, attenuated at high ISO.
+    // Dark boost (DRCGainDark): lifts shadows in moderate/high-DR scenes, suppressed at high ISO
+    // and disabled when exposure is saturated or no highlights exist.
     const float shadowRatio = ClampFloat(p50 / std::max(p05, 1.0e-3f), 1.0f, 64.0f);
     const float darkTrigger = SmoothStep(4.8f, 8.0f, sceneDrEv) *
                               SmoothStep(2.5f, 10.0f, shadowRatio);
-    const float darkBoostExtra = 0.25f * darkTrigger * highIsoAtten;
+    const float darkBoostExtra = 0.25f * darkTrigger * highIsoAtten *
+                                 (1.0f - lowLightCeiling) * (1.0f - nightNoLift);
     const float drcGainDark = ClampFloat(1.0f + darkBoostExtra, 1.0f, 1.30f);
+
+    const float histEnhanceScale = (1.0f - nightNoLift) * (1.0f - 0.85f * lowLightCeiling);
 
     // Step 5: Pure scene-linear Qualcomm TMC12 Anchor Knee Points (DRCGain=1 -> exact identity).
     // Output tone rendering (IPE Gamma15 -> invACR3) is cleanly decoupled as a downstream 1D LUT.
@@ -520,7 +628,8 @@ bool SolveAdrcTmc12(
     const float lwMin = (cntMin > kEps) ? static_cast<float>(std::exp(sumMin / cntMin)) : 350.0f;
     const float lwMax = (cntMax > kEps) ? static_cast<float>(std::exp(sumMax / cntMax)) : 8000.0f;
 
-    const float targetMidLinear = SrgbToLinear(kToneTargets[2]) * userEvScale;
+    const float activeMidToneTarget = kToneTargets[2] - 0.15f * lowLightBlend;
+    const float targetMidLinear = SrgbToLinear(activeMidToneTarget) * userEvScale;
     const float epsHist = 1.0f;
     const float histF = ClampFloat(
         (2.0f * std::log(lwAvg + epsHist) - std::log(1.0f) - std::log(16383.0f + epsHist)) /
@@ -556,8 +665,10 @@ bool SolveAdrcTmc12(
     };
 
     // Step 7: Blend anchor & histogram knee points (matches TMC12Interpolation::CalculateKneePoints).
+    // Suppress histogram lift in manual exposure, exposure-ceiling, and pitch-black scenes so
+    // drcGain == 1.0 converges cleanly to an identity linear curve.
     for (int i = 0; i < kKneePointCount; ++i) {
-        const float w = kHistEnhanceRatio[i];
+        const float w = kHistEnhanceRatio[i] * histEnhanceScale;
         result.kneeX[i] = w * histKneeX[i] + (1.0f - w) * anchorKneeX[i];
         result.kneeY[i] = w * histKneeY[i] + (1.0f - w) * anchorKneeY[i];
     }
@@ -572,7 +683,7 @@ bool SolveAdrcTmc12(
     result.drcGainDark = drcGainDark;
     result.ltmPercentage = ClampFloat(
         kMinLtmPercentage + (kBaseLtmPercentage - kMinLtmPercentage) * compressionStrength,
-        0.0f, kBaseLtmPercentage);
+        0.0f, kBaseLtmPercentage) * (1.0f - nightNoLift) * (1.0f - 0.75f * lowLightCeiling);
     if (liftDrcGain <= 1.08f && drcGainDark <= 1.02f) {
         result.ltmPercentage = 0.0f;
     }

@@ -23,7 +23,11 @@ struct AdrcInputParams {
     int height = kInputHeight;
     int iso = 100;
     int minIso = 100;
+    int maxIso = 0;
     int maxAnalogIso = 0;
+    int64_t shutterSpeedNs = 0;
+    int64_t maxExposureTimeNs = 0;
+    float aperture = 1.8f;
     int aeMode = 1;  // 0 = CONTROL_AE_MODE_OFF, non-zero = auto exposure
     float postRawSensitivityBoost = 1.0f;
     float exposureCompensationEv = 0.0f;

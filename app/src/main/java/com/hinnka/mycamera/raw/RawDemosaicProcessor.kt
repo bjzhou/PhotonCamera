@@ -199,9 +199,11 @@ class RawDemosaicProcessor {
             } else dngRawData.exposureBias,
             iso = if (dngRawData.iso == 0) (baseMetadata?.iso ?: 100) else dngRawData.iso,
             minimumSensitivityIso = baseMetadata?.minimumSensitivityIso ?: 0,
+            maximumSensitivityIso = baseMetadata?.maximumSensitivityIso ?: 0,
             maxAnalogSensitivity = baseMetadata?.maxAnalogSensitivity ?: 0,
             shutterSpeed = if (dngRawData.shutterSpeed == 0L) (baseMetadata?.shutterSpeed
                 ?: 0L) else dngRawData.shutterSpeed,
+            maxExposureTimeNs = baseMetadata?.maxExposureTimeNs ?: 0L,
             aperture = resolveRawApertureFNumber(
                 frameAperture = dngRawData.aperture,
                 inheritedAperture = baseMetadata?.aperture,
@@ -232,7 +234,9 @@ class RawDemosaicProcessor {
             mgcSharpenTuningSnr = baseMetadata?.mgcSharpenTuningSnr,
             mgcSharpenAttenuationScale = baseMetadata?.mgcSharpenAttenuationScale,
             rotation = dngRawData.rotation,
-            profileGainTableMap = baseMetadata?.profileGainTableMap
+            profileGainTableMap = baseMetadata?.profileGainTableMap,
+            sceneHasFace = baseMetadata?.sceneHasFace ?: false,
+            faceRects = baseMetadata?.faceRects ?: emptyList(),
         )
     }
 
