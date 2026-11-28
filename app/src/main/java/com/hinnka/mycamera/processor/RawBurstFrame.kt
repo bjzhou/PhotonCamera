@@ -73,4 +73,5 @@ data class RawStackFrame(
     val dynamicBlackLevelByCfaPosition: FloatArray? = null,
     val role: RawBurstFrameRole = RawBurstFrameRole.NORMAL,
     val preAlignmentToReference: RawFramePreAlignment? = null,
+    val fromRawZsl: Boolean = false,
 )

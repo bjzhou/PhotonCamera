@@ -1710,7 +1710,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                     } ?: photo.frames.first()
                     shotSettings.livePhotoVideo = CompletableDeferred<Pair<File, Long>?>().also { deferred ->
                         cameraController.recordLivePhotoVideo(
-                            primaryFrame.image.timestamp / 1000,
+                            (photo.rawZslAnchorTimestampNs ?: primaryFrame.image.timestamp) / 1_000L,
                             primaryFrame.captureInfo.livePhotoVideoStartTimestampUs,
                         ) { file, timestamp ->
                             deferred.complete(if (file.name == "error") null else file to timestamp)
@@ -3180,9 +3180,13 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 orderedNormalFrames
             }
             val framesToProcess = processingFrames.map { it.frame }
-            val referenceCaptureInfo = orderedNormalFrames.firstOrNull()?.captureInfo
+            val rawZslAnchor = photo.rawZslAnchorTimestampNs?.takeIf { isRawStack }?.let { timestampNs ->
+                orderedNormalFrames.firstOrNull { it.frame.image.timestamp == timestampNs }
+            }
+            val firstNormalFrame = orderedNormalFrames.firstOrNull()
+            val referenceCaptureInfo = rawZslAnchor?.captureInfo ?: firstNormalFrame?.captureInfo
                 ?: captureInfo
-            val referenceCaptureResult = orderedNormalFrames.firstOrNull()?.captureResult
+            val referenceCaptureResult = rawZslAnchor?.captureResult ?: firstNormalFrame?.captureResult
                 ?: captureResult
             processStacking(
                 frames = framesToProcess,
@@ -5504,6 +5508,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 MultiFrameCaptureRole.LONG -> RawBurstFrameRole.SHADOW_LONG
                 else -> RawBurstFrameRole.NORMAL
             },
+            fromRawZsl = metadata?.fromRawZsl == true,
         )
     }
 

@@ -69,6 +69,7 @@ import com.hinnka.mycamera.video.VideoResolutionPreset
 import com.hinnka.mycamera.video.VideoRecordingState
 import com.hinnka.mycamera.video.VideoStabilizationMode
 import com.hinnka.mycamera.video.resolveSurfaceTextureVideoOrientationDegrees
+import java.util.ArrayDeque
 import java.util.TreeMap
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.Executor
@@ -135,6 +136,8 @@ class Camera2Controller(private val context: Context) {
         private const val NO_IMAGE_READER_FORMAT = -1
         private const val RAW_PREVIEW_RESULT_HISTORY = 32
         private const val MAX_PENDING_RAW_PREVIEW_IMAGES = 2
+        private const val RAW_ZSL_FALLBACK_FRAME_DURATION_NS = 1_000_000_000L / 30
+        private const val RAW_ZSL_MAX_HISTORY_NS = 1_000_000_000L
         private const val RAW_PREVIEW_FIRST_IMAGE_TIMEOUT_MS = 3_000L
         private const val RAW_PREVIEW_FALLBACK_RETRY_MS = 250L
         private val FORCED_VENDOR_SESSION_PARAMETER_KEYS = setOf(
@@ -275,6 +278,7 @@ class Camera2Controller(private val context: Context) {
     // reader can receive either a viewfinder frame or a shutter frame.
     private data class RawPreviewResult(
         val result: CaptureResult,
+        val totalResult: TotalCaptureResult,
         val characteristics: CameraCharacteristics,
         val cameraId: String,
         val cfaPatternOverride: Int?,
@@ -287,6 +291,15 @@ class Camera2Controller(private val context: Context) {
     private val pendingRawPreviewImages = TreeMap<Long, SafeImage>()
     private var lastPublishedRawPreviewTimestampNs = 0L
     private var pendingRawPreviewFallback: Runnable? = null
+    private val rawZslCache = RawZslFrameCache()
+    private var rawZslRepeatingRequest: CaptureRequest? = null
+    private var rawZslCameraId: String? = null
+    private var rawZslExpiryScheduled = false
+    private val rawZslExpiry = Runnable {
+        rawZslExpiryScheduled = false
+        rawZslCache.expire(SystemClock.elapsedRealtimeNanos())
+        scheduleRawZslExpiry()
+    }
 
     private fun noteRawPreviewStarted(frameNumber: Long, timestamp: Long) {
         rawPreviewStartedTimestamps[frameNumber] = timestamp
@@ -310,6 +323,10 @@ class Camera2Controller(private val context: Context) {
         ).filter { it > 0L }.distinct()
         if (timestamps.isEmpty()) return
         val cameraId = physicalId ?: getActiveOpenCameraId()
+        if (result.request === rawZslRepeatingRequest && rawZslCameraId != cameraId) {
+            clearRawZslFrames()
+            rawZslCameraId = cameraId
+        }
         val characteristics = physicalId?.let { getCameraCharacteristicsOrNull(it, "RAW preview") }
             ?: getActiveOpenCameraCharacteristics() ?: return
         val state = _state.value
@@ -330,6 +347,7 @@ class Camera2Controller(private val context: Context) {
         } else null
         val frame = RawPreviewResult(
             result = frameResult,
+            totalResult = result,
             characteristics = characteristics,
             cameraId = cameraId,
             cfaPatternOverride = rawPreviewCfaOverride(state),
@@ -392,14 +410,12 @@ class Camera2Controller(private val context: Context) {
             image.close()
             return
         }
-        if (lastPublishedRawPreviewTimestampNs == 0L) {
-            try {
-                image.validateBufferLayout()
-            } catch (error: IllegalStateException) {
-                image.close()
-                fallbackFromRawPreview("invalid RAW buffer: ${error.message}", retryAnotherRawFormat = true) { true }
-                return
-            }
+        try {
+            image.validateBufferLayout()
+        } catch (error: IllegalStateException) {
+            image.close()
+            fallbackFromRawPreview("invalid RAW buffer: ${error.message}", retryAnotherRawFormat = true) { true }
+            return
         }
         lastPublishedRawPreviewTimestampNs = timestamp
         val olderImages = pendingRawPreviewImages.headMap(timestamp, true).values.iterator()
@@ -408,6 +424,7 @@ class Camera2Controller(private val context: Context) {
             olderImages.remove()
             staleImage.close()
         }
+        cacheRawZslFrame(image, frame)
         previewRawChannel.publish(
             PreviewRawFrame(
                 image = image,
@@ -422,6 +439,50 @@ class Camera2Controller(private val context: Context) {
         )
     }
 
+    private fun cacheRawZslFrame(image: SafeImage, frame: RawPreviewResult) {
+        val state = _state.value
+        if (frame.totalResult.request !== rawZslRepeatingRequest || frame.cameraId != rawZslCameraId ||
+            !canUseRawZsl(state) || state.isCapturing ||
+            openImagesCount.get() + reservedImageCount() + MAX_PENDING_RAW_PREVIEW_IMAGES >= imageReaderMaxImages
+        ) return
+        val bufferBytes = image.rawBufferByteCount() ?: return
+        val timestampSource = frame.characteristics.get(CameraCharacteristics.SENSOR_INFO_TIMESTAMP_SOURCE)
+            ?: CameraCharacteristics.SENSOR_INFO_TIMESTAMP_SOURCE_UNKNOWN
+        val requestedFrames = state.activeMultiFrameCount
+        val frameDurationNs = frame.result.get(CaptureResult.SENSOR_FRAME_DURATION)
+            ?.takeIf { it > 0L } ?: RAW_ZSL_FALLBACK_FRAME_DURATION_NS
+        val historyNs = (rawZslCache.maxAgeNs +
+            (requestedFrames - 1) * frameDurationNs.coerceAtMost(RAW_ZSL_MAX_HISTORY_NS))
+            .coerceAtMost(RAW_ZSL_MAX_HISTORY_NS)
+        rawZslCache.offer(
+            RawZslFrameCache.Frame(
+                image = image.retain(),
+                result = frame.totalResult,
+                sourceResult = frame.result,
+                arrivedElapsedNs = SystemClock.elapsedRealtimeNanos(),
+                cameraId = frame.cameraId,
+                sensorTimestampSource = timestampSource,
+                bufferBytes = bufferBytes,
+            ),
+            frameLimit = requestedFrames,
+            retentionAgeNs = historyNs,
+        )
+        scheduleRawZslExpiry()
+    }
+
+    private fun scheduleRawZslExpiry() {
+        if (rawZslExpiryScheduled) return
+        val deadline = rawZslCache.nextExpiryElapsedNs ?: return
+        val delayNs = (deadline - SystemClock.elapsedRealtimeNanos()).coerceAtLeast(1L)
+        rawZslExpiryScheduled = cameraHandler?.postDelayed(rawZslExpiry, (delayNs + 999_999L) / 1_000_000L) == true
+    }
+
+    private fun clearRawZslFrames() {
+        cameraHandler?.removeCallbacks(rawZslExpiry)
+        rawZslExpiryScheduled = false
+        rawZslCache.clear()
+    }
+
     private fun discardFailedRawPreviewFrame(frameNumber: Long) {
         val timestamp = rawPreviewStartedTimestamps.remove(frameNumber) ?: return
         pendingRawPreviewImages.remove(timestamp)?.close()
@@ -430,6 +491,9 @@ class Camera2Controller(private val context: Context) {
 
     private fun clearRawPreview() {
         rawPreviewReader = null
+        rawZslRepeatingRequest = null
+        rawZslCameraId = null
+        clearRawZslFrames()
         pendingRawPreviewFallback?.let { cameraHandler?.removeCallbacks(it) }
         pendingRawPreviewFallback = null
         previewRawChannel.discard()
@@ -605,15 +669,19 @@ class Camera2Controller(private val context: Context) {
         val characteristics: CameraCharacteristics?,
         val physicalCameraId: String?,
         val continuousBurst: Boolean = false,
+        val cachedFrameCount: Int = 0,
         val captureTime: Long = System.currentTimeMillis(),
         val exposureCompensationStep: Float,
     ) {
+        val freshFrameCount: Int get() = expectedFrames - cachedFrameCount
         var reservedFrames = expectedFrames
         var submitted = false
         var sequenceCompleted = false
         var failed = false
         var delivered = false
         var livePhotoStartTimestampUs: Long? = null
+        var rawZslAnchorTimestampNs: Long? = null
+        var cachedAnchorInfo: CaptureInfo? = null
         var animationCaptureResult: TotalCaptureResult? = null
         var inspectRawIspCcm = false
         var previewColorResult: TotalCaptureResult? = null
@@ -743,12 +811,19 @@ class Camera2Controller(private val context: Context) {
         state: CameraState,
         reader: ImageReader,
         continuousBurst: Boolean = false,
+        cachedFrames: Collection<RawZslFrameCache.Frame> = emptyList(),
     ): PhotoCaptureContext? {
         val frameCount = if (continuousBurst) BURST_CAPTURE_BATCH_SIZE else captureImageRequestCount(state, reader)
-        val occupied = openImagesCount.get() + reservedImageCount()
-        if (occupied + frameCount > CAPTURE_READER_MAX_IMAGES) {
-            PLog.w(TAG, "Capture rejected: occupied=$occupied requested=$frameCount capacity=$CAPTURE_READER_MAX_IMAGES")
-            return null
+        // The ZSL frames already occupy reader slots. Reserve only the missing frames.
+        val requested = frameCount - cachedFrames.size
+        check(requested >= 0)
+        var occupied = openImagesCount.get() + reservedImageCount()
+        while (occupied + requested > CAPTURE_READER_MAX_IMAGES) {
+            if (!rawZslCache.evictOldest()) {
+                PLog.w(TAG, "Capture rejected: occupied=$occupied requested=$requested capacity=$CAPTURE_READER_MAX_IMAGES")
+                return null
+            }
+            occupied = openImagesCount.get() + reservedImageCount()
         }
         val shot = PhotoCaptureContext(
             id = ++nextPhotoCaptureId,
@@ -760,10 +835,12 @@ class Camera2Controller(private val context: Context) {
                 ?: getActiveOpenCameraCharacteristics(),
             physicalCameraId = activeOutputPhysicalCameraId,
             continuousBurst = continuousBurst,
+            cachedFrameCount = cachedFrames.size,
             exposureCompensationStep = state.getExposureCompensationStep(),
         )
+        cachedFrames.forEach { accountAcquiredPhotoImage(shot, it.timestampNs) }
         photoCaptures[shot.id] = shot
-        PLog.d(TAG, "Capture reserved: id=${shot.id} frames=$frameCount occupied=$occupied")
+        PLog.d(TAG, "Capture reserved: id=${shot.id} frames=$frameCount cached=${cachedFrames.size} occupied=$occupied")
         return shot
     }
 
@@ -865,7 +942,7 @@ class Camera2Controller(private val context: Context) {
         }
         if (!shot.failed) {
             if (!shot.continuousBurst) {
-                val captureInfo = rebuildCaptureInfo(
+                val captureInfo = shot.cachedAnchorInfo ?: rebuildCaptureInfo(
                     result = shot.animationCaptureResult,
                     imageWidth = shot.reader.width,
                     imageHeight = shot.reader.height,
@@ -930,7 +1007,7 @@ class Camera2Controller(private val context: Context) {
         photoCaptures.remove(shot.id)
         shot.timestamps.forEach { photoCaptureByTimestamp.remove(it) }
         if (shot.continuousBurst) return
-        val photo = CapturedPhoto(shot.id, shot.state, shot.frames.values.toList())
+        val photo = CapturedPhoto(shot.id, shot.state, shot.frames.values.toList(), shot.rawZslAnchorTimestampNs)
         shot.frames.clear()
         val callback = onPhotoCaptureReady
         if (callback == null) {
@@ -965,8 +1042,8 @@ class Camera2Controller(private val context: Context) {
         requests: List<CaptureRequest>,
         baseExposureResult: CaptureResult? = lastCaptureResult,
     ) {
-        check(requests.size == shot.expectedFrames) {
-            "Capture ${shot.id} reserved ${shot.expectedFrames} frames but built ${requests.size} requests"
+        check(requests.size == shot.freshFrameCount) {
+            "Capture ${shot.id} needs ${shot.freshFrameCount} new frames but built ${requests.size} requests"
         }
         shot.inspectRawIspCcm = !shot.continuousBurst && isRawCaptureReader(shot.reader) &&
             RawColorCalibrationPolicy.mode == RawColorCalibrationMode.AUTO
@@ -4280,7 +4357,7 @@ class Camera2Controller(private val context: Context) {
         builder: CaptureRequest.Builder,
     ) {
         try {
-            session.setRepeatingRequest(builder.build(), previewCallback, cameraHandler)
+            submitRegularPreviewRequest(session, builder)
             previewRawChannel.isActive = rawPreviewReader != null
         } catch (error: IllegalArgumentException) {
             if (rawPreviewReader == null) throw error
@@ -4288,6 +4365,17 @@ class Camera2Controller(private val context: Context) {
             PLog.w(TAG, "Camera rejected RAW repeating request; using preview YUV", error)
             resumePreviewYuvRepeatingRequest(session, builder)
         }
+    }
+
+    private fun submitRegularPreviewRequest(session: CameraCaptureSession, builder: CaptureRequest.Builder) {
+        if (rawPreviewReader != null) {
+            rawZslRepeatingRequest = null
+            rawZslCameraId = null
+            clearRawZslFrames()
+        }
+        val request = builder.build()
+        session.setRepeatingRequest(request, previewCallback, cameraHandler)
+        if (rawPreviewReader != null) rawZslRepeatingRequest = request
     }
 
     private fun fallbackFromRawPreview(
@@ -6609,7 +6697,7 @@ class Camera2Controller(private val context: Context) {
         try {
             applyPhysicalApertureSettings(builder, _state.value)
             applyFrozenCaptureFocus(builder)
-            session.setRepeatingRequest(builder.build(), previewCallback, cameraHandler)
+            submitRegularPreviewRequest(session, builder)
         } catch (e: CameraAccessException) {
             PLog.e(TAG, "Failed to update preview", e)
         } catch (e: IllegalStateException) {
@@ -7930,7 +8018,7 @@ class Camera2Controller(private val context: Context) {
 
         if (submitted) {
             try {
-                session.setRepeatingRequest(builder.build(), previewCallback, cameraHandler)
+                submitRegularPreviewRequest(session, builder)
             } catch (e: Exception) {
                 // The one-shot request is already queued and its callback can still complete the lock.
                 PLog.w(TAG, "Unable to resume IDLE repeating request after $reason AF trigger", e)
@@ -7975,31 +8063,137 @@ class Camera2Controller(private val context: Context) {
         }
     }
 
+    private fun canUseRawZsl(state: CameraState): Boolean =
+        state.isProfessionalMode &&
+            state.flashMode == CameraMetadata.FLASH_MODE_OFF &&
+            !state.isHdrPlusBracketExposureEnabled &&
+            !shouldApplyRawMinShutterLimit(state) &&
+            (usesCameraAutoExposure(state) || coercePreviewExposureTime(state) == state.shutterSpeed)
+
+    private fun takeRawZslFrames(
+        state: CameraState,
+        reader: ImageReader,
+        shutterElapsedNs: Long,
+    ): List<RawZslFrameCache.Frame> {
+        if (reader !== rawPreviewReader || !canUseRawZsl(state) ||
+            state.isFocusing || previewUpdateScheduled.get()
+        ) return emptyList()
+        val repeatingRequest = rawZslRepeatingRequest ?: return emptyList()
+        val frameCount = state.activeMultiFrameCount
+        // Auto-exposure Live Photo keeps its existing AE mode throughout capture.
+        val canTopUp = supportsManualSensorExposure && (!state.useLivePhoto || !usesCameraAutoExposure(state))
+        val eligible = { frame: RawZslFrameCache.Frame ->
+            frame.result.request === repeatingRequest && frame.cameraId == rawZslCameraId &&
+                matchesRawZslCapture(frame, state)
+        }
+        return rawZslCache.takeLatest(
+            nowElapsedNs = SystemClock.elapsedRealtimeNanos(),
+            frameLimit = frameCount,
+            minimumCount = if (canTopUp) 1 else frameCount,
+            isAnchor = { isRawZslFrameFresh(it, shutterElapsedNs) && eligible(it) },
+            isCompatible = { anchor, prior -> eligible(prior) && matchesRawZslStack(anchor, prior) },
+        )
+    }
+
+    private fun matchesRawZslStack(anchor: RawZslFrameCache.Frame, frame: RawZslFrameCache.Frame): Boolean {
+        val reference = anchor.sourceResult
+        val candidate = frame.sourceResult
+        return candidate.get(CaptureResult.SENSOR_EXPOSURE_TIME) == reference.get(CaptureResult.SENSOR_EXPOSURE_TIME) &&
+            candidate.get(CaptureResult.SENSOR_SENSITIVITY) == reference.get(CaptureResult.SENSOR_SENSITIVITY) &&
+            candidate.get(CaptureResult.LENS_APERTURE) == reference.get(CaptureResult.LENS_APERTURE) &&
+            candidate.get(CaptureResult.LENS_FOCUS_DISTANCE) == reference.get(CaptureResult.LENS_FOCUS_DISTANCE) &&
+            candidate.get(CaptureResult.SCALER_CROP_REGION) == reference.get(CaptureResult.SCALER_CROP_REGION) &&
+            candidate.get(CaptureResult.CONTROL_ZOOM_RATIO) == reference.get(CaptureResult.CONTROL_ZOOM_RATIO)
+    }
+
+    private fun isRawZslFrameFresh(frame: RawZslFrameCache.Frame, shutterElapsedNs: Long): Boolean {
+        // The result's sensor clock can be compared with the shutter only on REALTIME devices.
+        val frameElapsedNs = if (
+            frame.sensorTimestampSource == CameraCharacteristics.SENSOR_INFO_TIMESTAMP_SOURCE_REALTIME
+        ) frame.timestampNs else frame.arrivedElapsedNs
+        return shutterElapsedNs - frameElapsedNs in 0L until rawZslCache.maxAgeNs
+    }
+
+    private fun matchesRawZslCapture(frame: RawZslFrameCache.Frame, state: CameraState): Boolean {
+        val request = frame.result.request
+        val result = frame.sourceResult
+        val exposureNs = result.get(CaptureResult.SENSOR_EXPOSURE_TIME) ?: return false
+        val iso = result.get(CaptureResult.SENSOR_SENSITIVITY) ?: return false
+        if (exposureNs !in 1L until rawZslCache.maxAgeNs || iso <= 0 ||
+            request.get(CaptureRequest.FLASH_MODE) != CaptureRequest.FLASH_MODE_OFF ||
+            result.get(CaptureResult.LENS_STATE) == CaptureResult.LENS_STATE_MOVING
+        ) return false
+        when (result.get(CaptureResult.FLASH_STATE) ?: frame.result.get(CaptureResult.FLASH_STATE)) {
+            CaptureResult.FLASH_STATE_FIRED, CaptureResult.FLASH_STATE_PARTIAL -> return false
+        }
+        when (result.get(CaptureResult.CONTROL_AF_STATE) ?: frame.result.get(CaptureResult.CONTROL_AF_STATE)) {
+            CaptureResult.CONTROL_AF_STATE_ACTIVE_SCAN,
+            CaptureResult.CONTROL_AF_STATE_PASSIVE_SCAN,
+            CaptureResult.CONTROL_AF_STATE_NOT_FOCUSED_LOCKED,
+            CaptureResult.CONTROL_AF_STATE_PASSIVE_UNFOCUSED -> return false
+        }
+        if (!usesCameraAutoExposure(state)) {
+            return request.get(CaptureRequest.CONTROL_AE_MODE) == CaptureRequest.CONTROL_AE_MODE_OFF &&
+                request.get(CaptureRequest.SENSOR_SENSITIVITY) == state.iso &&
+                request.get(CaptureRequest.SENSOR_EXPOSURE_TIME) == state.shutterSpeed
+        }
+        when (result.get(CaptureResult.CONTROL_AE_STATE) ?: frame.result.get(CaptureResult.CONTROL_AE_STATE)) {
+            CaptureResult.CONTROL_AE_STATE_SEARCHING,
+            CaptureResult.CONTROL_AE_STATE_PRECAPTURE,
+            CaptureResult.CONTROL_AE_STATE_FLASH_REQUIRED -> return false
+        }
+        val compensation = request.get(CaptureRequest.CONTROL_AE_EXPOSURE_COMPENSATION) ?: 0
+        return request.get(CaptureRequest.CONTROL_AE_MODE) == resolveSupportedAeMode(CaptureRequest.CONTROL_AE_MODE_ON) &&
+            compensation == state.exposureCompensation
+    }
+
     /**
      * 拍照
      */
     fun capture(onAccepted: ((Long) -> Unit)? = null) {
+        val shutterElapsedNs = SystemClock.elapsedRealtimeNanos()
         val handler = cameraHandler
         if (handler != null && Looper.myLooper() != handler.looper) {
             handler.post {
-                capture(onAccepted)
+                captureAt(shutterElapsedNs, onAccepted)
             }
             return
         }
-        if (_state.value.captureMode != CaptureMode.PHOTO) return
-        if (_state.value.isCapturing) {
+        captureAt(shutterElapsedNs, onAccepted)
+    }
+
+    private fun captureAt(shutterElapsedNs: Long, onAccepted: ((Long) -> Unit)?) {
+        val state = _state.value
+        if (state.captureMode != CaptureMode.PHOTO) return
+        if (state.isCapturing) {
             PLog.d(TAG, "Ignoring capture request while a capture is already active")
             return
         }
         val device = cameraDevice ?: return
         val reader = imageReader ?: return
         if (captureSession == null) return
-        val shot = reservePhotoCapture(_state.value, reader) ?: return
+        val cachedFrames = ArrayDeque(takeRawZslFrames(state, reader, shutterElapsedNs))
+        val cachedLivePhotoStart = if (state.useLivePhoto) {
+            cachedFrames.peekLast()?.let { livePhotoRecorder.snapshotAt(it.timestampNs / 1_000L) }
+        } else null
+        if (state.useLivePhoto && cachedLivePhotoStart == null) {
+            cachedFrames.forEach(RawZslFrameCache.Frame::close)
+            cachedFrames.clear()
+        }
+        if (cachedFrames.isEmpty()) clearRawZslFrames()
+        val shot = reservePhotoCapture(state, reader, cachedFrames = cachedFrames)
+        if (shot == null) {
+            cachedFrames.forEach(RawZslFrameCache.Frame::close)
+            cachedLivePhotoStart?.let(livePhotoRecorder::cancelCapture)
+            return
+        }
         activePhotoCapture = shot
+        livePhotoVideoStartTimestampUs = cachedLivePhotoStart
         _state.update { it.copy(isCapturing = true, photoCaptureProgress = null) }
         try {
             onAccepted?.invoke(shot.id)
         } catch (e: Exception) {
+            cachedFrames.forEach(RawZslFrameCache.Frame::close)
             failPhotoCapture(shot, "capture acceptance callback failed")
             finishPhotoCaptureSequence(shot, successful = false)
             PLog.e(TAG, "Capture acceptance callback failed", e)
@@ -8007,27 +8201,52 @@ class Camera2Controller(private val context: Context) {
         }
 
         try {
-            livePhotoVideoStartTimestampUs = null
-            if (_state.value.useLivePhoto) {
+            if (state.useLivePhoto && cachedLivePhotoStart == null) {
                 snapshotLivePhoto()
+            }
+
+            if (!state.useLivePhoto) {
+                // 播放快门音效
+                onPlayShutterSound?.invoke()
+            }
+
+            val anchor = cachedFrames.peekLast()
+            if (anchor != null) {
+                rawZslCache.discardThrough(anchor.timestampNs)
+                shot.livePhotoStartTimestampUs = cachedLivePhotoStart
+                shot.rawZslAnchorTimestampNs = anchor.timestampNs
+                while (!shot.failed) {
+                    val frame = cachedFrames.pollFirst() ?: break
+                    // The regular capture path now owns this frame's lease.
+                    processAndTriggerCapture(frame.image, frame.result, shot, fromRawZsl = true)
+                }
+                shot.cachedAnchorInfo = shot.frames[anchor.timestampNs]?.captureInfo
+                if (shot.cachedAnchorInfo == null) {
+                    finishPhotoCaptureSequence(shot, successful = false)
+                    return
+                }
+                PLog.i(
+                    TAG,
+                    "RAW ZSL capture: id=${shot.id} cached=${shot.cachedFrameCount} " +
+                        "fresh=${shot.freshFrameCount} anchor=${anchor.result.frameNumber}",
+                )
+                if (shot.freshFrameCount == 0) {
+                    finishPhotoCaptureSequence(shot, successful = true)
+                } else {
+                    lastCaptureResult = null
+                    burstGyroRecorder.start(cameraHandler)
+                    performCapture(device, reader, baseExposureResult = anchor.sourceResult)
+                }
+                return
             }
 
             val baseExposureResult = lastCaptureResult
             // 关键修复：每次拍照前重置拍摄结果
             lastCaptureResult = null
-
             PLog.i(
                 TAG,
                 "开始拍照 - 闪光模式: ${_state.value.flashMode}, ISO模式: ${if (_state.value.isIsoAuto) "自动" else "手动(${_state.value.iso})"}"
             )
-
-            if (!_state.value.useLivePhoto) {
-                // 播放快门音效
-                onPlayShutterSound?.invoke()
-            }
-
-            _state.value = _state.value.copy(isCapturing = true)
-
             // 只有在【自动曝光 + 单次闪光】时才使用预闪流程
             // 手动曝光模式下，AE_PRECAPTURE_TRIGGER 不生效（因为 AE_MODE=OFF），直接拍照
             val currentState = _state.value
@@ -8042,6 +8261,8 @@ class Camera2Controller(private val context: Context) {
             _state.value = _state.value.copy(isCapturing = false)
             burstGyroRecorder.stop()
             resetPreviewAfterCapture()
+        } finally {
+            cachedFrames.forEach(RawZslFrameCache.Frame::close)
         }
     }
 
@@ -8612,7 +8833,9 @@ class Camera2Controller(private val context: Context) {
     ) {
         try {
             val isRawCapture = isRawCaptureReader(reader)
-            val currentState = stillFlashCaptureState ?: _state.value
+            val shot = activePhotoCapture ?: error("Missing photo capture reservation")
+            val isRawZslTopUp = shot.cachedFrameCount > 0
+            val currentState = if (isRawZslTopUp) shot.state else stillFlashCaptureState ?: _state.value
             val useMultiFrameTorch = isMultiFrameTorchCaptureActive
             if (shouldUseJpgMaxHdrCapture(currentState, isRawCapture)) {
                 val session = captureSession ?: run {
@@ -8710,6 +8933,24 @@ class Camera2Controller(private val context: Context) {
                     isRawCapture = isRawCapture,
                     preferManualExposureLock = isRawCapture && useHdrPlusBracketExposurePlan,
                 )
+                if (isRawZslTopUp) {
+                    val anchor = checkNotNull(baseExposureResult)
+                    setZslDisabledIfSupported(this)
+                    set(CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_OFF)
+                    set(CaptureRequest.CONTROL_AE_LOCK, false)
+                    set(CaptureRequest.SENSOR_SENSITIVITY, checkNotNull(anchor.get(CaptureResult.SENSOR_SENSITIVITY)))
+                    set(CaptureRequest.SENSOR_EXPOSURE_TIME, checkNotNull(anchor.get(CaptureResult.SENSOR_EXPOSURE_TIME)))
+                    applyPreservedPostRawBoostIfSupported(this, anchor)
+                    val aperture = anchor.readPhysicalAperture(apertureCameraId)
+                    if (aperture != null && aperture in currentState.availableApertures) {
+                        applyPhysicalApertureSettings(this, currentState.copy(requestedPhysicalAperture = aperture))
+                    }
+                    val focus = resolveValidFocusDistance(anchor, currentState)
+                    if (focus != null && CaptureRequest.CONTROL_AF_MODE_OFF in availableAfModes) {
+                        set(CaptureRequest.CONTROL_AF_MODE, CaptureRequest.CONTROL_AF_MODE_OFF)
+                        set(CaptureRequest.LENS_FOCUS_DISTANCE, focus)
+                    }
+                }
 
                 PLog.d(
                     TAG,
@@ -8729,7 +8970,7 @@ class Camera2Controller(private val context: Context) {
                 captureBuilder.setTag(MultiFrameCaptureRole.BASE)
                 val baseRequest = captureBuilder.build()
                 val requests = if (!useHdrPlusBracketExposurePlan) {
-                    List(frameCount) { baseRequest }
+                    List(shot.freshFrameCount) { baseRequest }
                 } else {
                     val normalFrameCount = MultiFrameConfig.hdrPlusNormalFrameCount(frameCount)
                     val shortFrameCount = MultiFrameConfig.hdrPlusShortFrameCount(frameCount)
@@ -8813,10 +9054,8 @@ class Camera2Controller(private val context: Context) {
                     )
                 }
 
-                val shot = activePhotoCapture ?: error("Missing multi-frame capture reservation")
                 submitPhotoCapture(shot, session, requests, baseExposureResult)
             } else {
-                val shot = activePhotoCapture ?: error("Missing single capture reservation")
                 submitPhotoCapture(shot, session, listOf(captureBuilder.build()), baseExposureResult)
             }
         } catch (e: Exception) {
@@ -8920,7 +9159,7 @@ class Camera2Controller(private val context: Context) {
                 builder,
                 CaptureRequest.CONTROL_AE_PRECAPTURE_TRIGGER_IDLE,
             )
-            session.setRepeatingRequest(builder.build(), previewCallback, cameraHandler)
+            submitRegularPreviewRequest(session, builder)
             PLog.i(TAG, "Capture preview restored: cancelledAfMode=$afTriggerModeToCancel " +
                 "cancelledAePrecapture=$shouldCancelAePrecapture " +
                 "previewAfMode=${builder.get(CaptureRequest.CONTROL_AF_MODE)}")
@@ -9267,6 +9506,7 @@ class Camera2Controller(private val context: Context) {
         image: SafeImage,
         result: TotalCaptureResult?,
         shot: PhotoCaptureContext,
+        fromRawZsl: Boolean = false,
     ) {
         try {
             // Reject malformed HAL buffers while this capture still owns its failure/cleanup path.
@@ -9364,20 +9604,21 @@ class Camera2Controller(private val context: Context) {
                         ?: Float.NaN,
                     lensState = frameResult.get(CaptureResult.LENS_STATE),
                     rollingShutterSkewNs = frameResult.get(CaptureResult.SENSOR_ROLLING_SHUTTER_SKEW),
-                    gyroWindow = frozenMetadata?.gyroWindow
+                    gyroWindow = if (fromRawZsl) null else frozenMetadata?.gyroWindow
                         ?: burstGyroRecorder.exposureWindow(sensorTimestampNs, exposureTimeNs),
                     // Resolve noise from the same result as this RAW's ISO/CFA. The early
                     // snapshot belongs to the logical result, while dimension matching above
                     // may select a different physical sensor. If its profile is absent, let
                     // the noise resolver use its declared fallback, not another sensor's model.
                     channelNoiseProfile = captureChannelNoiseProfile(frameResult),
-                    multiFrameCaptureRole = frozenMetadata?.multiFrameCaptureRole
-                        ?: (frameResult.request.tag as? MultiFrameCaptureRole),
+                    multiFrameCaptureRole = if (fromRawZsl && shot.expectedFrames > 1) MultiFrameCaptureRole.BASE
+                        else frozenMetadata?.multiFrameCaptureRole ?: (frameResult.request.tag as? MultiFrameCaptureRole),
                     dynamicBlackLevelByCfaPosition = frameResult
                         .get(CaptureResult.SENSOR_DYNAMIC_BLACK_LEVEL)
                         ?.takeIf { it.size >= 4 }
                         ?.copyOf(4)
                         ?: frozenMetadata?.dynamicBlackLevelByCfaPosition?.copyOf(),
+                    fromRawZsl = fromRawZsl,
                 )
             } else {
                 null
@@ -9509,6 +9750,7 @@ class Camera2Controller(private val context: Context) {
         val isStartingNewBurst = !_state.value.burstCapturing
         if (isStartingNewBurst && (_state.value.isCapturing || photoCaptures.values.any { it.continuousBurst })) return
         if (!isStartingNewBurst && onAccepted != null) return
+        if (isStartingNewBurst) clearRawZslFrames()
         val shot = pendingContinuousBurstCapture ?: reservePhotoCapture(
             _state.value.copy(burstCapturing = true, isCapturing = true),
             reader,

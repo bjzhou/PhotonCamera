@@ -54,6 +54,8 @@ class LivePhotoRecorder(
     private val bufferCapacity = bufferDurationMs + postCaptureDurationMs + 2000L
     private val circularVideoRecorder = CircularSampleRecorder(bufferCapacity)
     private val circularAudioRecorder = CircularSampleRecorder(bufferCapacity)
+    // Keep keyframe selection and retention atomic against eviction on the encoder thread.
+    private val videoSamplesLock = Any()
 
     @Volatile
     private var videoEncoder: MediaCodec? = null
@@ -118,8 +120,8 @@ class LivePhotoRecorder(
     /**
      * 开始录制 (当实况照片模式开启时调用)
      */
-    fun startRecording() {
-        if (isRunning) return
+    fun startRecording() = synchronized(videoSamplesLock) {
+        if (isRunning) return@synchronized
         circularVideoRecorder.startRecording()
         circularAudioRecorder.startRecording()
         latestEncodedVideoTimestampUs.value = Long.MIN_VALUE
@@ -133,7 +135,7 @@ class LivePhotoRecorder(
     /**
      * 停止录制 (当实况照片模式关闭或相机关闭时调用)
      */
-    fun stopRecording() {
+    fun stopRecording() = synchronized(videoSamplesLock) {
         isRunning = false
         pendingCaptureStart.getAndSet(null)?.let {
             isCapturing = false
@@ -462,29 +464,45 @@ class LivePhotoRecorder(
     /**
      * 触发快照 (拍照时调用)
      */
-    fun snapshot(): Long? {
-        if (!isRunning) return null
+    fun snapshot(): Long? = synchronized(videoSamplesLock) {
+        if (!isRunning) return@synchronized null
 
         // 使用最近一帧的时间戳作为基准，避免时钟源不一致问题
-        snapshotTimestampUs = lastFrameTimestampUs
-        if (snapshotTimestampUs == 0L) {
-            snapshotTimestampUs = android.os.SystemClock.elapsedRealtimeNanos() / 1000
-        }
+        val centerUs = lastFrameTimestampUs.takeIf { it != 0L }
+            ?: android.os.SystemClock.elapsedRealtimeNanos() / 1000
+        val retainedStartUs = findSnapshotStart(centerUs, latestStartUs = Long.MAX_VALUE)
+        beginSnapshot(centerUs, retainedStartUs)
+        retainedStartUs
+    }
 
-        isCapturing = true
+    /** Retains pre-roll for a cached still only when an earlier decodable start is available. */
+    internal fun snapshotAt(imageTimestampUs: Long): Long? = synchronized(videoSamplesLock) {
+        if (!isRunning || imageTimestampUs <= 0L) return@synchronized null
+        val retainedStartUs = findSnapshotStart(imageTimestampUs, latestStartUs = imageTimestampUs)
+            ?: return@synchronized null
+        beginSnapshot(imageTimestampUs, retainedStartUs)
+        retainedStartUs
+    }
+
+    private fun findSnapshotStart(centerUs: Long, latestStartUs: Long): Long? {
         val samples = circularVideoRecorder.snapshot()
-        val desiredStartUs = snapshotTimestampUs - bufferDurationMs * 1000
+        val desiredStartUs = minOf(centerUs - bufferDurationMs * 1000, latestStartUs)
         val keyframe = samples.lastOrNull {
             it.info.presentationTimeUs <= desiredStartUs &&
                 (it.info.flags and MediaCodec.BUFFER_FLAG_KEY_FRAME) != 0
         } ?: samples.firstOrNull {
-            (it.info.flags and MediaCodec.BUFFER_FLAG_KEY_FRAME) != 0
+            it.info.presentationTimeUs <= latestStartUs &&
+                (it.info.flags and MediaCodec.BUFFER_FLAG_KEY_FRAME) != 0
         }
-        val retainedStartUs = keyframe?.info?.presentationTimeUs
+        return keyframe?.info?.presentationTimeUs
+    }
+
+    private fun beginSnapshot(centerUs: Long, retainedStartUs: Long?) {
         retainedStartUs?.let(::retainCaptureFrom)
+        snapshotTimestampUs = centerUs
+        isCapturing = true
         captureMinimumTimestampUs = retainedStartUs
-        PLog.i(TAG, "Live Photo snapshot: shutter=$snapshotTimestampUs, retainedStart=$retainedStartUs")
-        return retainedStartUs
+        PLog.i(TAG, "Live Photo snapshot: shutter=$centerUs, retainedStart=$retainedStartUs")
     }
 
     /**
@@ -643,7 +661,9 @@ class LivePhotoRecorder(
                     } else if (outputBufferIndex >= 0) {
                         val outputBuffer = encoderRef.getOutputBuffer(outputBufferIndex)
                         if (outputBuffer != null && bufferInfo.size > 0) {
-                            circularVideoRecorder.addSample(outputBuffer, bufferInfo)
+                            synchronized(videoSamplesLock) {
+                                circularVideoRecorder.addSample(outputBuffer, bufferInfo)
+                            }
                             latestEncodedVideoTimestampUs.value = bufferInfo.presentationTimeUs
                             pendingCaptureStart.get()?.let { pending ->
                                 if (bufferInfo.presentationTimeUs >= pending.minimumTimestampUs &&
@@ -737,7 +757,9 @@ class LivePhotoRecorder(
     }
 
     fun release() {
-        isRunning = false
+        synchronized(videoSamplesLock) {
+            isRunning = false
+        }
         // 不要在这里立刻置空 videoFormat，因为异步的 recordVideo 还需要它进行 mux
         scope.launch(renderDispatcher) {
             hardwareMutex.withLock {

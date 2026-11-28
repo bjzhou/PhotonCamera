@@ -9,6 +9,7 @@ data class CapturedPhoto(
     val id: Long,
     val state: CameraState,
     val frames: List<CapturedPhotoFrame>,
+    val rawZslAnchorTimestampNs: Long? = null,
 )
 
 data class CapturedPhotoFrame(

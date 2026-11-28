@@ -3,11 +3,13 @@
 #include <android/hardware_buffer_jni.h>
 #include <android/log.h>
 #include <jni.h>
+#include <limits>
 
 namespace {
 
-// HAL_PIXEL_FORMAT_RAW10/RAW12 match the public ImageFormat values. AHardwareBuffer
-// does not expose named NDK constants for these packed formats.
+// These HAL RAW formats match the public ImageFormat values. The NDK does not
+// expose named AHardwareBuffer constants for all three.
+constexpr uint32_t kRaw16Format = 0x20;
 constexpr uint32_t kRaw10Format = 0x25;
 constexpr uint32_t kRaw12Format = 0x26;
 
@@ -21,33 +23,38 @@ uint32_t PackedBitsPerPixel(uint32_t format) {
 
 }  // namespace
 
-extern "C" JNIEXPORT jboolean JNICALL
-Java_com_hinnka_mycamera_raw_RawPackedUnpacker_validateHardwareBufferNative(
+extern "C" JNIEXPORT jlong JNICALL
+Java_com_hinnka_mycamera_raw_RawImageBufferLayout_describeByteCountNative(
     JNIEnv *env, jobject, jobject hardwareBuffer, jint format, jint width, jint height) {
-  const uint32_t bits = PackedBitsPerPixel(format);
-  if (!hardwareBuffer || bits == 0) return JNI_FALSE;
+  const auto rawFormat = static_cast<uint32_t>(format);
+  const uint32_t bits = PackedBitsPerPixel(rawFormat);
+  const bool packed = bits != 0;
+  if (!hardwareBuffer || (!packed && rawFormat != kRaw16Format)) return 0;
   AHardwareBuffer *buffer = AHardwareBuffer_fromHardwareBuffer(env, hardwareBuffer);
-  if (!buffer) return JNI_FALSE;
+  if (!buffer) return 0;
   AHardwareBuffer_Desc desc{};
   AHardwareBuffer_describe(buffer, &desc);
 
-  // For packed RAW, framework getLockedImageInfo interprets the GraphicBuffer stride
-  // as bytes and can abort if it is smaller than the packed row. Inspect it without
-  // locking pixels or calling Image.getPlanes(), which would hit that abort.
-  const uint64_t packedRowBytes = uint64_t(desc.width) * bits / 8;
+  // ImageReader uses the GraphicBuffer stride as bytes for packed RAW and as
+  // pixels for RAW16. Its packed plane setup aborts if the row is too short.
+  const uint64_t rowBytes = uint64_t(desc.stride) * (packed ? 1 : sizeof(uint16_t));
+  const uint64_t minimumRowBytes =
+      packed ? uint64_t(desc.width) * bits / 8 : uint64_t(desc.width) * sizeof(uint16_t);
+  const auto maxBytes = static_cast<uint64_t>(std::numeric_limits<jlong>::max());
   const bool valid = width > 0 && height > 0 && desc.layers == 1 &&
-      desc.format == uint32_t(format) && desc.width == uint32_t(width) &&
-      desc.height == uint32_t(height) && desc.width % 4 == 0 &&
-      desc.height % 2 == 0 && desc.stride >= packedRowBytes;
-  if (!valid) {
+      desc.format == rawFormat && desc.width == uint32_t(width) &&
+      desc.height == uint32_t(height) && rowBytes >= minimumRowBytes &&
+      (!packed || (desc.width % 4 == 0 && desc.height % 2 == 0)) &&
+      rowBytes <= maxBytes / desc.height;
+  if (!valid && packed) {
     __android_log_print(ANDROID_LOG_ERROR, "PLog_RawPackedUnpacker",
         "Rejecting packed RAW buffer before getPlanes: image=%dx%d format=0x%x "
         "buffer=%ux%u format=0x%x layers=%u stride=%u minRowBytes=%llu usage=0x%llx",
-        width, height, uint32_t(format), desc.width, desc.height, desc.format, desc.layers,
-        desc.stride, static_cast<unsigned long long>(packedRowBytes),
+        width, height, rawFormat, desc.width, desc.height, desc.format, desc.layers,
+        desc.stride, static_cast<unsigned long long>(minimumRowBytes),
         static_cast<unsigned long long>(desc.usage));
   }
-  return valid ? JNI_TRUE : JNI_FALSE;
+  return valid ? static_cast<jlong>(rowBytes * desc.height) : 0;
 }
 
 extern "C" JNIEXPORT jboolean JNICALL

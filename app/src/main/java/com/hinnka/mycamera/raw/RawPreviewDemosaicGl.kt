@@ -94,7 +94,7 @@ internal class RawPreviewDemosaicGl {
     private var lastShadingHeight = 0
     private var packedShadingMap: ShortBuffer? = null
 
-    /** Borrows [image] for the synchronous client-memory upload. The caller closes it. */
+    /** Borrows a layout-validated [image] for the synchronous upload. The caller closes it. */
     fun render(
         image: Image,
         result: CaptureResult,
@@ -250,7 +250,6 @@ internal class RawPreviewDemosaicGl {
     }
 
     private fun uploadRaw(image: Image, textureId: Int, crop: Rect, sourceRowWidth: Int, isPacked: Boolean) {
-        if (isPacked) RawPackedUnpacker.validateImageLayout(image)
         val plane = image.planes.single()
         val pixels = plane.buffer.duplicate().apply { position(0) }
         val rowStride = plane.rowStride

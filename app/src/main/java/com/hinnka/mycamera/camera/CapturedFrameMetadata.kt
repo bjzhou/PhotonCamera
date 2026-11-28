@@ -60,4 +60,5 @@ data class CapturedFrameMetadata(
     val desiredExposureProduct: Double? = null,
     /** Camera2 dynamic black levels in 2x2 CFA position order: (0,0), (1,0), (0,1), (1,1). */
     val dynamicBlackLevelByCfaPosition: FloatArray? = null,
+    val fromRawZsl: Boolean = false,
 )

@@ -27,6 +27,7 @@ internal data class GlesMgcRawBaseFrameSelection(
     val candidateIndices: IntArray,
     val prunedLatestIndex: Int?,
     val measurements: Map<Int, GlesMgcRawSharpnessMeasurement>,
+    val prunedOldestIndex: Int? = null,
 )
 
 /**
@@ -35,9 +36,9 @@ internal data class GlesMgcRawBaseFrameSelection(
  * `MeasureSharpnessRaw` at libgcastartup.so+0x33bb2dc produces squared-gradient,
  * noise-correction and saturation terms. Its no-motion path at +0x33bbfe4 selects the upper
  * confidence score `sqr_gradient_sum - 0.95 * noise_correction_term`. MGC's ZSL selector at
- * +0x33b7418 prunes the oldest of eight candidates; Photon's forward burst has the opposite time
- * direction, so it prunes the latest candidate and retains earlier-frame priority. No gyro term is
- * supplied. Every per-pixel operation and reduction runs in GLES; Kotlin reads one vec4 per frame.
+ * +0x33b7418 prunes the oldest of eight candidates. Photon uses newest-first priority for cached
+ * frames and earliest-first priority for forward bursts. No gyro term is supplied. Every per-pixel
+ * operation and reduction runs in GLES; Kotlin reads one vec4 per measured frame.
  */
 internal class GlesMgcRawBaseFrameSelector(
     private val width: Int,
@@ -66,6 +67,10 @@ internal class GlesMgcRawBaseFrameSelector(
     fun select(frames: List<RawStackFrame>): GlesMgcRawBaseFrameSelection? {
         val normalIndices = frames.indices.filter { frames[it].role == RawBurstFrameRole.NORMAL }
         if (normalIndices.isEmpty()) return null
+        // Reference candidates can be limited to the pre-shutter cache. The fusion stage still
+        // receives every normal frame, including those captured after the shutter.
+        val cachedIndices = normalIndices.filter { frames[it].fromRawZsl }
+        val referenceIndices = cachedIndices.ifEmpty { normalIndices }
         if (width < 8 || height < 8 || cfaPattern !in 0..3 || whiteLevel <= 0) {
             PLog.e(
                 TAG,
@@ -78,22 +83,23 @@ internal class GlesMgcRawBaseFrameSelector(
         return try {
             if (useCurrentGlContext) attachCurrentEgl() else initEgl()
             ensureGles31()
-            val selection = if (normalIndices.size == 1) {
+            val selection = if (referenceIndices.size == 1) {
                 GlesMgcRawBaseFrameSelection(
-                    referenceIndex = normalIndices.single(),
-                    candidateIndices = normalIndices.toIntArray(),
+                    referenceIndex = referenceIndices.single(),
+                    candidateIndices = referenceIndices.toIntArray(),
                     prunedLatestIndex = null,
                     measurements = emptyMap(),
                 )
             } else {
-                val measurements = measureFrames(frames, normalIndices)
+                val measurements = measureFrames(frames, referenceIndices)
                 selectFromMeasurements(
-                    normalIndices = normalIndices.toIntArray(),
+                    normalIndices = referenceIndices.toIntArray(),
                     timestampsNs = LongArray(frames.size) { frames[it].sensorTimestampNs },
                     measurements = measurements,
+                    preferNewest = cachedIndices.isNotEmpty(),
                 ) ?: return null
             }
-            if (normalIndices.size > 1) logSelection(frames, normalIndices, selection)
+            if (referenceIndices.size > 1) logSelection(frames, referenceIndices, selection)
             selection
         } catch (error: RuntimeException) {
             PLog.e(TAG, "MGC GLES RAW base-frame selection failed", error)
@@ -590,6 +596,7 @@ internal class GlesMgcRawBaseFrameSelector(
                 } +
                 " prunedLatest=" +
                 (selection.prunedLatestIndex?.let { frames[it].frameNumber } ?: "none") +
+                (selection.prunedOldestIndex?.let { " prunedOldest=${frames[it].frameNumber}" } ?: "") +
                 " reference=${frames[selection.referenceIndex].frameNumber}",
         )
     }
@@ -791,28 +798,25 @@ internal class GlesMgcRawBaseFrameSelector(
         private const val EGL_OPENGL_ES3_BIT_KHR = 0x00000040
         private const val RAW_BYTES_PER_PIXEL = 2
         private const val RAW_TEXTURE_RING_SIZE = 2
-        private const val PRUNE_LATEST_AT_CANDIDATE_COUNT = 8
+        private const val PRUNE_AT_CANDIDATE_COUNT = 8
         private const val NO_MOTION_NOISE_CORRECTION_SCALE = 0.95
 
         internal fun selectFromMeasurements(
             normalIndices: IntArray,
             timestampsNs: LongArray,
             measurements: Map<Int, GlesMgcRawSharpnessMeasurement>,
+            preferNewest: Boolean = false,
         ): GlesMgcRawBaseFrameSelection? {
             if (normalIndices.isEmpty()) return null
+            val missingTimestamp = if (preferNewest) Long.MIN_VALUE else Long.MAX_VALUE
             val chronologicalIndices = normalIndices.sortedWith(
-                compareBy<Int> { timestampsNs.getOrElse(it) { Long.MAX_VALUE } }
+                compareBy<Int> { timestampsNs.getOrElse(it) { missingTimestamp } }
                     .thenBy { it },
             )
-            val prunedLatestIndex = if (
-                chronologicalIndices.size >= PRUNE_LATEST_AT_CANDIDATE_COUNT
-            ) {
-                chronologicalIndices.last()
-            } else {
-                null
-            }
-            val candidateIndices = chronologicalIndices
-                .filter { it != prunedLatestIndex }
+            val priorityOrder = if (preferNewest) chronologicalIndices.asReversed() else chronologicalIndices
+            val prunedIndex = priorityOrder.last().takeIf { priorityOrder.size >= PRUNE_AT_CANDIDATE_COUNT }
+            val candidateIndices = priorityOrder
+                .filter { it != prunedIndex }
                 .toIntArray()
             var referenceIndex = -1
             var bestScore = Double.NEGATIVE_INFINITY
@@ -827,8 +831,9 @@ internal class GlesMgcRawBaseFrameSelector(
             return GlesMgcRawBaseFrameSelection(
                 referenceIndex = referenceIndex,
                 candidateIndices = candidateIndices,
-                prunedLatestIndex = prunedLatestIndex,
+                prunedLatestIndex = prunedIndex.takeUnless { preferNewest },
                 measurements = measurements,
+                prunedOldestIndex = prunedIndex.takeIf { preferNewest },
             )
         }
 
