@@ -669,8 +669,8 @@
     <string name="settings_spectral_film_tuning_description">ปรับการตอบสนองสีของม้วนฟิล์มปัจจุบันอย่างละเอียด</string>
     <string name="settings_raw_auto_exposure">การเปิดรับแสงอัตโนมัติ</string>
     <string name="settings_raw_auto_exposure_description">การวัดแสงอัตโนมัติและการประยุกต์ใช้การชดเชยแสงกับข้อมูลเชิงเส้น RAW ขณะกำลังพัฒนา</string>
-    <string name="settings_raw_adaptive_exposure_mode">การปรับช่วงไดนามิก</string>
-    <string name="settings_raw_adaptive_exposure_mode_description">เลือกวิธีปรับการรับแสงและโทนสว่างมืดในแต่ละส่วนของภาพระหว่างการประมวลผล</string>
+    <string name="settings_raw_adaptive_exposure_mode">การเพิ่มประสิทธิภาพช่วงไดนามิก</string>
+    <string name="settings_raw_adaptive_exposure_mode_description">ปรับการรับแสงและโทนเฉพาะส่วนในการแสดงตัวอย่างสดของโหมดมืออาชีพและการประมวลผลภาพ RAW</string>
     <string name="settings_raw_adaptive_exposure_mode_qualcomm_adrc">Qualcomm ADRC</string>
     <string name="settings_raw_adaptive_exposure_mode_photon_hdr">HDRNet</string>
     <string name="settings_raw_min_shutter_speed">ความเร็วชัตเตอร์ขั้นต่ำ</string>

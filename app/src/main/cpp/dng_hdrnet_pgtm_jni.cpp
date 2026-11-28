@@ -251,6 +251,10 @@ Java_com_hinnka_mycamera_raw_DngHdrNetProfileGainTableNative_nativeGenerateGains
       static_cast<int64_t>(input_width) * input_height * input_channels;
   const int64_t cell_count =
       static_cast<int64_t>(output_grid_width) * output_grid_height;
+  if (cell_count > std::numeric_limits<jsize>::max() / point_count) {
+    LogError("Rejected oversized HDRNet PGTM grid");
+    return JNI_FALSE;
+  }
   const int64_t output_values = cell_count * point_count;
   const int guide_count = env->GetArrayLength(guide_shifts_array);
   const int output_curve_count = env->GetArrayLength(output_curve_array);

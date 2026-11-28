@@ -33,6 +33,7 @@ import com.hinnka.mycamera.raw.HncsFilmCurveMode
 import com.hinnka.mycamera.raw.HncsProfileManager
 import com.hinnka.mycamera.raw.HncsRenderIntent
 import com.hinnka.mycamera.raw.LumixPhotoStyle
+import com.hinnka.mycamera.raw.RawAdaptiveExposureMode
 import com.hinnka.mycamera.raw.RawColorCalibrationMode
 import com.hinnka.mycamera.raw.RawDenoiseDefaults
 import com.hinnka.mycamera.raw.RawNoiseProfileManager
@@ -297,7 +298,7 @@ class UserPreferences internal constructor(
         p[K.RAW_CANON_USE_R5_COLOR_MATRIX_KEY] = v.canonUseR5ColorMatrix
         p[K.RAW_LEICA_USE_M9_COLOR_MATRIX_KEY] = v.leicaUseM9ColorMatrix
     }
-    var rawAdaptiveExposureMode: com.hinnka.mycamera.raw.RawAdaptiveExposureMode by stored({ p ->
+    var rawAdaptiveExposureMode: RawAdaptiveExposureMode by stored({ p ->
         resolveRawAdaptiveExposureMode(p)
     }) { p, v ->
         p[K.RAW_ADAPTIVE_EXPOSURE_MODE_KEY] = v.persistedValue
@@ -752,14 +753,10 @@ private class JsonField<T : Any>(
     }
 }
 
-private fun resolveRawAdaptiveExposureMode(
-    p: Preferences,
-): com.hinnka.mycamera.raw.RawAdaptiveExposureMode {
-    val raw = p[K.RAW_ADAPTIVE_EXPOSURE_MODE_KEY]
-    return com.hinnka.mycamera.raw.RawAdaptiveExposureMode.fromPersistedValue(
-        value = raw,
-        fallback = com.hinnka.mycamera.raw.RawAdaptiveExposureMode.DEFAULT,
-    )
+private fun resolveRawAdaptiveExposureMode(p: Preferences): RawAdaptiveExposureMode {
+    val mode = RawAdaptiveExposureMode.fromPersistedValue(p[K.RAW_ADAPTIVE_EXPOSURE_MODE_KEY])
+    // Photo metadata can still select ADRC while it is hidden from camera settings.
+    return if (mode.usesQualcommAdrc) RawAdaptiveExposureMode.DEFAULT else mode
 }
 
 private fun bool(key: String, default: Boolean): ReadWriteProperty<UserPreferences, Boolean> =

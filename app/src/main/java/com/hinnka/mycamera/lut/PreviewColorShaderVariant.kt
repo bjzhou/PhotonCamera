@@ -19,7 +19,6 @@ internal data class PreviewColorShaderVariant(
     val includeSpatialRecipeEffects: Boolean = false,
     val includeVideoLog: Boolean = false,
     val includeSharpening: Boolean = false,
-    val includeEnginePreview: Boolean = false,
     val includeChromaticAberration: Boolean = false,
     val includeColorRecipe: Boolean = true,
     /** Local Laplacian highlights / shadows from [ShadowsHighlightsShader]. */
@@ -36,6 +35,7 @@ internal data class PreviewColorShaderVariant(
      * single slider costs one step rather than the whole recipe chain.
      */
     val recipeOps: Int = RecipeOps.ALL,
+    val sceneLinearInput: Boolean = false,
 ) {
     val includePreviewBlur: Boolean
         get() = includeLiteClarity || includeLiteSoftLight ||

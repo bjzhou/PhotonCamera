@@ -289,6 +289,7 @@
     <string name="refresh_success">Vorschau aktualisiert</string>
     <string name="refresh_failed">Vorschau konnte nicht aktualisiert werden</string>
     <string name="settings_dro_mode">RAW Dynamic Range Optimizer (DRO)</string>
+    <string name="settings_raw_adaptive_exposure_mode">Dynamikbereichsoptimierung</string>
     <string name="settings_dro_off">Aus</string>
     <string name="settings_dro_dr100">DR100</string>
     <string name="settings_dro_dr200">DR200</string>

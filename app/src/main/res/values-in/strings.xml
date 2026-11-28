@@ -289,6 +289,7 @@
     <string name="refresh_success">Pratinjau disegarkan</string>
     <string name="refresh_failed">Gagal menyegarkan pratinjau</string>
     <string name="settings_dro_mode">Pengoptimal Rentang Dinamis RAW (DRO)</string>
+    <string name="settings_raw_adaptive_exposure_mode">Pengoptimalan rentang dinamis</string>
     <string name="settings_dro_off">Mati</string>
     <string name="settings_dro_dr100">DR100</string>
     <string name="settings_dro_dr200">DR200</string>

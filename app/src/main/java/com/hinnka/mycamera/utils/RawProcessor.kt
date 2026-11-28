@@ -25,7 +25,6 @@ import com.hinnka.mycamera.raw.RawPhysicalCrop
 import com.hinnka.mycamera.raw.DngNoiseProfile
 import com.hinnka.mycamera.raw.RawNoiseProfileLayout
 import com.hinnka.mycamera.raw.RawRenderingEngine
-import com.hinnka.mycamera.raw.RawSceneExposureDeviceLimits
 import com.hinnka.mycamera.raw.RawWhiteLevelCorrection
 import com.hinnka.mycamera.raw.toAdobeDefaultMeteringPlan
 import java.io.File
@@ -561,7 +560,8 @@ object RawProcessor {
                 width = image.width,
                 height = image.height,
                 characteristics = characteristics,
-                captureResult = captureResult
+                captureResult = captureResult,
+                sourceFormat = image.sourceFormat,
             )
             PLog.i(TAG, "Writing RAW_SENSOR DNG with custom writer")
             saveRawBufferToDng(
@@ -642,7 +642,6 @@ object RawProcessor {
     suspend fun prepareRawDngProfile(
         rawBuffer: ByteBuffer?,
         gpuLinearRgbSource: GpuLinearRgbSource? = null,
-        fastMomentsRawStats: com.hinnka.mycamera.raw.RawSceneAERawStats? = null,
         width: Int,
         height: Int,
         characteristics: CameraCharacteristics,
@@ -684,11 +683,9 @@ object RawProcessor {
             customWhiteLevel,
         ).toInt()
         val sourceBaselineExposureEv = DngBaselineExposure.sanitize(
-            baselineExposureEv ?: captureResult
-                .get(CaptureResult.CONTROL_POST_RAW_SENSITIVITY_BOOST)
-                ?.takeIf { it > 0 }
-                ?.let { kotlin.math.log2(it / 100.0).toFloat() }
-                ?: 0f
+            baselineExposureEv ?: DngBaselineExposure.fromPostRawSensitivityBoost(
+                captureResult.get(CaptureResult.CONTROL_POST_RAW_SENSITIVITY_BOOST),
+            ),
         )
         val inputSamplesPerPixel = inputColStepSamples ?: imageLayout.samplesPerPixel
         val inputRowStrideBytes = (inputRowStepSamples
@@ -764,17 +761,6 @@ object RawProcessor {
             colorCorrectionMatrix = meteringRenderPlan.colorCorrectionMatrix.copyOf(),
             cameraWhite = meteringRenderPlan.cameraWhite.copyOf(),
         )
-        val meteringFastMomentsRawStats = fastMomentsRawStats?.let { stats ->
-            val baseFrameMetering = stats.baseFrameMetering ?: return@let stats
-            stats.copy(
-                baseFrameMetering = baseFrameMetering.copy(
-                    lensShadingMap = cameraStatsMetadata.lensShadingMap?.copyOf(),
-                    lensShadingMapWidth = cameraStatsMetadata.lensShadingMapWidth,
-                    lensShadingMapHeight = cameraStatsMetadata.lensShadingMapHeight,
-                    lensShadingMapGrid = cameraStatsMetadata.lensShadingMapGrid?.copyOf(),
-                ),
-            )
-        }
         val captureProfile = options.captureProfilePreparer?.prepare(
             com.hinnka.mycamera.raw.RawDngCaptureProfileInput(
                 rawData = rawBuffer?.duplicate()?.order(ByteOrder.nativeOrder()),
@@ -785,9 +771,6 @@ object RawProcessor {
                 metadata = captureProfileMetadata.copy(profileGainTableMap = null),
                 meteringRenderPlan = meteringRenderPlan,
                 gpuLinearRgbSource = gpuLinearRgbSource,
-                fastMomentsRawStats = meteringFastMomentsRawStats,
-                sceneExposureDeviceLimits = RawSceneExposureDeviceLimits
-                    .fromCameraCharacteristics(characteristics),
             )
         )
         val finalBaselineExposureEv = DngBaselineExposure.sanitize(sourceBaselineExposureEv)

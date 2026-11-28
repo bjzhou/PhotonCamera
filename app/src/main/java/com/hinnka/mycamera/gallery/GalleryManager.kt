@@ -77,7 +77,6 @@ import com.hinnka.mycamera.raw.SpectralFilmTuning
 import com.hinnka.mycamera.raw.fotufilm.FotufilmDocumentStorage
 import com.hinnka.mycamera.raw.RawToneMappingParameters
 import com.hinnka.mycamera.raw.RawWhiteLevelCorrection
-import com.hinnka.mycamera.preview.PortraitMaskSnapshot
 import com.hinnka.mycamera.utils.BitmapUtils
 import com.hinnka.mycamera.utils.DngCaptureDiagnostics
 import com.hinnka.mycamera.utils.DngBlackLevelPatcher
@@ -2245,7 +2244,6 @@ object GalleryManager {
         exposureBias: Float? = null,
         captureExposureCompensationEv: Float = 0f,
         exportDngWithRawExport: Boolean = false,
-        capturePortraitMask: PortraitMaskSnapshot? = null,
     ) = withContext(Dispatchers.IO + DngCaptureDiagnostics.context(photoId)) {
         var rawBufferToRelease: ByteBuffer? = null
         var preparedDemosaicSourceToRelease: GpuDemosaicedRawSource? = null
@@ -2330,6 +2328,7 @@ object GalleryManager {
                 captureResult = resolvedCaptureResult,
                 userExposureBias = exposureBias,
                 captureExposureCompensationEv = captureExposureCompensationEv,
+                sourceFormat = image.sourceFormat,
             ).let(physicalRawCrop::rebase).copy(
                 exposureCompensation = captureExposureCompensationEv,
             )
@@ -2351,7 +2350,6 @@ object GalleryManager {
                 aspectRatio = aspectRatio,
                 rotation = rotation,
                 capturePreviewThumbnail = dngThumbnail,
-                capturePortraitMask = capturePortraitMask,
                 viewfinderMirroredHorizontally = characteristics.get(
                     CameraCharacteristics.LENS_FACING,
                 ) == CameraCharacteristics.LENS_FACING_FRONT,
@@ -2758,7 +2756,6 @@ object GalleryManager {
         exposureBias: Float? = null,
         captureExposureCompensationEv: Float = 0f,
         exportDngWithRawExport: Boolean = false,
-        capturePortraitMask: PortraitMaskSnapshot? = null,
     ) {
         // 根据图像格式处理
         when (val format = image.format) {
@@ -2797,7 +2794,6 @@ object GalleryManager {
                     exposureBias = exposureBias,
                     captureExposureCompensationEv = captureExposureCompensationEv,
                     exportDngWithRawExport = exportDngWithRawExport,
-                    capturePortraitMask = capturePortraitMask,
                 )
             }
 
@@ -3321,7 +3317,6 @@ object GalleryManager {
         captureExposureCompensationEv: Float = 0f,
         exportDngWithRawExport: Boolean = false,
         capturePreviewThumbnail: Bitmap? = null,
-        capturePortraitMask: PortraitMaskSnapshot? = null,
         frameExposureProducts: List<Double?> = emptyList(),
         frameFocusDistances: List<Float?> = emptyList(),
         rawStackFrames: List<RawStackFrame> = emptyList(),
@@ -3372,6 +3367,7 @@ object GalleryManager {
                 userExposureBias = exposureBias,
                 captureExposureCompensationEv = captureExposureCompensationEv,
                 colorSpace = RawDemosaicProcessor.getInstance().getRawColorSpace(),
+                sourceFormat = images[0].sourceFormat,
             ).let(physicalRawCrop::rebase).copy(
                 exposureCompensation = captureExposureCompensationEv,
             )
@@ -3733,7 +3729,6 @@ object GalleryManager {
                     aspectRatio = aspectRatio,
                     rotation = rotation,
                     capturePreviewThumbnail = capturePreviewThumbnail,
-                    capturePortraitMask = capturePortraitMask,
                     viewfinderMirroredHorizontally = characteristics.get(
                         CameraCharacteristics.LENS_FACING,
                     ) == CameraCharacteristics.LENS_FACING_FRONT,
@@ -3750,7 +3745,6 @@ object GalleryManager {
                 val dngProfilePreparation = RawProcessor.prepareRawDngProfile(
                     rawBuffer = null,
                     gpuLinearRgbSource = defaultDenoisedGpuSource,
-                    fastMomentsRawStats = finalStackResult.fastMomentsRawStats,
                     width = finalStackResult.width,
                     height = finalStackResult.height,
                     characteristics = characteristics,
@@ -4590,7 +4584,6 @@ object GalleryManager {
         captureExposureCompensationEv: Float = 0f,
         exportDngWithRawExport: Boolean = false,
         capturePreviewThumbnail: Bitmap? = null,
-        capturePortraitMask: PortraitMaskSnapshot? = null,
         frameExposureProducts: List<Double?> = emptyList(),
         frameFocusDistances: List<Float?> = emptyList(),
         rawStackFrames: List<RawStackFrame> = emptyList(),
@@ -4638,7 +4631,6 @@ object GalleryManager {
                     captureExposureCompensationEv = captureExposureCompensationEv,
                     exportDngWithRawExport = exportDngWithRawExport,
                     capturePreviewThumbnail = capturePreviewThumbnail,
-                    capturePortraitMask = capturePortraitMask,
                     frameExposureProducts = frameExposureProducts,
                     frameFocusDistances = frameFocusDistances,
                     rawStackFrames = rawStackFrames,
@@ -4667,7 +4659,6 @@ object GalleryManager {
         capturePreviewThumbnail: Bitmap?,
         viewfinderMirroredHorizontally: Boolean,
         viewfinderPreviewToCaptureRotationDegrees: Int,
-        capturePortraitMask: PortraitMaskSnapshot? = null,
     ): RawDngProfilePreparationOptions {
         val mlAeMaxHdrRatio = ContentRepository.getInstance(context)
             .userPreferencesRepository.userPreferences.firstOrNull()?.mlAeMaxHdrRatio
@@ -4701,7 +4692,6 @@ object GalleryManager {
                     aspectRatio = aspectRatio,
                     cropRegion = cropRegion,
                     rotation = rotation,
-                    capturePortraitMask = capturePortraitMask,
                     statsBounds = statsBounds,
                     rawBlackPointCorrection = metadata.rawBlackPointCorrection ?: 0f,
                     rawWhitePointCorrection = metadata.rawWhitePointCorrection ?: 0f,
@@ -4722,7 +4712,6 @@ object GalleryManager {
             "RAW_ADAPTIVE_EXPOSURE stage=DNG_PREPARE mode=$exposureMode " +
                 "curve=DEFAULT blackBorderDefaultCrop=$blackBorderDefaultCrop " +
                 "photonPgtm=$generatePhotonPgtm processingBounds=$statsBounds " +
-                "portraitMask=${capturePortraitMask != null} " +
                 "additionalExposureEv=${metadata.rawExposureCompensation ?: 0f}"
         )
         return RawDngProfilePreparationOptions(

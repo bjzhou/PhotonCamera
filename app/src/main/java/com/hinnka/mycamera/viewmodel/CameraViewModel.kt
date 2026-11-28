@@ -60,7 +60,6 @@ import com.hinnka.mycamera.model.withoutIndependentEffects
 import com.hinnka.mycamera.ml.DepthModelManager
 import com.hinnka.mycamera.phantom.PhantomWidgetProvider
 import com.hinnka.mycamera.preview.EyeFocusPreviewFrame
-import com.hinnka.mycamera.preview.PortraitMaskSnapshot
 import com.hinnka.mycamera.preview.PreviewEyeFocusProcessor
 import com.hinnka.mycamera.processor.CaptureProcessingQueue
 import com.hinnka.mycamera.processor.RawBurstFrameRole
@@ -72,8 +71,7 @@ import com.hinnka.mycamera.processor.RawStackFrame
 import com.hinnka.mycamera.raw.ColorSpace
 import com.hinnka.mycamera.raw.DcpProfileParser
 import com.hinnka.mycamera.raw.DcpInfo
-import com.hinnka.mycamera.raw.RawEnginePreviewPlan
-import com.hinnka.mycamera.raw.RawEnginePreviewResolver
+import com.hinnka.mycamera.raw.RawEnginePreviewAdjustments
 import com.hinnka.mycamera.raw.RawEnginePreviewSettings
 import com.hinnka.mycamera.raw.HncsFilmCurveMode
 import com.hinnka.mycamera.raw.HncsRenderIntent
@@ -153,7 +151,6 @@ private data class CaptureSettingsSnapshot(
     val lensFacing: Int,
     val deviceRotation: Int,
     val blackBorderCrop: RawBlackBorderCrop,
-    val portraitMask: PortraitMaskSnapshot?,
     val multipleExposure: Boolean,
     val photoId: String = UUID.randomUUID().toString(),
     val galleryRegistration: CompletableDeferred<Unit> = CompletableDeferred(),
@@ -617,7 +614,6 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             (1_000L + EYE_FOCUS_MAX_AF_TRIGGER_FPS - 1L) / EYE_FOCUS_MAX_AF_TRIGGER_FPS
         private const val EYE_FOCUS_REFRESH_INTERVAL_MS = 1_800L
         private const val EYE_FOCUS_RETRY_INTERVAL_MS = 1_200L
-        private const val PORTRAIT_MASK_MAX_AGE_NS = 1_000_000_000L
     }
 
     private data class HdrBracketFrame(
@@ -689,8 +685,8 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     var currentBaselineLutConfig: LutConfig? by mutableStateOf(null)
         private set
 
-    private val _currentEnginePreviewPlan = MutableStateFlow<RawEnginePreviewPlan?>(null)
-    val currentEnginePreviewPlan = _currentEnginePreviewPlan.asStateFlow()
+    private val _currentEnginePreviewSettings = MutableStateFlow<RawEnginePreviewSettings?>(null)
+    val currentEnginePreviewSettings = _currentEnginePreviewSettings.asStateFlow()
 
     private val _lutLookSelection = MutableStateFlow(CameraLookSelection("standard"))
     internal val lutLookSelection = _lutLookSelection.asStateFlow()
@@ -1509,15 +1505,24 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
     private val isVibrationEnabled: Boolean
         get() = userPreferencesRepository.current.vibrationEnabled
 
-    var glSurfaceView by mutableStateOf<CameraGLSurfaceView?>(null)
+    private var previewGlSurfaceView by mutableStateOf<CameraGLSurfaceView?>(null)
+    var glSurfaceView: CameraGLSurfaceView?
+        get() = previewGlSurfaceView
+        set(value) {
+            if (previewGlSurfaceView === value) return
+            previewGlSurfaceView = value
+            value?.let { view ->
+                val prefs = userPreferencesRepository.current
+                view.setPreviewRawChannel(cameraController.previewRawChannel)
+                view.setAdaptivePreviewMode(prefs.rawAdaptiveExposureMode, prefs.mlAeMaxHdrRatio)
+            }
+        }
     var isEyeFocusBusy by mutableStateOf(false)
         private set
     var isEyeFocusRuntimeAvailable by mutableStateOf(true)
         private set
     private var lastEyeFocusTriggerPoint: Pair<Float, Float>? = null
     private var lastEyeFocusTriggerElapsedMs = 0L
-    @Volatile
-    private var latestPortraitMask: PortraitMaskSnapshot? = null
 
     // 保存当前的 SurfaceTexture 以便切换摄像头时重用
     private var currentSurfaceTexture: SurfaceTexture? = null
@@ -1590,19 +1595,6 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             viewModelScope.launch(Dispatchers.Main.immediate) {
                 handleEyeFocusTarget(target)
             }
-        }
-        previewEyeFocusProcessor.onPortraitMask = { mask ->
-            latestPortraitMask = mask.copy(
-                confidence = mask.confidence.copyOf(),
-                cameraId = cameraController.getCurrentCameraId(),
-                sensorOrientationDegrees = cameraController.getSensorOrientation(),
-                isFrontFacing = cameraController.getLensFacing() ==
-                    CameraCharacteristics.LENS_FACING_FRONT,
-                previewToCaptureRotationDegrees = Math.floorMod(
-                    capturePreviewThumbnailRotation().roundToInt(),
-                    360,
-                ),
-            )
         }
         previewEyeFocusProcessor.onTargetLost = {
             viewModelScope.launch(Dispatchers.Main.immediate) {
@@ -1992,66 +1984,47 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         }
 
         viewModelScope.launch {
-            userPreferencesRepository.userPreferences.combine(contentRepository.availableDcps) { prefs, dcps ->
+            userPreferencesRepository.userPreferences
+                .map { it.rawAdaptiveExposureMode to it.mlAeMaxHdrRatio }
+                .distinctUntilChanged()
+                .collect { (mode, maxHdrRatio) -> glSurfaceView?.setAdaptivePreviewMode(mode, maxHdrRatio) }
+        }
+
+        viewModelScope.launch {
+            combine(
+                userPreferencesRepository.userPreferences,
+                contentRepository.availableDcps,
+                state.map { camera ->
+                    val isLinearRawCapture = camera.isRawMaxEnabled &&
+                        camera.hdrPlusMergeMode.outputMode == MgcSpatialOutputMode.RGB
+                    camera.currentCameraId to isLinearRawCapture
+                }.distinctUntilChanged(),
+            ) { prefs, dcps, (lensId, isLinearRawCapture) ->
                 if (resolvePreviewBaselineTarget(prefs) == null) null else {
                     val film = resolveRawSpectralFilmSettings(prefs)
+                    val engine = resolveCaptureRawRenderingEngine(prefs)
+                    val dcpId = prefs.rawDcpIdForLens(lensId)
                     RawEnginePreviewSettings(
-                        engine = prefs.rawRenderingEngine,
-                        dcp = dcps.firstOrNull { it.id == prefs.rawDcpId }
-                            ?.takeIf { prefs.rawRenderingEngine == RawRenderingEngine.AdobeCurve },
+                        engine = engine,
+                        dcp = dcps.firstOrNull { it.id == dcpId }
+                            ?.takeIf { engine == RawRenderingEngine.AdobeCurve },
                         exposureEv = prefs.rawExposureCompensation,
-                        tone = prefs.rawToneMappingParameters,
+                        tone = resolveCaptureRawToneMappingParameters(prefs),
                         hncsFilmCurve = prefs.rawHncsFilmCurveMode,
                         filmStock = requireNotNull(film.stock), filmPrint = requireNotNull(film.print), filmTuning = film.tuning,
                         fotufilmDocument = resolveRawFotufilmDocument(prefs)
-                            ?.takeIf { prefs.rawRenderingEngine == RawRenderingEngine.Fotufilm },
+                            ?.takeIf { engine == RawRenderingEngine.Fotufilm },
+                        adjustments = RawEnginePreviewAdjustments(
+                            highlights = prefs.rawHighlightsAdjustment,
+                            shadows = prefs.rawShadowsAdjustment,
+                            blacks = prefs.rawBlackPointCorrection,
+                            whites = prefs.rawWhitePointCorrection,
+                        ),
+                        isLinearRawCapture = isLinearRawCapture,
                     )
                 }
-            }.distinctUntilChanged().collectLatest { selection ->
-                _currentEnginePreviewPlan.value = null
-                cameraController.setEnginePreviewMetadataEnabled(false)
-                if (selection == null) return@collectLatest
-                try {
-                    val resolver = withContext(Dispatchers.IO) {
-                        RawEnginePreviewResolver(getApplication(), selection)
-                    }
-                    if (!resolver.needsCameraMetadata) {
-                        _currentEnginePreviewPlan.value = withContext(Dispatchers.Default) { resolver.resolve(null) }
-                        PLog.d(TAG, "Engine preview ${selection.engine}: scene-linear sRGB -> ${selection.engine.workingColorSpace} -> sRGB")
-                    } else {
-                        cameraController.setEnginePreviewMetadataEnabled(true)
-                        var lastFailure: String? = null
-                        var loggedDomain = false
-                        // StateFlow conflates frames while resolving; collectLatest could starve
-                        // CCT table generation if new AWB values arrive faster than it finishes.
-                        cameraController.enginePreviewSource
-                            .map { if (selection.engine.isLumix) it else it?.copy(iso = 100) }
-                            .distinctUntilChanged().collect { source ->
-                                val result = withContext(Dispatchers.Default) { runCatching { resolver.resolve(source) } }
-                                val plan = result.getOrNull()
-                                if (source?.cameraId == cameraController.enginePreviewSource.value?.cameraId) {
-                                    _currentEnginePreviewPlan.value = plan
-                                } else {
-                                    _currentEnginePreviewPlan.value = null
-                                }
-                                result.exceptionOrNull()?.let { error ->
-                                    if (lastFailure != error.message) PLog.e(TAG, "Engine preview ${selection.engine} rejected", error)
-                                    lastFailure = error.message
-                                }
-                                if (plan != null) {
-                                    lastFailure = null
-                                    if (!loggedDomain) PLog.d(TAG, "Engine preview ${plan.engine}: restore=${plan.restoration}, output=sRGB")
-                                    loggedDomain = true
-                                }
-                            }
-                    }
-                } catch (cancelled: kotlinx.coroutines.CancellationException) {
-                    throw cancelled
-                } catch (error: Exception) {
-                    PLog.e(TAG, "Unable to prepare ${selection.engine} preview", error)
-                } finally {
-                    cameraController.setEnginePreviewMetadataEnabled(false)
-                }
+            }.distinctUntilChanged().collect { selection ->
+                _currentEnginePreviewSettings.value = selection
             }
         }
 
@@ -2630,7 +2603,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         updateLut(reload = true)
         val look = currentLutLook.value
         glSurfaceView?.let { view ->
-            view.setEnginePreview(currentEnginePreviewPlan.value)
+            view.setEnginePreview(currentEnginePreviewSettings.value)
             view.setBaselineLut(currentBaselineLutConfig)
             view.setBaselineLutEnabled(currentBaselineLutConfig != null)
             view.setBaselineParams(currentBaselineRecipeParams.value)
@@ -3076,7 +3049,6 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             lensFacing = cameraController.getLensFacing(),
             deviceRotation = OrientationObserver.captureRotationDegrees.toInt(),
             blackBorderCrop = currentRawBlackBorderCrop(),
-            portraitMask = capturePortraitMaskSnapshot(),
             multipleExposure = multipleExposureState.enabled,
         )
     }
@@ -3219,11 +3191,10 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                 captureResult = referenceCaptureResult,
                 rawMaxHdrFusionEnabled = rawMaxHdrFusionEnabled,
                 rawMaxMode = rawMaxMode,
-                capturePortraitMask = settings.portraitMask,
                 settings = settings,
             )
         } else {
-            saveImage(first.image, captureInfo, characteristics, captureResult, settings.portraitMask, settings)
+            saveImage(first.image, captureInfo, characteristics, captureResult, settings)
         }
     }
 
@@ -4171,25 +4142,25 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         val lensId = cameraState.currentCameraId
         val thumbnailRotation = capturePreviewThumbnailRotation()
         cameraController.captureEnginePreviewSource { cameraSource ->
-            glView.captureOriginalPreviewFrame { bitmap ->
+            glView.captureOriginalPreviewFrame { bitmap, raw ->
                 viewModelScope.launch {
                     if (generation != thumbnailGeneration) {
-                        bitmap?.recycle()
+                        bitmap.recycle()
                         onGenerated?.invoke(null)
                         return@launch
                     }
-                    val thumbnail = bitmap?.let { rotatePreviewBitmapForCapture(it, thumbnailRotation) }
+                    val thumbnail = rotatePreviewBitmapForCapture(bitmap, thumbnailRotation)
                     previewThumbnail = thumbnail
-                    presetThumbnailInput = thumbnail?.let {
-                        com.hinnka.mycamera.lut.PresetThumbnailInput(
-                            bitmap = it,
-                            professional = professional,
-                            camera = cameraSource,
-                            lensId = lensId,
-                            filmTunings = prefs.rawSpectralFilmTuningsByStock.toMap(),
-                            tone = prefs.rawToneMappingParameters,
-                        )
-                    }
+                    presetThumbnailInput = com.hinnka.mycamera.lut.PresetThumbnailInput(
+                        bitmap = thumbnail,
+                        professional = professional,
+                        camera = cameraSource,
+                        lensId = lensId,
+                        filmTunings = prefs.rawSpectralFilmTuningsByStock.toMap(),
+                        tone = prefs.rawToneMappingParameters,
+                        raw = raw,
+                        displayRotation = thumbnailRotation,
+                    )
                     onGenerated?.invoke(thumbnail)
                 }
             }
@@ -4265,11 +4236,6 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
 
     fun handleEyeFocusInputUpdate(frame: EyeFocusPreviewFrame) {
         val cameraState = state.value
-        val acceptsPortraitMask = cameraState.captureMode == CaptureMode.PHOTO &&
-            cameraState.useRaw &&
-            cameraState.isRawSupported &&
-            cameraState.isPreviewActive &&
-            !cameraState.isCapturing
         val acceptsEyeFocus = userPreferencesRepository.current.eyeFocusEnabled &&
             isEyeFocusRuntimeAvailable &&
             cameraState.isPreviewActive &&
@@ -4277,7 +4243,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             !cameraState.isHyperfocalFocusEnabled &&
             !cameraState.isCapturing &&
             (cameraState.focusPoint == null || cameraState.focusPointSource == FocusPointSource.EYE)
-        if (!acceptsEyeFocus && !acceptsPortraitMask) {
+        if (!acceptsEyeFocus) {
             frame.bitmap.recycle()
             completeEyeFocusInput()
             return
@@ -4287,7 +4253,7 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
             !previewEyeFocusProcessor.processFrame(
                 frame = frame,
                 detectEyeTarget = acceptsEyeFocus,
-                createFaceMask = acceptsPortraitMask,
+                createFaceMask = false,
             )
         ) {
             frame.bitmap.recycle()
@@ -4347,18 +4313,6 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         if (cancelCameraFocus) {
             cameraController.cancelEyeFocus(reason)
         }
-    }
-
-    private fun capturePortraitMaskSnapshot(): PortraitMaskSnapshot? {
-        val mask = latestPortraitMask ?: return null
-        val ageNanos = SystemClock.elapsedRealtimeNanos() - mask.sampleElapsedRealtimeNanos
-        if (ageNanos !in 0L..PORTRAIT_MASK_MAX_AGE_NS) return null
-        if (mask.cameraId != cameraController.getCurrentCameraId()) return null
-        if (mask.sensorOrientationDegrees != cameraController.getSensorOrientation()) return null
-        val isFrontFacing = cameraController.getLensFacing() ==
-            CameraCharacteristics.LENS_FACING_FRONT
-        if (mask.isFrontFacing != isFrontFacing) return null
-        return mask.copy(confidence = mask.confidence.copyOf())
     }
 
     fun setFrame(frameId: String?) {
@@ -5178,7 +5132,6 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         captureInfo: CaptureInfo,
         characteristics: CameraCharacteristics?,
         captureResult: CaptureResult?,
-        capturePortraitMask: PortraitMaskSnapshot?,
         settings: CaptureSettingsSnapshot,
     ) {
         try {
@@ -5362,7 +5315,6 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                     exposureBias = captureExposureBias,
                     captureExposureCompensationEv = captureExposureCompensationEv,
                     exportDngWithRawExport = settings.preferences.exportDngWithRawExport,
-                    capturePortraitMask = capturePortraitMask,
                 )
             }
             PLog.d(TAG, "Image saved: $photoId, LUT: $lutIdToSave, Frame: $frameIdToSave")
@@ -5562,7 +5514,6 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
         captureResult: CaptureResult?,
         rawMaxHdrFusionEnabled: Boolean,
         rawMaxMode: MgcRawMaxMode,
-        capturePortraitMask: PortraitMaskSnapshot?,
         settings: CaptureSettingsSnapshot,
     ) {
         try {
@@ -5777,7 +5728,6 @@ class CameraViewModel(application: Application) : AndroidViewModel(application) 
                     captureExposureCompensationEv = captureExposureCompensationEv,
                     exportDngWithRawExport = settings.preferences.exportDngWithRawExport,
                     capturePreviewThumbnail = settings.originalThumbnail,
-                    capturePortraitMask = capturePortraitMask,
                     rawStackFrames = frames,
                     rawMaxHdrFusionEnabled = rawMaxHdrFusionEnabled,
                     rawMaxSpatialOutputMode = rawSpatialOutputMode,

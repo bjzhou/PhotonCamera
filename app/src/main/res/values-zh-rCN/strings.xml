@@ -943,8 +943,8 @@
     <string name="settings_raw_profile_tone_map_oppo_master">OPPO 大师</string>
     <string name="settings_raw_photon_hdr">动态范围优化</string>
     <string name="settings_raw_photon_hdr_edit_description">对当前导入的 RAW 应用 HDRNet 动态范围优化，默认关闭。</string>
-    <string name="settings_raw_adaptive_exposure_mode">动态范围模式</string>
-    <string name="settings_raw_adaptive_exposure_mode_description">选择曝光和局部影调的调整方式，以保留高光与暗部细节。</string>
+    <string name="settings_raw_adaptive_exposure_mode">动态范围优化</string>
+    <string name="settings_raw_adaptive_exposure_mode_description">用于专业模式实时预览和 RAW 成片的曝光与局部影调处理。</string>
     <string name="settings_raw_adaptive_exposure_mode_qualcomm_adrc">高通 ADRC</string>
     <string name="settings_raw_adaptive_exposure_mode_photon_hdr">HDRNet</string>
     <string name="settings_raw_agx_white_relative_exposure">AgX 白色相对曝光</string>

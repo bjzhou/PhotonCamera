@@ -15,6 +15,9 @@ import com.hinnka.mycamera.model.ColorRecipeParams
 import com.hinnka.mycamera.processor.GlesComputeWorkGroup
 import com.hinnka.mycamera.processor.DenoiseStrength
 import com.hinnka.mycamera.raw.RawEnginePreviewPlan
+import com.hinnka.mycamera.raw.RawEnginePreviewSettings
+import com.hinnka.mycamera.raw.RawForwardPreviewEngineGl
+import com.hinnka.mycamera.raw.MgcGlesSurfaces
 import com.hinnka.mycamera.utils.LargeDirectBuffer
 import com.hinnka.mycamera.utils.PLog
 import kotlinx.coroutines.asCoroutineDispatcher
@@ -71,7 +74,12 @@ class LutImageProcessor(context: Context? = null) {
     private val basicToneTextures = BasicToneGlTextures()
     private val logInput = LogInputGl()
     private val previewEngine = RawEnginePreviewGl()
+    private val rawThumbnailEngineDelegate = lazy {
+        RawForwardPreviewEngineGl(checkNotNull(appContext)) {}
+    }
+    private val rawThumbnailEngine by rawThumbnailEngineDelegate
     private var thumbnailEngineProgram = 0
+    private var rawThumbnailOutputProgram = 0
     private var framebufferId = 0
     private var outputTextureId = 0
     private var outputFramebufferWidth = 0
@@ -367,10 +375,11 @@ class LutImageProcessor(context: Context? = null) {
         outputBitmap
     }
 
-    /** Apply the exact live-preview engine atlas to an unprocessed ISP sRGB snapshot. */
+    /** Apply the live-preview engine atlas to the sRGB-encoded original snapshot. */
     suspend fun applyPreviewEngine(
         bitmap: Bitmap,
-        plan: RawEnginePreviewPlan
+        plan: RawEnginePreviewPlan,
+        sceneLinearSource: Boolean = false,
     ): Bitmap = withContext(glDispatcher) {
         currentCoroutineContext().ensureActive()
         check(!isReleased && initialize()) { "Cannot initialize preset thumbnail renderer" }
@@ -385,18 +394,25 @@ class LutImageProcessor(context: Context? = null) {
                     in vec2 vTexCoord;
                     out vec4 fragColor;
                     uniform highp sampler2D uImageTexture;
+                    uniform bool uSceneLinearSource;
                     ${PreviewColorShaderModules.COLOR_TRANSFER_CORE}
                     ${RawEnginePreviewGl.SAMPLING_GLSL}
+                    ${RawEnginePreviewGl.SCENE_LINEAR_SAMPLING_GLSL}
                     void main() {
                         vec4 source = texture(uImageTexture, vTexCoord);
-                        fragColor = vec4(sampleEnginePreview(source.rgb), source.a);
+                        vec3 developed = uSceneLinearSource
+                            ? sampleSceneLinearEnginePreview(srgbToLinear(source.rgb))
+                            : sampleEnginePreview(source.rgb);
+                        fragColor = vec4(developed, source.a);
                     }
                 """.trimIndent().trimStart(),
                 "presetThumbnailEngine"
             )
             check(thumbnailEngineProgram != 0) { "Cannot compile preset thumbnail engine program" }
         }
-        check(previewEngine.prepare(plan)) { "Cannot prepare ${plan.engine} thumbnail mapping" }
+        check(previewEngine.prepare(plan, sceneLinearInput = sceneLinearSource)) {
+            "Cannot prepare ${plan.engine} thumbnail mapping"
+        }
         currentCoroutineContext().ensureActive()
         setupFramebuffer(bitmap.width, bitmap.height)
         uploadImageTexture(bitmap)
@@ -411,6 +427,10 @@ class LutImageProcessor(context: Context? = null) {
         GLES30.glBindBuffer(GLES30.GL_ELEMENT_ARRAY_BUFFER, 0)
         GLES30.glUseProgram(thumbnailEngineProgram)
         previewEngine.bind(GLES30.glGetUniformLocation(thumbnailEngineProgram, "uEnginePreviewLut"))
+        GLES30.glUniform1i(
+            GLES30.glGetUniformLocation(thumbnailEngineProgram, "uSceneLinearSource"),
+            if (sceneLinearSource) 1 else 0,
+        )
         GLES30.glActiveTexture(GLES30.GL_TEXTURE0)
         GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, imageTextureId)
         GLES30.glUniform1i(GLES30.glGetUniformLocation(thumbnailEngineProgram, "uImageTexture"), 0)
@@ -432,6 +452,86 @@ class LutImageProcessor(context: Context? = null) {
             GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, 0)
             GLES30.glBindBuffer(GLES30.GL_PIXEL_PACK_BUFFER, 0)
         }
+    }
+
+    internal suspend fun applyRawPreviewEngine(
+        snapshot: RawThumbnailSnapshot,
+        settings: RawEnginePreviewSettings,
+    ): Bitmap {
+        val color = rawThumbnailEngine.resolve(settings, snapshot.metadata)
+        return withContext(glDispatcher) {
+            currentCoroutineContext().ensureActive()
+            check(!isReleased && initialize()) { "Cannot initialize RAW preset thumbnail renderer" }
+            check(EGL14.eglMakeCurrent(eglDisplay, eglSurface, eglSurface, eglContext))
+            val width = snapshot.width
+            val height = snapshot.height
+            GLES30.glActiveTexture(GLES30.GL_TEXTURE0)
+            val source = MgcGlesSurfaces.texture(GLES30.GL_RGBA16F, width, height, "RAW preset source", GLES30.GL_LINEAR)
+            try {
+                GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, source)
+                GLES30.glBindBuffer(GLES30.GL_PIXEL_UNPACK_BUFFER, 0)
+                GLES30.glPixelStorei(GLES30.GL_UNPACK_ALIGNMENT, 4)
+                GLES30.glPixelStorei(GLES30.GL_UNPACK_ROW_LENGTH, 0)
+                GLES30.glPixelStorei(GLES30.GL_UNPACK_SKIP_PIXELS, 0)
+                GLES30.glPixelStorei(GLES30.GL_UNPACK_SKIP_ROWS, 0)
+                GLES30.glTexSubImage2D(
+                    GLES30.GL_TEXTURE_2D, 0, 0, 0, width, height,
+                    GLES30.GL_RGBA, GLES30.GL_FLOAT, snapshot.pixels.duplicate(),
+                )
+                check(GLES30.glGetError() == GLES30.GL_NO_ERROR) { "RAW preset thumbnail upload failed" }
+                val prepared = checkNotNull(rawThumbnailEngine.prepare(source, width, height, color))
+                val developed = rawThumbnailEngine.render(prepared)
+                check(developed != 0) { "RAW preset engine ${settings.engine} failed" }
+                readRawThumbnail(developed, width, height)
+            } finally {
+                GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, 0)
+                MgcGlesSurfaces.deleteTextures(source)
+            }
+        }
+    }
+
+    private fun readRawThumbnail(texture: Int, width: Int, height: Int): Bitmap {
+        if (rawThumbnailOutputProgram == 0) {
+            rawThumbnailOutputProgram = createFragmentProgram(
+                IMAGE_VERTEX_SHADER,
+                """
+                    #version 300 es
+                    precision highp float;
+                    in vec2 vTexCoord;
+                    out vec4 fragColor;
+                    uniform highp sampler2D uImageTexture;
+                    ${PreviewColorShaderModules.COLOR_TRANSFER_CORE}
+                    void main() {
+                        vec3 linear = texture(uImageTexture, vTexCoord).rgb;
+                        fragColor = vec4(linearToSrgb(clamp(linear, 0.0, 1.0)), 1.0);
+                    }
+                """.trimIndent(),
+                "rawPresetThumbnailOutput",
+            )
+        }
+        val program = rawThumbnailOutputProgram
+        check(program != 0) { "Cannot compile RAW preset thumbnail output" }
+        setupFramebuffer(width, height)
+        GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, framebufferId)
+        GLES30.glViewport(0, 0, width, height)
+        GLES30.glDisable(GLES30.GL_BLEND)
+        GLES30.glBindVertexArray(0)
+        GLES30.glBindBuffer(GLES30.GL_ARRAY_BUFFER, 0)
+        GLES30.glBindBuffer(GLES30.GL_ELEMENT_ARRAY_BUFFER, 0)
+        GLES30.glUseProgram(program)
+        GLES30.glActiveTexture(GLES30.GL_TEXTURE0)
+        GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, texture)
+        GLES30.glUniform1i(GLES30.glGetUniformLocation(program, "uImageTexture"), 0)
+        val identity = FloatArray(16).also { android.opengl.Matrix.setIdentityM(it, 0) }
+        GLES30.glUniformMatrix4fv(GLES30.glGetUniformLocation(program, "uMVPMatrix"), 1, false, identity, 0)
+        drawQuad(program)
+        val pixels = obtainReadbackBuffer(width * height * 4)
+        GLES30.glBindBuffer(GLES30.GL_PIXEL_PACK_BUFFER, 0)
+        GLES30.glPixelStorei(GLES30.GL_PACK_ALIGNMENT, 4)
+        GLES30.glReadPixels(0, 0, width, height, GLES30.GL_RGBA, GLES30.GL_UNSIGNED_BYTE, pixels)
+        check(GLES30.glGetError() == GLES30.GL_NO_ERROR) { "RAW preset thumbnail readback failed" }
+        pixels.position(0)
+        return createBitmap(width, height).also { it.copyPixelsFromBuffer(pixels) }
     }
 
     internal suspend fun bakePreviewEngineCube(plan: RawEnginePreviewPlan): FloatArray = withContext(glDispatcher) {
@@ -2207,6 +2307,11 @@ class LutImageProcessor(context: Context? = null) {
             GLES30.glDeleteTextures(1, intArrayOf(lutTextureId), 0)
         }
         previewEngine.release()
+        if (rawThumbnailOutputProgram != 0) {
+            GLES30.glDeleteProgram(rawThumbnailOutputProgram)
+            rawThumbnailOutputProgram = 0
+        }
+        if (rawThumbnailEngineDelegate.isInitialized()) rawThumbnailEngine.release()
         if (thumbnailEngineProgram != 0) GLES30.glDeleteProgram(thumbnailEngineProgram)
         thumbnailEngineProgram = 0
         basicToneTextures.release()
@@ -2344,7 +2449,7 @@ class LutImageProcessor(context: Context? = null) {
             in vec2 vTexCoord;
             out vec4 fragColor;
 
-            uniform mediump sampler3D uLutTexture;
+            uniform highp sampler3D uLutTexture;
             uniform float uLutSize;
             uniform float uLutIntensity;
             uniform bool uLutEnabled;

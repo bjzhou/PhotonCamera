@@ -11,4 +11,7 @@ namespace photon {
 void UnpackRaw10(const uint8_t *source, uint16_t *destination, size_t width,
                  size_t height, size_t rowStride);
 
+void UnpackRaw12(const uint8_t *source, uint16_t *destination, size_t width,
+                 size_t height, size_t rowStride);
+
 }  // namespace photon

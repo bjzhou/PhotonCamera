@@ -49,6 +49,10 @@ enum class DcpDefaultBlackRender(val tagValue: Int) {
         fun fromTagValue(tagValue: Int?): DcpDefaultBlackRender {
             return values().firstOrNull { it.tagValue == tagValue } ?: Auto
         }
+
+        /** Black-render policy authored into PhotonCamera's generated DNG profiles. */
+        fun generated(isLinearRaw: Boolean, hasGainMap: Boolean): DcpDefaultBlackRender =
+            if (isLinearRaw || hasGainMap) None else Auto
     }
 }
 

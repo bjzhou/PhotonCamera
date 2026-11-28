@@ -32,7 +32,7 @@ object RawHdrReferenceMath {
     private const val MIN_INTERVAL = 1e-4f
     private const val MIN_WHITE = 1e-4f
 
-    /** RAW -> HDRNet long reference from ML AE physical short gain and HDR ratio. */
+    /** RAW -> HDRNet long reference from physical short gain and HDR ratio. */
     internal fun hdrNetSceneExposureGain(
         hdrRatio: Float?,
         sourceToShortGain: Float?,

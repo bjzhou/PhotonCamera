@@ -30,8 +30,10 @@ import android.net.Uri
 import androidx.exifinterface.media.ExifInterface
 import com.hinnka.mycamera.raw.RawEnginePreviewSource
 import com.hinnka.mycamera.raw.RawCameraCalibration
+import com.hinnka.mycamera.raw.RawCfaCorrection
 import com.hinnka.mycamera.raw.RawColorCalibrationMode
 import com.hinnka.mycamera.raw.RawColorCalibrationPolicy
+import com.hinnka.mycamera.raw.RawMetadata
 import com.hinnka.mycamera.utils.PLog
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -67,6 +69,7 @@ import com.hinnka.mycamera.video.VideoResolutionPreset
 import com.hinnka.mycamera.video.VideoRecordingState
 import com.hinnka.mycamera.video.VideoStabilizationMode
 import com.hinnka.mycamera.video.resolveSurfaceTextureVideoOrientationDegrees
+import java.util.TreeMap
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.Executor
 import java.util.concurrent.atomic.AtomicBoolean
@@ -130,6 +133,10 @@ class Camera2Controller(private val context: Context) {
         private const val DEFAULT_HYPERFOCAL_APERTURE = 1.8f
         private const val HYPERFOCAL_COC_DIAGONAL_DIVISOR = 1500.0
         private const val NO_IMAGE_READER_FORMAT = -1
+        private const val RAW_PREVIEW_RESULT_HISTORY = 32
+        private const val MAX_PENDING_RAW_PREVIEW_IMAGES = 2
+        private const val RAW_PREVIEW_FIRST_IMAGE_TIMEOUT_MS = 3_000L
+        private const val RAW_PREVIEW_FALLBACK_RETRY_MS = 250L
         private val FORCED_VENDOR_SESSION_PARAMETER_KEYS = setOf(
             VendorCaptureKey.VIVO_FORCE_SENSOR_MODE
         )
@@ -261,6 +268,189 @@ class Camera2Controller(private val context: Context) {
     private var videoPreviewSurfaceSize: Size? = null
     val previewYuvChannel = PreviewYuvFrameChannel()
     private var imageReader: ImageReader? = null
+    val previewRawChannel = PreviewRawFrameChannel()
+    private var rawPreviewReader: ImageReader? = null
+
+    // These maps and both callbacks run on the camera handler. A shared RAW
+    // reader can receive either a viewfinder frame or a shutter frame.
+    private data class RawPreviewResult(
+        val result: CaptureResult,
+        val characteristics: CameraCharacteristics,
+        val cameraId: String,
+        val cfaPatternOverride: Int?,
+        val timestamps: List<Long>,
+        val exposureCompensationEv: Float,
+    )
+
+    private val rawPreviewStartedTimestamps = LinkedHashMap<Long, Long>()
+    private val pendingRawPreviewResults = LinkedHashMap<Long, RawPreviewResult>()
+    private val pendingRawPreviewImages = TreeMap<Long, SafeImage>()
+    private var lastPublishedRawPreviewTimestampNs = 0L
+    private var pendingRawPreviewFallback: Runnable? = null
+
+    private fun noteRawPreviewStarted(frameNumber: Long, timestamp: Long) {
+        rawPreviewStartedTimestamps[frameNumber] = timestamp
+        while (rawPreviewStartedTimestamps.size > RAW_PREVIEW_RESULT_HISTORY) {
+            rawPreviewStartedTimestamps.remove(rawPreviewStartedTimestamps.keys.first())
+        }
+        pendingImages.remove(timestamp)?.let(::bufferRawPreviewImage)
+    }
+
+    private fun matchRawPreviewResult(result: TotalCaptureResult) {
+        val startedTimestamp = rawPreviewStartedTimestamps.remove(result.frameNumber)
+        val activePhysicalId = result.get(CaptureResult.LOGICAL_MULTI_CAMERA_ACTIVE_PHYSICAL_ID)
+        val physicalId = activeOutputPhysicalCameraId ?: activePhysicalId
+        val physicalResult = physicalId?.let { result.physicalCameraResults[it] }
+        val frameResult = physicalResult ?: result
+
+        val timestamps = listOfNotNull(
+            frameResult.get(CaptureResult.SENSOR_TIMESTAMP),
+            result.get(CaptureResult.SENSOR_TIMESTAMP),
+            startedTimestamp,
+        ).filter { it > 0L }.distinct()
+        if (timestamps.isEmpty()) return
+        val cameraId = physicalId ?: getActiveOpenCameraId()
+        val characteristics = physicalId?.let { getCameraCharacteristicsOrNull(it, "RAW preview") }
+            ?: getActiveOpenCameraCharacteristics() ?: return
+        val state = _state.value
+        if (!supportsRawPreviewCfa(characteristics, state)) {
+            for (timestamp in timestamps) {
+                pendingRawPreviewImages.remove(timestamp)?.close()
+                pendingImages.remove(timestamp)?.close()
+            }
+            fallbackFromRawPreview("unsupported CFA on camera $cameraId") {
+                !supportsRawPreviewCfa(characteristics, _state.value)
+            }
+            return
+        }
+        val aeMode = frameResult.get(CaptureResult.CONTROL_AE_MODE) ?: result.request.get(CaptureRequest.CONTROL_AE_MODE)
+        val compensationSteps = if (aeMode != null && aeMode != CaptureRequest.CONTROL_AE_MODE_OFF) {
+            result.request.get(CaptureRequest.CONTROL_AE_EXPOSURE_COMPENSATION)
+                ?: result.get(CaptureResult.CONTROL_AE_EXPOSURE_COMPENSATION) ?: 0
+        } else null
+        val frame = RawPreviewResult(
+            result = frameResult,
+            characteristics = characteristics,
+            cameraId = cameraId,
+            cfaPatternOverride = rawPreviewCfaOverride(state),
+            timestamps = timestamps,
+            exposureCompensationEv = (compensationSteps ?: 0) * state.getExposureCompensationStep(),
+        )
+        for (candidate in timestamps) {
+            val image = pendingRawPreviewImages.remove(candidate) ?: pendingImages.remove(candidate) ?: continue
+            publishRawPreviewImage(image, frame)
+            return
+        }
+        for (candidate in timestamps) pendingRawPreviewResults[candidate] = frame
+        while (pendingRawPreviewResults.size > RAW_PREVIEW_RESULT_HISTORY) {
+            pendingRawPreviewResults.remove(pendingRawPreviewResults.keys.first())
+        }
+    }
+
+    private fun processSharedRawImage(reader: ImageReader, image: SafeImage) {
+        val timestamp = image.timestamp
+        if (timestamp in photoCaptureByTimestamp || timestamp in discardedCaptureTimestamps) {
+            processOrBufferImageForCaptureResult(image)
+            return
+        }
+        val hasStillCapture = photoCaptures.values.any { it.reader === reader && it.submitted && !it.delivered }
+        if (reader !== rawPreviewReader || captureSession == null) {
+            if (hasStillCapture) processOrBufferImageForCaptureResult(image) else image.close()
+            return
+        }
+        val frame = pendingRawPreviewResults[timestamp]
+        if (frame != null) {
+            for (candidate in frame.timestamps) pendingRawPreviewResults.remove(candidate, frame)
+            publishRawPreviewImage(image, frame)
+        } else if (timestamp in rawPreviewStartedTimestamps.values || !hasStillCapture) {
+            bufferRawPreviewImage(image)
+        } else {
+            // Keep unclassified buffers on the still path while a shutter sequence
+            // is outstanding. Its started/completed callback reserves the timestamp.
+            processOrBufferImageForCaptureResult(image)
+        }
+    }
+
+    private fun bufferRawPreviewImage(image: SafeImage) {
+        val timestamp = image.timestamp
+        if (timestamp <= lastPublishedRawPreviewTimestampNs || !canRetainRawPreviewImage()) {
+            image.close()
+            return
+        }
+        pendingRawPreviewImages.put(timestamp, image)?.close()
+        while (pendingRawPreviewImages.size > MAX_PENDING_RAW_PREVIEW_IMAGES) {
+            pendingRawPreviewImages.pollFirstEntry()?.value?.close()
+        }
+    }
+
+    private fun canRetainRawPreviewImage(): Boolean =
+        openImagesCount.get() + reservedImageCount() <= imageReaderMaxImages
+
+    private fun publishRawPreviewImage(image: SafeImage, frame: RawPreviewResult) {
+        val timestamp = image.timestamp
+        if (timestamp <= lastPublishedRawPreviewTimestampNs || !canRetainRawPreviewImage()) {
+            image.close()
+            return
+        }
+        if (lastPublishedRawPreviewTimestampNs == 0L) {
+            try {
+                image.validateBufferLayout()
+            } catch (error: IllegalStateException) {
+                image.close()
+                fallbackFromRawPreview("invalid RAW buffer: ${error.message}", retryAnotherRawFormat = true) { true }
+                return
+            }
+        }
+        lastPublishedRawPreviewTimestampNs = timestamp
+        val olderImages = pendingRawPreviewImages.headMap(timestamp, true).values.iterator()
+        while (olderImages.hasNext()) {
+            val staleImage = olderImages.next()
+            olderImages.remove()
+            staleImage.close()
+        }
+        previewRawChannel.publish(
+            PreviewRawFrame(
+                image = image,
+                result = frame.result,
+                characteristics = frame.characteristics,
+                timestampNs = timestamp,
+                sessionGeneration = previewSessionGeneration,
+                cameraId = frame.cameraId,
+                cfaPatternOverride = frame.cfaPatternOverride,
+                exposureCompensationEv = frame.exposureCompensationEv,
+            )
+        )
+    }
+
+    private fun discardFailedRawPreviewFrame(frameNumber: Long) {
+        val timestamp = rawPreviewStartedTimestamps.remove(frameNumber) ?: return
+        pendingRawPreviewImages.remove(timestamp)?.close()
+        pendingImages.remove(timestamp)?.close()
+    }
+
+    private fun clearRawPreview() {
+        rawPreviewReader = null
+        pendingRawPreviewFallback?.let { cameraHandler?.removeCallbacks(it) }
+        pendingRawPreviewFallback = null
+        previewRawChannel.discard()
+        previewRawChannel.isActive = false
+        rawPreviewStartedTimestamps.clear()
+        pendingRawPreviewResults.clear()
+        pendingRawPreviewImages.values.forEach(SafeImage::close)
+        pendingRawPreviewImages.clear()
+        lastPublishedRawPreviewTimestampNs = 0L
+    }
+
+    private fun rawPreviewCfaOverride(state: CameraState): Int? =
+        RawCfaCorrection.patternFromMode(state.rawCfaCorrectionModes[state.currentCameraId])
+
+    private fun supportsRawPreviewCfa(characteristics: CameraCharacteristics, state: CameraState): Boolean {
+        val cfa = characteristics.get(CameraCharacteristics.SENSOR_INFO_COLOR_FILTER_ARRANGEMENT)
+        val cameraBayerPatterns = CameraCharacteristics.SENSOR_INFO_COLOR_FILTER_ARRANGEMENT_RGGB..
+            CameraCharacteristics.SENSOR_INFO_COLOR_FILTER_ARRANGEMENT_BGGR
+        return cfa != null && cfa in cameraBayerPatterns &&
+            rawPreviewCfaOverride(state)?.let { !RawMetadata.isQuadBayer(it) } != false
+    }
 
     // 降噪等级 (0=Off, 1=Fast, 2=High Quality, 3=ZSL, 4=Minimal)
     private var nrLevel = NoiseReductionLevel.DEFAULT
@@ -286,6 +476,7 @@ class Camera2Controller(private val context: Context) {
     private var defaultPreviewAperture: Float? = null
     private val requestedAperturesByCamera = mutableMapOf<String, Float>()
     private val failedPhysicalOutputProfiles = mutableSetOf<PhysicalOutputFailureKey>()
+    private val failedLogicalRawOutputProfiles = mutableSetOf<Pair<String, Int>>()
     // "streamCameraId:format" profiles whose high-resolution-only capture size failed session configuration
     private val failedHighResolutionCaptureProfiles = mutableSetOf<String>()
     private var activeHighResolutionCaptureProfile: String? = null
@@ -1129,6 +1320,9 @@ class Camera2Controller(private val context: Context) {
             frameNumber: Long
         ) {
             super.onCaptureStarted(session, request, timestamp, frameNumber)
+            if (session === captureSession && rawPreviewReader != null) {
+                noteRawPreviewStarted(frameNumber, timestamp)
+            }
             val tag = request.tag as? StillFlashRequestTag ?: return
             val pending = stillFlashPrecapture ?: return
             if (tag.generation == pending.generation && tag.phase == pending.phase && tag.isTrigger) {
@@ -1141,6 +1335,9 @@ class Camera2Controller(private val context: Context) {
             request: CaptureRequest,
             failure: CaptureFailure,
         ) {
+            if (session === captureSession && rawPreviewReader != null) {
+                discardFailedRawPreviewFrame(failure.frameNumber)
+            }
             val flashTag = request.tag as? StillFlashRequestTag
             if (flashTag != null) {
                 val pending = stillFlashPrecapture ?: return
@@ -1148,6 +1345,17 @@ class Camera2Controller(private val context: Context) {
                     abortStillFlashPrecapture("request failed: frame=${failure.frameNumber} reason=${failure.reason}")
                 }
                 return
+            }
+        }
+
+        override fun onCaptureBufferLost(
+            session: CameraCaptureSession,
+            request: CaptureRequest,
+            target: Surface,
+            frameNumber: Long,
+        ) {
+            if (session === captureSession && target == rawPreviewReader?.surface) {
+                discardFailedRawPreviewFrame(frameNumber)
             }
         }
 
@@ -1168,9 +1376,12 @@ class Camera2Controller(private val context: Context) {
         ) {
             super.onCaptureCompleted(session, request, result)
 
-            if (session === captureSession && _state.value.previewFirstFrameTimestampNs == null) {
-                result.get(CaptureResult.SENSOR_TIMESTAMP)?.let { timestamp ->
-                    _state.update { it.copy(previewFirstFrameTimestampNs = timestamp) }
+            if (session === captureSession) {
+                if (rawPreviewReader != null) matchRawPreviewResult(result)
+                if (_state.value.previewFirstFrameTimestampNs == null) {
+                    result.get(CaptureResult.SENSOR_TIMESTAMP)?.let { timestamp ->
+                        _state.update { it.copy(previewFirstFrameTimestampNs = timestamp) }
+                    }
                 }
             }
 
@@ -1427,10 +1638,19 @@ class Camera2Controller(private val context: Context) {
             "Preview surface unavailable for photo preparation"
         }
         return device.createCaptureRequest(CameraDevice.TEMPLATE_PREVIEW).apply {
-            // The photo viewfinder is also the EIS input. Keep feeding it through
-            // previewCallback so trigger frames retain matching CaptureResult metadata.
-            addTarget(previewTarget)
+            // These requests use previewCallback so all their frame timestamps can be matched.
+            addPreviewTargets(this, previewTarget, activeStabilizationInput != null)
         }
+    }
+
+    private fun addPreviewTargets(
+        builder: CaptureRequest.Builder,
+        previewTarget: Surface,
+        stabilize: Boolean,
+    ) {
+        val rawTarget = rawPreviewReader?.surface
+        rawTarget?.let(builder::addTarget)
+        if (rawTarget == null || stabilize) builder.addTarget(previewTarget)
     }
 
     private fun buildStillFlashPreviewRequest(
@@ -2163,6 +2383,7 @@ class Camera2Controller(private val context: Context) {
         clearCaptureFocusState("session cleared: $reason")
         safeCloseCaptureSession(captureSession, reason)
         captureSession = null
+        clearRawPreview()
         _enginePreviewSource.value = null
         previewRequestBuilder = null
         safeReleasePreviewSurface(reason)
@@ -2213,14 +2434,16 @@ class Camera2Controller(private val context: Context) {
                         PLog.w(TAG, "Cannot acquire shared preview YUV image: ${error.message}")
                         null
                     } ?: break
-                    if (stabilize) {
-                        submitCurrentStabilizationImage(image)
-                    } else {
-                        // Retain before publishing: preview may immediately consume and close its lease.
-                        if (recordYuv) videoRecorder.submitYuvFrame(image.retain())
-                        previewYuvChannel.publish(image)
-                        if (!fifo) break
+                    when {
+                        stabilize -> submitCurrentStabilizationImage(image)
+                        captureSession == null -> image.close()
+                        else -> {
+                            // Retain before publishing: preview may immediately consume and close its lease.
+                            if (recordYuv) videoRecorder.submitYuvFrame(image.retain())
+                            previewYuvChannel.publish(image)
+                        }
                     }
+                    if (!fifo) break
                 }
             }
             previewYuvReader = reader
@@ -2912,14 +3135,9 @@ class Camera2Controller(private val context: Context) {
 
                 PLog.d(
                     TAG,
-                    "拍照尺寸: ${captureSize.width}x${captureSize.height}, 预览尺寸: ${previewSize.width}x${previewSize.height}, 格式: ${
-                        when (captureFormat) {
-                            ImageFormat.RAW_SENSOR -> "RAW_SENSOR"
-                            ImageFormat.RAW10 -> "RAW10"
-                            ImageFormat.YCBCR_P010 -> "P010"
-                            else -> "YUV"
-                        }
-                    }, stream=$outputCameraIdForStreams, isP3Supported: $isP3Supported, imageReaderMaxImages: $readerMaxImages"
+                    "拍照尺寸: ${captureSize.width}x${captureSize.height}, 预览尺寸: ${previewSize.width}x${previewSize.height}, " +
+                        "格式: ${imageFormatToString(captureFormat)}, stream=$outputCameraIdForStreams, " +
+                        "isP3Supported: $isP3Supported, imageReaderMaxImages: $readerMaxImages"
                 )
                 imageReader = ImageReader.newInstance(
                     captureSize.width,
@@ -2929,9 +3147,11 @@ class Camera2Controller(private val context: Context) {
                 ).apply {
                     setOnImageAvailableListener({ reader ->
                         try {
+                            val sharedRaw = isRawCaptureReader(reader)
                             while (canAcquireImage("Too many open images")) {
                                 val image = trackImage(reader.acquireNextImage()) ?: break
-                                processOrBufferImageForCaptureResult(image)
+                                if (sharedRaw) processSharedRawImage(reader, image)
+                                else processOrBufferImageForCaptureResult(image)
                             }
                         } catch (e: Exception) {
                             PLog.e(TAG, "Error in onImageAvailable", e)
@@ -3243,8 +3463,19 @@ class Camera2Controller(private val context: Context) {
         // createCaptureSession closes the previous session before onConfigured runs.
         // Stop exposing it while the replacement is being configured.
         invalidateCaptureSession(captureSession, "preview session replacement")
-        val captureMode = _state.value.captureMode
+        val sessionState = _state.value
+        val captureMode = sessionState.captureMode
         val reader = imageReader
+        rawPreviewReader = reader?.takeIf { sessionState.isProfessionalMode && isRawCaptureReader(it) }
+            ?.takeIf {
+                val characteristics = activeOutputPhysicalCameraId
+                    ?.let { id -> getCameraCharacteristicsOrNull(id, "RAW preview capabilities") }
+                    ?: getActiveOpenCameraCharacteristics()
+                val supported = characteristics != null && supportsRawPreviewCfa(characteristics, sessionState)
+                if (!supported) PLog.w(TAG, "RAW preview unavailable for the configured CFA; using preview YUV")
+                supported
+            }
+        val useP3ColorSpace = shouldUseP3ColorSpace()
         val stabilizationInput = if (shouldUseAlgorithmicStabilization()) {
             previewYuvReader
         } else {
@@ -3269,7 +3500,9 @@ class Camera2Controller(private val context: Context) {
         PLog.i(
             TAG,
             "Creating repeating request: " +
-                "outputs=${if (captureMode == CaptureMode.VIDEO && videoSurface == null) 1 else 2}, input=${if (previewYuvReader != null) "YUV_420_888" else "OES"}, template=${if (templateType == CameraDevice.TEMPLATE_PREVIEW) "PREVIEW" else "RECORD"}, " +
+                "outputs=${if (captureMode == CaptureMode.VIDEO && videoSurface == null) 1 else 2}, " +
+                "input=${rawPreviewReader?.imageFormat?.let(::imageFormatToString) ?: if (previewYuvReader != null) "YUV_420_888" else "OES"}, " +
+                "template=${if (templateType == CameraDevice.TEMPLATE_PREVIEW) "PREVIEW" else "RECORD"}, " +
                 "captureMode=$captureMode, enhancedStabilization=$useEnhancedStabilization"
         )
         var vendorSessionParametersApplied = false
@@ -3284,7 +3517,7 @@ class Camera2Controller(private val context: Context) {
                     this,
                 )
                 defaultPreviewAperture = get(CaptureRequest.LENS_APERTURE)
-                addTarget(surface)
+                addPreviewTargets(this, surface, stabilizationInput != null)
                 videoSurface?.takeIf { _state.value.videoRecordingState.shouldAttachCameraInput() }
                     ?.let(::addTarget)
 
@@ -3407,7 +3640,7 @@ class Camera2Controller(private val context: Context) {
                         PLog.e(
                             TAG,
                             "Session configuration failed: readerFormat=${imageFormatToString(readerFormat)}, " +
-                                    "sessionColorSpace=${if (shouldUseP3ColorSpace()) "DISPLAY_P3" else "DEFAULT"}"
+                                    "sessionColorSpace=${if (useP3ColorSpace) "DISPLAY_P3" else "DEFAULT"}"
                         )
                         safeCloseCaptureSession(session, "photo configure failure")
                         if (vendorSessionParametersApplied &&
@@ -3424,12 +3657,17 @@ class Camera2Controller(private val context: Context) {
                         if (retryPreviewSessionWithoutPhysicalOutput("photo configure failed", openGeneration)) {
                             return
                         }
+                        if (activeOutputPhysicalCameraId == null &&
+                            retryPhotoSessionAfterRawFailure("photo configure failed", openGeneration)
+                        ) {
+                            return
+                        }
                         handlePreviewSessionFailure("photo configure failed", openGeneration)
                     }
                 }
             )
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
-                if (shouldUseP3ColorSpace()) {
+                if (useP3ColorSpace) {
                     sessionConfig.setColorSpace(ColorSpace.Named.DISPLAY_P3)
                 }
             }
@@ -3472,6 +3710,11 @@ class Camera2Controller(private val context: Context) {
                     "create session exception: ${e.message}",
                     openGeneration
                 )
+            ) {
+                return
+            }
+            if (e is IllegalArgumentException && activeOutputPhysicalCameraId == null &&
+                retryPhotoSessionAfterRawFailure("create session: ${e.message}", openGeneration)
             ) {
                 return
             }
@@ -3737,6 +3980,32 @@ class Camera2Controller(private val context: Context) {
         return true
     }
 
+    private fun retryPhotoSessionAfterRawFailure(
+        reason: String,
+        openGeneration: Long,
+        requireAlternative: Boolean = false,
+    ): Boolean {
+        val reader = imageReader?.takeIf(::isRawCaptureReader) ?: return false
+        val currentFormat = reader.imageFormat
+        val physicalId = activeOutputPhysicalCameraId
+        val cameraId = (physicalId ?: activeOpenCameraId).takeIf(String::isNotEmpty) ?: return false
+        val surfaceTexture = previewSurfaceTexture ?: return false
+        val handler = cameraHandler ?: return false
+        if (requireAlternative) {
+            val characteristics = getCameraCharacteristicsOrNull(cameraId, "RAW preview retry") ?: return false
+            if (resolveRawCaptureOutput(characteristics, physicalId, excludeFormat = currentFormat) == null) return false
+        }
+        if (physicalId != null) {
+            rememberPhysicalOutputProfileFailure(physicalId, currentFormat, reason)
+        } else if (!failedLogicalRawOutputProfiles.add(cameraId to currentFormat)) {
+            return false
+        }
+        PLog.w(TAG, "Trying another RAW output: camera=$cameraId, format=${imageFormatToString(currentFormat)}, reason=$reason")
+        return handler.post {
+            if (openGeneration == cameraOpenGeneration) openCamera(surfaceTexture)
+        }
+    }
+
     private fun createOutputConfiguration(surface: Surface): OutputConfiguration {
         return OutputConfiguration(surface).apply {
             activeOutputPhysicalCameraId?.let { physicalCameraId ->
@@ -3905,7 +4174,7 @@ class Camera2Controller(private val context: Context) {
         if (selectedPhysicalCameraId != key.physicalCameraId) return
 
         when (key.readerFormat) {
-            ImageFormat.RAW_SENSOR, ImageFormat.RAW10 -> {
+            ImageFormat.RAW_SENSOR, ImageFormat.RAW10, ImageFormat.RAW12 -> {
                 isRawSupported = getCameraCharacteristicsOrNull(key.physicalCameraId, "RAW output support")
                     ?.let { resolveRawCaptureOutput(it, key.physicalCameraId) } != null
                 _state.value = _state.value.copy(isRawSupported = isRawSupported)
@@ -3932,8 +4201,15 @@ class Camera2Controller(private val context: Context) {
     private fun resolveRawCaptureOutput(
         characteristics: CameraCharacteristics,
         physicalCameraId: String?,
+        excludeFormat: Int? = null,
     ): CameraUtils.RawCaptureOutput? = CameraUtils.getRawCaptureOutput(characteristics) { format ->
-        physicalCameraId == null || !isPhysicalOutputProfileFailed(physicalCameraId, format)
+        if (format == excludeFormat) {
+            false
+        } else if (physicalCameraId != null) {
+            !isPhysicalOutputProfileFailed(physicalCameraId, format)
+        } else {
+            (activeOpenCameraId to format) !in failedLogicalRawOutputProfiles
+        }
     }
 
     private fun onSessionConfigured(
@@ -3960,7 +4236,18 @@ class Camera2Controller(private val context: Context) {
             // 关键修复: 不再动态添加 surface，因为已经在创建 builder 时添加了
             previewRequestBuilder?.let { builder ->
                 applyPhysicalApertureSettings(builder, _state.value)
-                session.setRepeatingRequest(builder.build(), previewCallback, cameraHandler)
+                startPreviewRepeatingRequest(session, builder)
+            }
+            if (rawPreviewReader != null) {
+                cameraHandler?.postDelayed({
+                    if (session === captureSession && sessionGeneration == previewSessionGeneration &&
+                        lastPublishedRawPreviewTimestampNs == 0L
+                    ) {
+                        fallbackFromRawPreview("RAW preview did not deliver a matching buffer", retryAnotherRawFormat = true) {
+                            lastPublishedRawPreviewTimestampNs == 0L
+                        }
+                    }
+                }, RAW_PREVIEW_FIRST_IMAGE_TIMEOUT_MS)
             }
             if (shouldUseAlgorithmicStabilization()) {
                 scheduleEnhancedStabilizationInputWatchdog(sessionGeneration)
@@ -3988,11 +4275,75 @@ class Camera2Controller(private val context: Context) {
         }
     }
 
+    private fun startPreviewRepeatingRequest(
+        session: CameraCaptureSession,
+        builder: CaptureRequest.Builder,
+    ) {
+        try {
+            session.setRepeatingRequest(builder.build(), previewCallback, cameraHandler)
+            previewRawChannel.isActive = rawPreviewReader != null
+        } catch (error: IllegalArgumentException) {
+            if (rawPreviewReader == null) throw error
+            if (retryPhotoSessionAfterRawFailure("RAW repeating rejected", cameraOpenGeneration, requireAlternative = true)) return
+            PLog.w(TAG, "Camera rejected RAW repeating request; using preview YUV", error)
+            resumePreviewYuvRepeatingRequest(session, builder)
+        }
+    }
+
+    private fun fallbackFromRawPreview(
+        reason: String,
+        retryAnotherRawFormat: Boolean = false,
+        shouldFallback: () -> Boolean,
+    ) {
+        val handler = cameraHandler ?: return
+        val session = captureSession ?: return
+        val builder = previewRequestBuilder ?: return
+        if (rawPreviewReader == null || pendingRawPreviewFallback != null) return
+        val generation = previewSessionGeneration
+        val attempt = object : Runnable {
+            override fun run() {
+                if (session !== captureSession || generation != previewSessionGeneration) return
+                if (!shouldFallback()) {
+                    pendingRawPreviewFallback = null
+                    return
+                }
+                if (_state.value.isCapturing || photoCaptures.isNotEmpty()) {
+                    handler.postDelayed(this, RAW_PREVIEW_FALLBACK_RETRY_MS)
+                    return
+                }
+                if (retryAnotherRawFormat &&
+                    retryPhotoSessionAfterRawFailure(reason, cameraOpenGeneration, requireAlternative = true)
+                ) return
+                PLog.w(TAG, "RAW preview unavailable ($reason); using preview YUV")
+                try {
+                    resumePreviewYuvRepeatingRequest(session, builder)
+                } catch (error: Exception) {
+                    handlePreviewSessionFailure("restore preview YUV", cameraOpenGeneration, error)
+                }
+            }
+        }
+        pendingRawPreviewFallback = attempt
+        attempt.run()
+    }
+
+    private fun resumePreviewYuvRepeatingRequest(
+        session: CameraCaptureSession,
+        builder: CaptureRequest.Builder,
+    ) {
+        val rawTarget = checkNotNull(rawPreviewReader).surface
+        val yuvTarget = checkNotNull(previewSurface)
+        builder.removeTarget(rawTarget)
+        builder.addTarget(yuvTarget)
+        session.setRepeatingRequest(builder.build(), previewCallback, cameraHandler)
+        clearRawPreview()
+    }
+
     private fun imageFormatToString(format: Int): String {
         return when (format) {
             NO_IMAGE_READER_FORMAT -> "NO_IMAGE_READER"
             ImageFormat.RAW_SENSOR -> "RAW_SENSOR"
             ImageFormat.RAW10 -> "RAW10"
+            ImageFormat.RAW12 -> "RAW12"
             ImageFormat.PRIVATE -> "PRIVATE"
             ImageFormat.YCBCR_P010 -> "YCBCR_P010"
             ImageFormat.YUV_420_888 -> "YUV_420_888"
@@ -4002,7 +4353,10 @@ class Camera2Controller(private val context: Context) {
     }
 
     private fun isRawCaptureReader(reader: ImageReader?): Boolean {
-        return reader?.imageFormat == ImageFormat.RAW_SENSOR || reader?.imageFormat == ImageFormat.RAW10
+        return when (reader?.imageFormat) {
+            ImageFormat.RAW_SENSOR, ImageFormat.RAW10, ImageFormat.RAW12 -> true
+            else -> false
+        }
     }
 
     /**
@@ -7431,7 +7785,27 @@ class Camera2Controller(private val context: Context) {
     }
 
     fun setRawCfaCorrectionModes(modes: Map<String, String>) {
-        _state.value = _state.value.copy(rawCfaCorrectionModes = modes.toMap())
+        val previous = _state.value
+        val state = previous.copy(rawCfaCorrectionModes = modes.toMap())
+        _state.value = state
+        val wasQuadBayer = rawPreviewCfaOverride(previous)?.let(RawMetadata::isQuadBayer) == true
+        val isQuadBayer = rawPreviewCfaOverride(state)?.let(RawMetadata::isQuadBayer) == true
+        if (!state.isProfessionalMode || !wasQuadBayer || isQuadBayer) return
+        val handler = cameraHandler ?: return
+        handler.post(object : Runnable {
+            override fun run() {
+                val current = _state.value
+                if (current.currentCameraId != state.currentCameraId || !current.isProfessionalMode ||
+                    rawPreviewReader != null || cameraDevice == null || previewSurface == null ||
+                    rawPreviewCfaOverride(current)?.let(RawMetadata::isQuadBayer) == true
+                ) return
+                if (current.isCapturing || photoCaptures.isNotEmpty()) {
+                    handler.postDelayed(this, RAW_PREVIEW_FALLBACK_RETRY_MS)
+                } else {
+                    createPreviewSession(openGeneration = cameraOpenGeneration)
+                }
+            }
+        })
     }
 
     fun setMultiFrameOutputScale(outputScale: Float?) {
@@ -8827,6 +9201,7 @@ class Camera2Controller(private val context: Context) {
         // A delayed close callback from the old session must not clear its replacement.
         if (session == null || captureSession !== session) return
         clearStabilizationInput()
+        clearRawPreview()
         captureSession = null
         _enginePreviewSource.value = null
         previewRequestBuilder = null

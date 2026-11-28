@@ -104,6 +104,7 @@ import com.hinnka.mycamera.ui.theme.AccentColor
 import com.hinnka.mycamera.ui.theme.OnAccentColor
 import com.hinnka.mycamera.processor.DenoiseStrength
 import com.hinnka.mycamera.processor.MgcRawMaxMode
+import com.hinnka.mycamera.raw.RawAdaptiveExposureMode
 import com.hinnka.mycamera.raw.RawColorCalibrationMode
 import com.hinnka.mycamera.raw.RawOutputUpscaleMode
 import com.hinnka.mycamera.raw.RawSceneExposureMath
@@ -2179,11 +2180,9 @@ fun SettingsScreen(
                             title = stringResource(R.string.settings_raw_adaptive_exposure_mode),
                             description = stringResource(R.string.settings_raw_adaptive_exposure_mode_description),
                             levels = listOf(
-                                com.hinnka.mycamera.raw.RawAdaptiveExposureMode.QUALCOMM_ADRC to
-                                    stringResource(R.string.settings_raw_adaptive_exposure_mode_qualcomm_adrc),
-                                com.hinnka.mycamera.raw.RawAdaptiveExposureMode.PHOTON_HDR to
+                                RawAdaptiveExposureMode.PHOTON_HDR to
                                     stringResource(R.string.settings_raw_adaptive_exposure_mode_photon_hdr),
-                                com.hinnka.mycamera.raw.RawAdaptiveExposureMode.OFF to
+                                RawAdaptiveExposureMode.OFF to
                                     stringResource(R.string.video_option_off),
                             ),
                             currentLevel = rawAdaptiveExposureMode,

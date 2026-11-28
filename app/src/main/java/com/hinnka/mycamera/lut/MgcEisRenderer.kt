@@ -28,6 +28,7 @@ internal class MgcEisRenderer(private val tag: String, private val timing: Video
     private var outputFramebufferId = 0
     private var width = 0
     private var height = 0
+    private var outputFormat = 0
 
     fun render(
         textureId: Int,
@@ -36,9 +37,11 @@ internal class MgcEisRenderer(private val tag: String, private val timing: Video
         timestampNs: Long,
         rowHomographies: FloatArray?,
         target: OutputTarget? = null,
+        sceneLinearInput: Boolean = false,
     ): Frame? {
         if (textureId == 0 || width <= 0 || height <= 0 || !ensureProgram()) return null
-        if (target == null && !ensureTarget(width, height)) return null
+        val format = if (sceneLinearInput) GLES30.GL_RGBA16F else GLES30.GL_RGBA8
+        if (target == null && !ensureTarget(width, height, format)) return null
         val destination = target ?: OutputTarget(outputTextureId, outputFramebufferId, width, height)
         GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, destination.framebufferId)
         GLES30.glViewport(0, 0, destination.width, destination.height)
@@ -72,6 +75,7 @@ internal class MgcEisRenderer(private val tag: String, private val timing: Video
         outputFramebufferId = 0
         width = 0
         height = 0
+        outputFormat = 0
         mesh.resetAfterContextLoss()
     }
 
@@ -89,6 +93,7 @@ internal class MgcEisRenderer(private val tag: String, private val timing: Video
         outputFramebufferId = 0
         width = 0
         height = 0
+        outputFormat = 0
     }
 
     private fun ensureProgram(): Boolean {
@@ -111,8 +116,10 @@ internal class MgcEisRenderer(private val tag: String, private val timing: Video
         return true
     }
 
-    private fun ensureTarget(requestedWidth: Int, requestedHeight: Int): Boolean {
-        if (outputTextureId != 0 && width == requestedWidth && height == requestedHeight) return true
+    private fun ensureTarget(requestedWidth: Int, requestedHeight: Int, format: Int): Boolean {
+        if (outputTextureId != 0 && width == requestedWidth && height == requestedHeight && outputFormat == format) {
+            return true
+        }
         releaseTarget()
         val textures = IntArray(1)
         GLES30.glGenTextures(1, textures, 0)
@@ -123,10 +130,7 @@ internal class MgcEisRenderer(private val tag: String, private val timing: Video
         GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_MAG_FILTER, GLES30.GL_LINEAR)
         GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_WRAP_S, GLES30.GL_CLAMP_TO_EDGE)
         GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_WRAP_T, GLES30.GL_CLAMP_TO_EDGE)
-        GLES30.glTexImage2D(
-            GLES30.GL_TEXTURE_2D, 0, GLES30.GL_RGBA8, requestedWidth, requestedHeight,
-            0, GLES30.GL_RGBA, GLES30.GL_UNSIGNED_BYTE, null,
-        )
+        GLES30.glTexStorage2D(GLES30.GL_TEXTURE_2D, 1, format, requestedWidth, requestedHeight)
         GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, 0)
         val framebuffers = IntArray(1)
         GLES30.glGenFramebuffers(1, framebuffers, 0)
@@ -145,6 +149,7 @@ internal class MgcEisRenderer(private val tag: String, private val timing: Video
         }
         width = requestedWidth
         height = requestedHeight
+        outputFormat = format
         return true
     }
 

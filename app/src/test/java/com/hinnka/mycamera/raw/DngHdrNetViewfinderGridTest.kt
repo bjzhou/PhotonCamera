@@ -1,6 +1,7 @@
 package com.hinnka.mycamera.raw
 
 import com.hinnka.mycamera.processor.PhotonDehazeTuning
+import kotlin.math.sqrt
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
@@ -18,15 +19,18 @@ class DngHdrNetViewfinderGridTest {
             sourceToShortGain = 1f,
             maximumShortIntensity = 1.6f,
         ))
-        assertEquals(257, base.pointCount)
-        assertEquals(413, expanded.pointCount)
+        assertEquals(514, base.pointCount)
+        assertEquals(652, expanded.pointCount)
+        assertEquals(0.5f, expanded.gamma, 0f)
         for (point in 1 until base.pointCount) {
-            val originalCoordinate = point.toFloat() / base.pointCount
-            val expandedCoordinate = point.toFloat() / expanded.pointCount / expanded.mapInputRangeScale
+            val baseRoot = point.toFloat() / base.pointCount
+            val expandedRoot = point.toFloat() / expanded.pointCount
+            val originalCoordinate = baseRoot * baseRoot / base.mapInputRangeScale
+            val expandedCoordinate = expandedRoot * expandedRoot / expanded.mapInputRangeScale
             assertEquals(originalCoordinate, expandedCoordinate, 2e-7f)
         }
         val lastKnot = (expanded.pointCount - 1f) / expanded.pointCount
-        assertTrue(1.6f * expanded.mapInputRangeScale <= lastKnot)
+        assertTrue(sqrt(1.6f * expanded.mapInputRangeScale) <= lastKnot)
         assertEquals(1f, expanded.mapInputWeights.sum() / expanded.mapInputRangeScale, 1e-6f)
     }
 
@@ -41,8 +45,8 @@ class DngHdrNetViewfinderGridTest {
         ))
         assertEquals(1024, plan.pointCount)
         val sourceCoordinate = 32f / plan.sourceToShortGain
-        val tableIndex = sourceCoordinate * plan.mapInputWeights.sum() *
-            plan.rendererBaselineGain * plan.pointCount
+        val tableIndex = sqrt(sourceCoordinate * plan.mapInputWeights.sum() *
+            plan.rendererBaselineGain) * plan.pointCount
         assertEquals(1023f, tableIndex, 0.001f)
         assertNull(DngPhotonProfileGainTableGenerator.hdrNetPlan(0f, 2f, 1f,
             maximumShortIntensity = Float.NaN))

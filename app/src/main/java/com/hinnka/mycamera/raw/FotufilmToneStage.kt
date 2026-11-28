@@ -94,11 +94,6 @@ internal class FotufilmToneStage(private val quad: RawFullscreenQuad) {
         val workHeight = min(workEdge, input.height)
         val coreWidth = if (workWidth == input.width) input.width else workEdge - 2 * support
         val coreHeight = if (workHeight == input.height) input.height else workEdge - 2 * support
-        PLog.d(
-            TAG,
-            "Fotufilm ${input.width}x${input.height} at ($originX, $originY): sub-tile ${workWidth}x$workHeight, " +
-                "apron $support, scratch ${bytesPerPixel}B/px",
-        )
         if (!subInput.ensure(workWidth, workHeight) || !subOutput.ensure(workWidth, workHeight)) return null
         val windowed = workWidth < input.width || workHeight < input.height
         try {

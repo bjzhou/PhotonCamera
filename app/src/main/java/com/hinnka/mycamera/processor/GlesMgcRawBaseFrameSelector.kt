@@ -27,53 +27,7 @@ internal data class GlesMgcRawBaseFrameSelection(
     val candidateIndices: IntArray,
     val prunedLatestIndex: Int?,
     val measurements: Map<Int, GlesMgcRawSharpnessMeasurement>,
-    val fastMomentsRawStats: com.hinnka.mycamera.raw.RawSceneAERawStats? = null,
-    /** Set instead of [fastMomentsRawStats] on a shared context; the caller must collect it. */
-    val fastMomentsSubmission: GlesFastMomentsSubmission? = null,
 )
-
-/**
- * Fast Moments statistics queued on the caller's EGL context. [collect] or [release] must run on
- * that context; both are idempotent and release the reference upload and statistics buffers.
- */
-internal class GlesFastMomentsSubmission internal constructor(
-    private val stats: GlesRawAEStats,
-    private var rawTexture: Int,
-    private val context: EGLContext,
-    private val frameNumber: Long,
-    private val sourceWidth: Int,
-    private val sourceHeight: Int,
-    private val uploadMs: Long,
-) {
-    fun collect(): com.hinnka.mycamera.raw.RawSceneAERawStats? = try {
-        val result = stats.collect()
-        PLog.i(
-            TAG,
-            "Fast Moments GPU reference statistics deferred size=${result.stats.width}x" +
-                "${result.stats.height} source=${sourceWidth}x$sourceHeight frame=$frameNumber " +
-                "uploadMs=$uploadMs submitMs=${result.submitMs} gpuWaitMs=${result.gpuWaitMs} " +
-                "mapMs=${result.mapMs}",
-        )
-        result.stats
-    } catch (error: RuntimeException) {
-        PLog.e(TAG, "Fast Moments deferred GPU statistics failed frame=$frameNumber", error)
-        null
-    } finally {
-        release()
-    }
-
-    fun release() {
-        stats.release()
-        if (rawTexture != 0 && EGL14.eglGetCurrentContext() == context) {
-            GLES30.glDeleteTextures(1, intArrayOf(rawTexture), 0)
-        }
-        rawTexture = 0
-    }
-
-    private companion object {
-        const val TAG = "GlesMgcRawBaseFrameSelector"
-    }
-}
 
 /**
  * GPU implementation of MGC 9.6.080 V24's RAW-content base-frame objective.
@@ -140,14 +94,7 @@ internal class GlesMgcRawBaseFrameSelector(
                 ) ?: return null
             }
             if (normalIndices.size > 1) logSelection(frames, normalIndices, selection)
-            val reference = frames[selection.referenceIndex]
-            if (useCurrentGlContext) {
-                // The caller keeps this context current through the merge, so the statistics are
-                // collected after it instead of stalling the merge on their GPU wait and readback.
-                selection.copy(fastMomentsSubmission = submitFastMomentsRawStats(reference))
-            } else {
-                selection.copy(fastMomentsRawStats = buildFastMomentsRawStats(reference))
-            }
+            selection
         } catch (error: RuntimeException) {
             PLog.e(TAG, "MGC GLES RAW base-frame selection failed", error)
             null
@@ -335,79 +282,6 @@ internal class GlesMgcRawBaseFrameSelector(
         }
     }
 
-    private fun buildFastMomentsRawStats(frame: RawStackFrame):
-        com.hinnka.mycamera.raw.RawSceneAERawStats? {
-        val totalStartNs = System.nanoTime()
-        val rawTexture = createRawTexture()
-        val uploadStartNs = System.nanoTime()
-        uploadRaw(frame, rawTexture, "Fast Moments reference ${frame.frameNumber}")
-        val uploadMs = elapsedMs(uploadStartNs)
-        return try {
-            val result = GlesRawAEStats(
-                width = width,
-                height = height,
-                cfaPattern = cfaPattern,
-                blackLevel = canonicalBlackLevelForFrame(frame),
-                whiteLevel = whiteLevel,
-                maxShaderStorageBlockBytes = maxShaderStorageBlockBytes,
-            ).build(rawTexture)
-            val totalMs = elapsedMs(totalStartNs)
-            PLog.i(
-                TAG,
-                "Fast Moments GPU reference statistics size=${result.stats.width}x" +
-                    "${result.stats.height} source=${width}x$height frame=${frame.frameNumber} " +
-                    "baseRgb=${result.stats.baseFrameMetering?.let {
-                        "${com.hinnka.mycamera.raw.RawSceneExposureMath.INPUT_WIDTH}x" +
-                            com.hinnka.mycamera.raw.RawSceneExposureMath.INPUT_HEIGHT
-                    } ?: "unavailable"} uploadMs=$uploadMs submitMs=${result.submitMs} " +
-                    "gpuWaitMs=${result.gpuWaitMs} mapMs=${result.mapMs} totalMs=$totalMs " +
-                    "budgetMs=$FAST_MOMENTS_BUDGET_MS",
-            )
-            if (totalMs > FAST_MOMENTS_BUDGET_MS) {
-                PLog.w(
-                    TAG,
-                    "Fast Moments GPU statistics exceeded budget: totalMs=$totalMs " +
-                        "budgetMs=$FAST_MOMENTS_BUDGET_MS frame=${frame.frameNumber}",
-                )
-            }
-            result.stats
-        } finally {
-            releaseTextures(intArrayOf(rawTexture))
-        }
-    }
-
-    private fun submitFastMomentsRawStats(frame: RawStackFrame): GlesFastMomentsSubmission {
-        // The submission owns this upload until the deferred dispatch has been collected.
-        val rawTexture = createRawTexture().also(textures::remove)
-        val stats = GlesRawAEStats(
-            width = width,
-            height = height,
-            cfaPattern = cfaPattern,
-            blackLevel = canonicalBlackLevelForFrame(frame),
-            whiteLevel = whiteLevel,
-            maxShaderStorageBlockBytes = maxShaderStorageBlockBytes,
-        )
-        return try {
-            val uploadStartNs = System.nanoTime()
-            uploadRaw(frame, rawTexture, "Fast Moments reference ${frame.frameNumber}")
-            val uploadMs = elapsedMs(uploadStartNs)
-            stats.submit(rawTexture)
-            GlesFastMomentsSubmission(
-                stats = stats,
-                rawTexture = rawTexture,
-                context = EGL14.eglGetCurrentContext(),
-                frameNumber = frame.frameNumber,
-                sourceWidth = width,
-                sourceHeight = height,
-                uploadMs = uploadMs,
-            )
-        } catch (error: RuntimeException) {
-            stats.release()
-            GLES30.glDeleteTextures(1, intArrayOf(rawTexture), 0)
-            throw error
-        }
-    }
-
     private fun releaseTextures(textureIds: IntArray) {
         if (textureIds.isEmpty()) return
         GLES30.glDeleteTextures(textureIds.size, textureIds, 0)
@@ -415,9 +289,6 @@ internal class GlesMgcRawBaseFrameSelector(
         textures.removeAll(released)
         checkGlError("release MGC RAW selector textures")
     }
-
-    private fun elapsedMs(startNs: Long): Long =
-        (System.nanoTime() - startNs) / 1_000_000L
 
     private fun reduceFrameMetrics(
         program: Int,
@@ -920,7 +791,6 @@ internal class GlesMgcRawBaseFrameSelector(
         private const val EGL_OPENGL_ES3_BIT_KHR = 0x00000040
         private const val RAW_BYTES_PER_PIXEL = 2
         private const val RAW_TEXTURE_RING_SIZE = 2
-        private const val FAST_MOMENTS_BUDGET_MS = 200L
         private const val PRUNE_LATEST_AT_CANDIDATE_COUNT = 8
         private const val NO_MOTION_NOISE_CORRECTION_SCALE = 0.95
 

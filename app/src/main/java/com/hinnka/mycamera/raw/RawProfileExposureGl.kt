@@ -7,9 +7,7 @@ import kotlin.math.pow
 
 object RawProfileExposureGl {
     const val DEFAULT_BLACK_RENDER_SHADOWS = 5f
-    private const val DEFAULT_BLACK_RENDER_DISABLE_BASELINE_EV = 2f
     private const val DEFAULT_BLACK_RENDER_SHADOW_SCALE = 1f
-    private const val DEFAULT_BLACK_RENDER_STAGE3_GAIN = 1f
 
     data class Uniforms(
         val exposureEv: Float,
@@ -49,7 +47,7 @@ object RawProfileExposureGl {
         profileExposureCompensation: Float,
         dngBaselineExposure: Float = 0f,
         dcpBaselineExposureOffset: Float = 0f,
-        defaultBlackRender: DcpDefaultBlackRender = DcpDefaultBlackRender.None,
+        defaultBlackRender: DcpDefaultBlackRender = DcpDefaultBlackRender.Auto,
         blackRenderShadows: Float = DEFAULT_BLACK_RENDER_SHADOWS,
         shadowScale: Float = 1f,
         supportOverrange: Boolean = false,
@@ -75,38 +73,28 @@ object RawProfileExposureGl {
             )
         }
 
-        val positiveExposureEv = max(0f, exposureEv)
-        val white = 1f / 2.0f.pow(positiveExposureEv)
-        val safeShadowScale = if (shadowScale.isFinite() && shadowScale > 0f) {
-            shadowScale
-        } else {
-            DEFAULT_BLACK_RENDER_SHADOW_SCALE
-        }
-        val resolvedDefaultBlackRender = resolveDefaultBlackRender(
-            dngBaselineExposure = dngBaselineExposure,
-            requested = defaultBlackRender,
-        )
-        val black = when (resolvedDefaultBlackRender) {
-            DcpDefaultBlackRender.Auto -> blackRenderShadows.coerceAtLeast(0f) *
-                safeShadowScale *
-                DEFAULT_BLACK_RENDER_STAGE3_GAIN *
-                0.001f
+        val white = 2.0.pow(-max(0.0, exposureEv.toDouble()))
+        // Photon supplies normalized Stage 3 input and consumes BaselineExposure in this ramp,
+        // so the Stage3Gain term from dng_render is one here.
+        val black = when (defaultBlackRender) {
+            DcpDefaultBlackRender.Auto -> blackRenderShadows.toDouble().coerceAtLeast(0.0) *
+                sanitizeShadowScale(shadowScale) * 0.001
 
-            DcpDefaultBlackRender.None -> 0f
-        }.coerceIn(0f, 0.99f * white)
-        val slope = 1f / max(white - black, 1e-6f)
-        val radius = min(0.5f * black, (1f / 16f) / max(slope, 1e-6f))
-        val qScale = if (radius > 0f) slope / (4f * radius) else 0f
+            DcpDefaultBlackRender.None -> 0.0
+        }.coerceIn(0.0, 0.99 * white)
+        val slope = (1.0 / (white - black)).takeIf { it > 0.0 && it <= Float.MAX_VALUE } ?: 0.0
+        val radius = if (slope > 0.0) min(0.5 * black, (1.0 / 16.0) / slope) else 0.0
+        val qScale = if (radius > 0.0) min(slope / (4.0 * radius), Float.MAX_VALUE.toDouble()) else 0.0
 
         if (exposureEv >= 0f) {
             return Uniforms(
                 exposureEv = exposureEv,
                 useRamp = true,
                 linearGain = linearGain,
-                rampSlope = slope,
-                rampBlack = black,
-                rampRadius = radius,
-                rampQScale = qScale,
+                rampSlope = slope.toFloat(),
+                rampBlack = black.toFloat(),
+                rampRadius = radius.toFloat(),
+                rampQScale = qScale.toFloat(),
                 supportOverrange = supportOverrange,
                 toneEnabled = false,
                 toneSlope = 1f,
@@ -124,10 +112,10 @@ object RawProfileExposureGl {
             exposureEv = exposureEv,
             useRamp = true,
             linearGain = linearGain,
-            rampSlope = slope,
-            rampBlack = black,
-            rampRadius = radius,
-            rampQScale = qScale,
+            rampSlope = slope.toFloat(),
+            rampBlack = black.toFloat(),
+            rampRadius = radius.toFloat(),
+            rampQScale = qScale.toFloat(),
             supportOverrange = supportOverrange,
             toneEnabled = true,
             toneSlope = toneSlope,
@@ -137,19 +125,13 @@ object RawProfileExposureGl {
         )
     }
 
-    fun resolveDefaultBlackRender(
-        dngBaselineExposure: Float,
+    internal fun sanitizeShadowScale(shadowScale: Float): Float =
+        shadowScale.takeIf { it > 0f && it <= 1f } ?: DEFAULT_BLACK_RENDER_SHADOW_SCALE
+
+    internal fun resolveDefaultBlackRender(
         requested: DcpDefaultBlackRender,
-    ): DcpDefaultBlackRender {
-        val baselineExposure = DngBaselineExposure.sanitize(dngBaselineExposure)
-        // A large BaselineExposure is a source-domain normalization. Applying the Adobe Auto
-        // stage-3 black point before that gain removes valid source signal, so keep zero as black.
-        return if (baselineExposure >= DEFAULT_BLACK_RENDER_DISABLE_BASELINE_EV) {
-            DcpDefaultBlackRender.None
-        } else {
-            requested
-        }
-    }
+        outputReferred: Boolean = false,
+    ): DcpDefaultBlackRender = if (outputReferred) DcpDefaultBlackRender.None else requested
 
     fun bindUniforms(program: Int, exposure: Uniforms) {
         GLES30.glUniform1f(

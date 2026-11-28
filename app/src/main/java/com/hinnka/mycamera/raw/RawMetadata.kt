@@ -1,6 +1,7 @@
 package com.hinnka.mycamera.raw
 
 import android.R
+import android.graphics.ImageFormat
 import android.hardware.camera2.CameraCharacteristics
 import android.hardware.camera2.CaptureResult
 import android.hardware.camera2.params.ColorSpaceTransform
@@ -199,6 +200,8 @@ data class RawMetadata(
     val sceneHasFace: Boolean = false,
     /** Normalized [0, 1] face bounds relative to activeArray for scene-linear ADRC metering. */
     val faceRects: List<android.graphics.RectF> = emptyList(),
+    /** DNG ColorimetricReference is not scene-referred. */
+    val dngOutputReferred: Boolean = false,
 ) {
     fun withNoiseProfileSelection(selection: RawNoiseProfileSelection): RawMetadata {
         val profile = when (selection) {
@@ -313,7 +316,8 @@ data class RawMetadata(
             captureResult: CaptureResult,
             userExposureBias: Float? = null,
             captureExposureCompensationEv: Float = 0f,
-            colorSpace: ColorSpace = ColorSpace.SRGB
+            colorSpace: ColorSpace = ColorSpace.SRGB,
+            sourceFormat: Int? = null,
         ): RawMetadata {
             // 1. 获取 CFA 排列模式
             val cfaId = characteristics.get(CameraCharacteristics.SENSOR_INFO_COLOR_FILTER_ARRANGEMENT)
@@ -360,8 +364,20 @@ data class RawMetadata(
             }
 
             // 2. 获取白电平
-            val whiteLevel = characteristics.get(CameraCharacteristics.SENSOR_INFO_WHITE_LEVEL)?.toFloat()
-                ?: 1023f // 默认 10-bit
+            val staticWhiteLevel = characteristics.get(CameraCharacteristics.SENSOR_INFO_WHITE_LEVEL)
+            val packedMaximum = when (sourceFormat) {
+                ImageFormat.RAW10 -> 1023
+                ImageFormat.RAW12 -> 4095
+                else -> null
+            }
+            val whiteLevel = if (packedMaximum != null) {
+                val declaredWhiteLevel = captureResult.get(CaptureResult.SENSOR_DYNAMIC_WHITE_LEVEL)?.takeIf { it > 0 }
+                    ?: staticWhiteLevel?.takeIf { it > 0 }
+                    ?: packedMaximum
+                minOf(declaredWhiteLevel, packedMaximum).toFloat()
+            } else {
+                staticWhiteLevel?.toFloat() ?: 1023f
+            }
 
             // 3. 获取黑电平
             // 注意：动态黑电平和静态黑电平模式都是按 2x2 Bayer 位置存储的
@@ -1205,6 +1221,7 @@ data class RawMetadata(
         if (!cameraWhite.contentEquals(other.cameraWhite)) return false
         if (baselineExposure != other.baselineExposure) return false
         if (shadowScale != other.shadowScale) return false
+        if (dngOutputReferred != other.dngOutputReferred) return false
         if (iso != other.iso) return false
         if (minimumSensitivityIso != other.minimumSensitivityIso) return false
         if (maximumSensitivityIso != other.maximumSensitivityIso) return false
@@ -1254,6 +1271,7 @@ data class RawMetadata(
         result = 31 * result + postRawSensitivityBoost.hashCode()
         result = 31 * result + baselineExposure.hashCode()
         result = 31 * result + shadowScale.hashCode()
+        result = 31 * result + dngOutputReferred.hashCode()
         result = 31 * result + iso
         result = 31 * result + minimumSensitivityIso
         result = 31 * result + maximumSensitivityIso

@@ -75,12 +75,12 @@ object Shaders {
      */
     val FRAGMENT_SHADER_COPY_2D = """
         #version 300 es
-        precision mediump float;
+        precision highp float;
 
         in vec2 vTexCoord;
         out vec4 fragColor;
 
-        uniform sampler2D uCameraTexture;
+        uniform highp sampler2D uCameraTexture;
 
         void main() {
             fragColor = texture(uCameraTexture, vTexCoord);

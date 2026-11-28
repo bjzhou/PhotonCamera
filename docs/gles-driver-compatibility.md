@@ -414,6 +414,15 @@ Render-target helper 必须记录前一次 attachment 数量。数量减少时�
 Q14/白平衡得到的浮点值，全部目标纹理值与原 PBO 路径一致。37×19 探针强制分段，
 覆盖尾段、上传后直接 sampler 消费和 framebuffer readback，未在 sampler 前插入 CPU wait。
 
+### 三维半精度纹理上传
+
+桌面 SwiftShader 4.0 上，`glTexSubImage3D` 用 `GL_FLOAT` 上传到 `R16F`，随后采样得到 0，
+期间 `glGetError` 返回 `GL_NO_ERROR`。同一纹理用预先打包的 `GL_HALF_FLOAT` 上传后，
+在 SwiftShader 和 ANGLE D3D11 的实际 draw 和回读中均得到正常值。
+
+- `R16F` 三维纹理从 CPU 上传紧密排列的 half 数据。每行含奇数个 texel 时，上传前设置
+  `GL_UNPACK_ALIGNMENT = 2`，上传后恢复 4。验证覆盖线性采样和 framebuffer 回读。
+
 ### GPU -> GPU 交接
 
 - 同一 EGL context/GL dispatcher 内，producer 完成 `imageStore` 并声明 image、texture fetch、framebuffer 所需 barrier 后，直接转移 texture 所有权；不要调用 `glFinish`。跨共享 context 必须另行验证 sync object 的共享与等待。

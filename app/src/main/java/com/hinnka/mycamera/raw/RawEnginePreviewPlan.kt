@@ -2,6 +2,7 @@ package com.hinnka.mycamera.raw
 
 import android.content.Context
 import com.hinnka.mycamera.raw.fotufilm.FotufilmDocument
+import kotlin.math.abs
 
 /** Latest physical-camera color state. Value equality suppresses unchanged frame metadata. */
 data class RawEnginePreviewSource(
@@ -30,7 +31,23 @@ data class RawEnginePreviewSettings(
     val filmPrint: String,
     val filmTuning: SpectralFilmTuning,
     val fotufilmDocument: FotufilmDocument? = null,
+    val adjustments: RawEnginePreviewAdjustments = RawEnginePreviewAdjustments.NEUTRAL,
+    val isLinearRawCapture: Boolean = false,
 )
+
+data class RawEnginePreviewAdjustments(
+    val highlights: Float,
+    val shadows: Float,
+    val blacks: Float,
+    val whites: Float,
+) {
+    internal val isActive: Boolean
+        get() = abs(highlights) >= 0.001f || abs(shadows) >= 0.001f || abs(blacks) >= 0.001f || abs(whites) >= 0.001f
+
+    companion object {
+        val NEUTRAL = RawEnginePreviewAdjustments(0f, 0f, 0f, 0f)
+    }
+}
 
 /** Immutable CPU solution. Matrices are row-major; the owning GL context uploads them. */
 class RawEnginePreviewPlan internal constructor(
@@ -42,11 +59,11 @@ class RawEnginePreviewPlan internal constructor(
     internal val resources: RawEngineColorResources,
 )
 
-/** Assets are loaded once per selection; frame-dependent matrices/tables resolve off the GL thread. */
-class RawEnginePreviewResolver(private val context: Context, val settings: RawEnginePreviewSettings) {
-    private val engine = settings.engine
-    private val tone = settings.tone.normalized()
-    private val dcp = settings.dcp?.takeIf { engine == RawRenderingEngine.AdobeCurve }?.let {
+/** Static engine assets shared by the ISP and sensor preview paths. */
+internal class RawEnginePreviewAssets(private val context: Context, val settings: RawEnginePreviewSettings) {
+    val engine = settings.engine
+    val tone = settings.tone.normalized()
+    val dcp = settings.dcp?.takeIf { engine == RawRenderingEngine.AdobeCurve }?.let {
         requireNotNull(DcpProfileParser.resolveProfile(context, it)) { "Unable to load DCP ${it.id}" }
     }
     private val spectral = if (engine == RawRenderingEngine.Spektrafilm) requireNotNull(
@@ -59,13 +76,53 @@ class RawEnginePreviewResolver(private val context: Context, val settings: RawEn
     private val hncsManager = if (engine.isHncs) HncsProfileManager(context) else null
     private val canon = if (engine.isCanon) CanonProfile.createRenderPlan(context, tone.canonPictureStyle) else null
     private val leica = if (engine.isLeica) LeicaProfile.createRenderPlan(context) else null
-    private val target = when (engine) {
+    val target = when (engine) {
         RawRenderingEngine.Hncs -> EquivalentCameraTarget.HasselbladX2DII100C
         RawRenderingEngine.Lumix -> EquivalentCameraTarget.LumixS9
         RawRenderingEngine.Canon -> EquivalentCameraTarget.CanonEOSR5
         RawRenderingEngine.Leica -> EquivalentCameraTarget.LeicaM9
         else -> null
     }
+    private val outputTransform = RawToneMappingGl.computeWorkingToOutputTransform(engine.workingColorSpace, ColorSpace.SRGB)
+
+    /** Populate the engine asset caches before the first exact-frame color calculation. */
+    fun prewarmForward() {
+        target?.calibration?.prewarm(context)
+        hncsManager?.prewarm(settings.hncsFilmCurve)
+        if (engine.isLumix) LumixProfile.createRenderPlan(context, tone.lumixPhotoStyle, null)
+    }
+
+    fun colorResources(
+        profile: DcpRenderPlan?,
+        profileExposure: RawProfileExposureGl.Uniforms,
+        engineWhite: FloatArray?,
+        iso: Int,
+        applyDcpHueSatMap: Boolean,
+    ): RawEngineColorResources {
+        val cct = engineWhite?.let(DngSdkColorSpec::colorTemperatureForXy)
+        val hncs = hncsManager?.let {
+            requireNotNull(it.resolveLutRenderPlan(cct, settings.hncsFilmCurve)) { "Unable to resolve HNCS preview at CCT=$cct" }
+        }
+        val lumix = if (engine.isLumix) LumixProfile.createRenderPlan(
+            context, tone.lumixPhotoStyle, cct, iso = iso,
+        ) else null
+        return RawEngineColorResources(
+            colorEngine = engine, toneMappingParameters = tone, profileExposure = profileExposure,
+            outputTransform = outputTransform,
+            dcpRenderPlan = profile, applyDcpHueSatMap = applyDcpHueSatMap, spectralFilmLut = spectral,
+            hncsRenderPlan = hncs, lumixRenderPlan = lumix, canonRenderPlan = canon, leicaRenderPlan = leica,
+            fotufilm = fotufilm,
+        )
+    }
+}
+
+/** Assets are loaded once per selection; frame-dependent matrices/tables resolve off the GL thread. */
+class RawEnginePreviewResolver(private val context: Context, val settings: RawEnginePreviewSettings) {
+    private val assets = RawEnginePreviewAssets(context, settings)
+    private val engine = assets.engine
+    private val tone = assets.tone
+    private val dcp = assets.dcp
+    private val target = assets.target
     val needsCameraMetadata: Boolean = dcp != null || target != null
 
     fun resolve(source: RawEnginePreviewSource?): RawEnginePreviewPlan? {
@@ -119,13 +176,6 @@ class RawEnginePreviewResolver(private val context: Context, val settings: RawEn
                 RawProfileToneMapMode.OppoMaster -> base.copy(toneCurveLut = DngProfileToneCurve.oppoEmbeddedToneCurveLut())
             }
         }
-        val cct = engineWhite?.let(DngSdkColorSpec::colorTemperatureForXy)
-        val hncs = hncsManager?.let {
-            requireNotNull(it.resolveLutRenderPlan(cct, settings.hncsFilmCurve)) { "Unable to resolve HNCS preview at CCT=$cct" }
-        }
-        val lumix = if (engine.isLumix) LumixProfile.createRenderPlan(
-            context, tone.lumixPhotoStyle, cct, iso = requireNotNull(source).iso,
-        ) else null
         val exposure = RawProfileExposureGl.compute(
             profileExposureCompensation = settings.exposureEv + engine.defaultExposureCompensationEv +
                 tone.engineExposureCompensationEv(engine),
@@ -137,13 +187,7 @@ class RawEnginePreviewResolver(private val context: Context, val settings: RawEn
         )
         return RawEnginePreviewPlan(
             engine, restoration, restore, input, clip,
-            RawEngineColorResources(
-                colorEngine = engine, toneMappingParameters = tone, profileExposure = exposure,
-                outputTransform = RawToneMappingGl.computeWorkingToOutputTransform(engine.workingColorSpace, ColorSpace.SRGB),
-                dcpRenderPlan = profile, applyDcpHueSatMap = true, spectralFilmLut = spectral,
-                hncsRenderPlan = hncs, lumixRenderPlan = lumix, canonRenderPlan = canon, leicaRenderPlan = leica,
-                fotufilm = fotufilm,
-            ),
+            assets.colorResources(profile, exposure, engineWhite, source?.iso ?: 100, applyDcpHueSatMap = true),
         )
     }
 

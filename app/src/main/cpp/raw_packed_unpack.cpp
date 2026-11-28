@@ -1,4 +1,4 @@
-#include "raw10_unpack.h"
+#include "raw_packed_unpack.h"
 
 #include <arm_neon.h>
 
@@ -40,6 +40,34 @@ void UnpackRaw10(const uint8_t *source, uint16_t *destination, size_t width,
       output[1] = (static_cast<uint16_t>(input[1]) << 2) | ((low >> 2) & 3);
       output[2] = (static_cast<uint16_t>(input[2]) << 2) | ((low >> 4) & 3);
       output[3] = (static_cast<uint16_t>(input[3]) << 2) | (low >> 6);
+    }
+  }
+}
+
+void UnpackRaw12(const uint8_t *source, uint16_t *destination, size_t width,
+                 size_t height, size_t rowStride) {
+  // Eight 3-byte groups supply the high bytes for even and odd samples and their
+  // shared low nibbles. The interleaved loads/stores keep Bayer sample order.
+  // https://developer.android.com/reference/android/graphics/ImageFormat#RAW12
+  const uint8x8_t lowMask = vdup_n_u8(15);
+  const size_t vectorWidth = width & ~size_t{15};
+
+  for (size_t y = 0; y < height; ++y) {
+    const uint8_t *input = source + y * rowStride;
+    uint16_t *output = destination + y * width;
+    size_t x = 0;
+    for (; x < vectorWidth; x += 16, input += 24, output += 16) {
+      const uint8x8x3_t packed = vld3_u8(input);
+      const uint16x8x2_t unpacked = {{
+          vorrq_u16(vshll_n_u8(packed.val[0], 4), vmovl_u8(vand_u8(packed.val[2], lowMask))),
+          vorrq_u16(vshll_n_u8(packed.val[1], 4), vmovl_u8(vshr_n_u8(packed.val[2], 4))),
+      }};
+      vst2q_u16(output, unpacked);
+    }
+    for (; x < width; x += 2, input += 3, output += 2) {
+      const uint8_t low = input[2];
+      output[0] = (static_cast<uint16_t>(input[0]) << 4) | (low & 15);
+      output[1] = (static_cast<uint16_t>(input[1]) << 4) | (low >> 4);
     }
   }
 }

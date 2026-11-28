@@ -148,13 +148,10 @@ object SuperResolutionDngWriter {
             calibrationIlluminant1 = calibration.illuminant1.takeIf { it != 0 } ?: 21,
             calibrationIlluminant2 = illuminant2,
             baselineExposureOffset = 0f,
-            defaultBlackRender = if (
-                profileGainTableMap != null || imageLayout == ImageLayout.LINEAR_RAW_RGB
-            ) {
-                DcpDefaultBlackRender.None
-            } else {
-                DcpDefaultBlackRender.Auto
-            },
+            defaultBlackRender = DcpDefaultBlackRender.generated(
+                isLinearRaw = imageLayout == ImageLayout.LINEAR_RAW_RGB,
+                hasGainMap = profileGainTableMap != null,
+            ),
             supportsOverrange = false,
             colorMatrix1 = colorMatrix1,
             colorMatrix2 = colorMatrix2,
@@ -399,6 +396,10 @@ object SuperResolutionDngWriter {
                     }
                 }
             val writtenProfileToneCurve = normalizeProfileToneCurve(profileToneCurve)
+            val defaultBlackRender = DcpDefaultBlackRender.generated(
+                isLinearRaw = imageLayout == ImageLayout.LINEAR_RAW_RGB,
+                hasGainMap = writtenProfileGainTableMap != null,
+            )
             val directories = buildEntries(
                 width = width,
                 height = height,
@@ -415,6 +416,7 @@ object SuperResolutionDngWriter {
                 imageByteCount = imageByteCount,
                 baselineExposureEv = baselineExposureEv,
                 profileGainTableMap = writtenProfileGainTableMap,
+                defaultBlackRender = defaultBlackRender,
                 noiseProfileOverride = noiseProfile,
                 profileName = profileName,
                 profileToneCurve = writtenProfileToneCurve,
@@ -447,7 +449,7 @@ object SuperResolutionDngWriter {
                     "lscInPixels=$pixelsIncludeLensShadingCorrection " +
                     "baselineExposureEv=$baselineExposureEv " +
                     "ifdLayout=raw-ifd0 preview=none " +
-                    "defaultBlackRender=${if (writtenProfileGainTableMap != null) "none" else "default"} " +
+                    "defaultBlackRender=$defaultBlackRender " +
                     "profileToneCurvePoints=${writtenProfileToneCurve?.size?.div(2) ?: 0} " +
                     "rawAeSummary=${rawSceneExposureSummaryText != null} " +
                     "cameraRawLook=${when {
@@ -483,6 +485,7 @@ object SuperResolutionDngWriter {
         imageByteCount: Long,
         baselineExposureEv: Float?,
         profileGainTableMap: DngProfileGainTableMap?,
+        defaultBlackRender: DcpDefaultBlackRender,
         noiseProfileOverride: FloatArray?,
         profileName: String?,
         profileToneCurve: FloatArray?,
@@ -737,10 +740,8 @@ object SuperResolutionDngWriter {
                 }
             }
             add(rationalArray(TAG_AS_SHOT_NEUTRAL, resolveAsShotNeutral(captureResult, calibration.asShotNeutral)))
-            if (profileGainTableMap != null) {
-                add(long(TAG_DEFAULT_BLACK_RENDER, 1))
-            } else if (!isCfa) {
-                add(long(TAG_DEFAULT_BLACK_RENDER, 1))
+            if (defaultBlackRender != DcpDefaultBlackRender.Auto) {
+                add(long(TAG_DEFAULT_BLACK_RENDER, defaultBlackRender.tagValue.toLong()))
             }
             add(sRationalArray(TAG_BASELINE_EXPOSURE, listOf(resolvedBaselineExposureEv.toDouble())))
             profileName

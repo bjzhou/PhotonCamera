@@ -84,29 +84,13 @@ internal class GlesMgcRawFusion(
             frames.forEach { it.image.close() }
             return null
         }
-        val fastMomentsSubmission = baseFrameSelection.fastMomentsSubmission
-        return try {
-            processSelectedFrames(
-                frames = frames,
-                normalIndicesBeforeSelection = normalIndicesBeforeSelection,
-                baseFrameSelection = baseFrameSelection,
-                canReuseSpatialReferenceUpload = canReuseSpatialReferenceUpload,
-            )?.let { result ->
-                // Collected after the merge so the statistics never stall it.
-                fastMomentsSubmission?.let { submission ->
-                    result.copy(fastMomentsRawStats = submission.collect())
-                } ?: result
-            }
-        } finally {
-            fastMomentsSubmission?.release()
-        }
+        return processSelectedFrames(frames, normalIndicesBeforeSelection, baseFrameSelection)
     }
 
     private fun processSelectedFrames(
         frames: List<RawStackFrame>,
         normalIndicesBeforeSelection: List<Int>,
         baseFrameSelection: GlesMgcRawBaseFrameSelection,
-        canReuseSpatialReferenceUpload: Boolean,
     ): RawStackResult? {
         val selectedBaseIndex = baseFrameSelection.referenceIndex
         val referenceFirstFrames = if (selectedBaseIndex == 0) {
@@ -129,7 +113,6 @@ internal class GlesMgcRawFusion(
                     "gles_raw_sharpness"
                 },
         )
-        val fastMomentsRawStats = baseFrameSelection.fastMomentsRawStats
         if (mergeMethod == MgcMergeMethod.SABRE) {
             return GlesMgcRawSabreProcessor(
                 width = width,
@@ -146,9 +129,7 @@ internal class GlesMgcRawFusion(
                 useCurrentGlContext = useCurrentGlContext,
                 exportGpuLinearRgbSource = exportGpuLinearRgbSource,
                 gpuLinearRgbStorage = gpuLinearRgbStorage,
-            ).processFrames(referenceFirstFrames)?.copy(
-                fastMomentsRawStats = fastMomentsRawStats,
-            )
+            ).processFrames(referenceFirstFrames)
         }
 
         val baseIndex = referenceFirstFrames.indexOfFirst { it.role == RawBurstFrameRole.NORMAL }
@@ -239,12 +220,7 @@ internal class GlesMgcRawFusion(
             useCurrentGlContext = useCurrentGlContext,
             exportGpuLinearRgbSource = exportGpuLinearRgbSource,
             gpuLinearRgbStorage = gpuLinearRgbStorage,
-            computeFastMomentsRawStats = canReuseSpatialReferenceUpload,
-        ).processFrames(scheduledFrames).let { result ->
-            fastMomentsRawStats?.let { stats ->
-                result?.copy(fastMomentsRawStats = stats)
-            } ?: result
-        }
+        ).processFrames(scheduledFrames)
     }
 
     private fun strictExposureProduct(frame: RawStackFrame): Double? =

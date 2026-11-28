@@ -1262,7 +1262,7 @@ internal object RawSceneExposureEstimator {
             if (models != null) {
                 false
             } else {
-                createModels(context.applicationContext)?.let { created ->
+                createModels(context.applicationContext, logDiagnostics = true)?.let { created ->
                     models = created
                     true
                 } ?: false
@@ -1282,6 +1282,7 @@ internal object RawSceneExposureEstimator {
         deviceLimits: RawSceneExposureDeviceLimits?,
         faceMask: FloatArray? = null,
         configuredMaxHdrRatio: Float = RawSceneExposureMath.FAST_MOMENTS_MAX_HDR_RATIO,
+        logDiagnostics: Boolean = true,
     ): RawSceneExposureEstimate? {
         val estimateStartedNs = SystemClock.elapsedRealtimeNanos()
         val resolvedDeviceLimits = deviceLimits?.takeIf(RawSceneExposureDeviceLimits::isValid)
@@ -1360,7 +1361,7 @@ internal object RawSceneExposureEstimator {
             val lockAcquiredNs = SystemClock.elapsedRealtimeNanos()
             val engineWasCold = models == null
             val engineStartedNs = lockAcquiredNs
-            val activeModels = models ?: createModels(context)?.also { models = it }
+            val activeModels = models ?: createModels(context, logDiagnostics)?.also { models = it }
                 ?: return@synchronized null
             val engineCompletedNs = SystemClock.elapsedRealtimeNanos()
             try {
@@ -1440,7 +1441,7 @@ internal object RawSceneExposureEstimator {
                     "LINEAR_RGB_CONSERVATIVE_ONE"
                 }
                 val finalizationCompletedNs = SystemClock.elapsedRealtimeNanos()
-                PLog.i(
+                if (logDiagnostics) PLog.i(
                     TAG,
                     "RAW_SCENE_EXPOSURE stage=SOLVE_TIMING " +
                         "prepareMs=${elapsedMs(estimateStartedNs, preparationCompletedNs)} " +
@@ -1454,7 +1455,7 @@ internal object RawSceneExposureEstimator {
                         "totalMs=${elapsedMs(estimateStartedNs, finalizationCompletedNs)} " +
                         "budgetMs=$SOLVE_BUDGET_MS",
                 )
-                PLog.i(
+                if (logDiagnostics) PLog.i(
                     TAG,
                     "RAW_SCENE_EXPOSURE stage=MGC_ML_AE_FINALIZE " +
                         "mode=2 " +
@@ -1726,7 +1727,7 @@ internal object RawSceneExposureEstimator {
         )
     }.trimEnd()
 
-    private fun createModels(context: Context): ModelSet? {
+    private fun createModels(context: Context, logDiagnostics: Boolean): ModelSet? {
         var short: Interpreter? = null
         var long: Interpreter? = null
         var portrait: Interpreter? = null
@@ -1751,7 +1752,7 @@ internal object RawSceneExposureEstimator {
             warmCombinedModel(candidate.short)
             warmLongModel(candidate.long, candidate.longInputContract)
             warmCombinedModel(candidate.portrait)
-            PLog.i(
+            if (logDiagnostics) PLog.i(
                 TAG,
                 "RAW_SCENE_EXPOSURE stage=ML_MODEL_CONTRACT " +
                     "short=${candidate.shortInputName}:[1,64,64,9] " +

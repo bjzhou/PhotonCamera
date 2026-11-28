@@ -72,6 +72,8 @@ data class DngRawData @Keep constructor(
     val cameraCalibration: RawCameraCalibration? = null,
     /** Provenance for FM-only interpolation: never infer this from LibRaw's matrix-derived xy. */
     val hasAsShotWhiteXy: Boolean = false,
+    /** DNG ColorimetricReference is not scene-referred. */
+    val dngOutputReferred: Boolean = false,
 ) : AutoCloseable {
 
     @Volatile
@@ -151,6 +153,7 @@ data class DngRawData @Keep constructor(
         } else if (other.embeddedPreview != null) return false
         if (cameraCalibration != other.cameraCalibration) return false
         if (hasAsShotWhiteXy != other.hasAsShotWhiteXy) return false
+        if (dngOutputReferred != other.dngOutputReferred) return false
 
         return true
     }
@@ -184,6 +187,7 @@ data class DngRawData @Keep constructor(
         result = 31 * result + (embeddedPreview?.hashCode() ?: 0)
         result = 31 * result + (cameraCalibration?.hashCode() ?: 0)
         result = 31 * result + hasAsShotWhiteXy.hashCode()
+        result = 31 * result + dngOutputReferred.hashCode()
         return result
     }
 

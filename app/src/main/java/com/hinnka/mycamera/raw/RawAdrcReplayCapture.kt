@@ -96,7 +96,7 @@ internal object RawAdrcReplayCapture {
         val maxLinearIntensity: Float,
         val statsBounds: Rect?,
         val colorCorrectionMatrix: FloatArray,
-        val diagnostics: DngQualcommAdrcNative.Diagnostics,
+        val diagnostics: DngQualcommAdrcPgtm.Diagnostics,
         val pgtmSize: IntArray,
     )
 
@@ -114,7 +114,7 @@ internal object RawAdrcReplayCapture {
         maxLinearIntensity: Float,
         statsBounds: Rect?,
         colorCorrectionMatrix: FloatArray,
-        diagnostics: DngQualcommAdrcNative.Diagnostics,
+        diagnostics: DngQualcommAdrcPgtm.Diagnostics,
         map: DngProfileGainTableMap,
     ) {
         if (!isEnabled()) return

@@ -817,8 +817,8 @@
     <string name="settings_raw_profile_tone_map_embedded">埋め込み</string>
     <string name="settings_raw_photon_hdr">ダイナミックレンジ最適化</string>
     <string name="settings_raw_photon_hdr_edit_description">読み込んだDNGにHDRNetのダイナミックレンジ最適化を適用</string>
-    <string name="settings_raw_adaptive_exposure_mode">ダイナミックレンジ調整</string>
-    <string name="settings_raw_adaptive_exposure_mode_description">現像時に露出と明暗の階調を調整する方式を選びます。</string>
+    <string name="settings_raw_adaptive_exposure_mode">ダイナミックレンジ最適化</string>
+    <string name="settings_raw_adaptive_exposure_mode_description">プロモードのライブプレビューと RAW 現像で、露出と局所的な階調を調整します。</string>
     <string name="settings_raw_adaptive_exposure_mode_qualcomm_adrc">Qualcomm ADRC</string>
     <string name="settings_raw_adaptive_exposure_mode_photon_hdr">HDRNet</string>
     <string name="settings_raw_agx_white_relative_exposure">AgX 白側相対露光</string>

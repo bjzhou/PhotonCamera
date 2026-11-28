@@ -25,6 +25,7 @@ internal class RawLinearRcdPass(
         val areaSampleFootprint: FloatArray = NO_AREA_SAMPLE,
         val useAreaSampleMaximum: Boolean = false,
         val textureRotation: Int = 0,
+        val preserveRawExposureCoverage: Boolean = false,
         val bindHueSatMap: (program: Int) -> Unit,
         val label: String,
     )
@@ -117,6 +118,10 @@ internal class RawLinearRcdPass(
             GLES30.glGetUniformLocation(activeProgram, "uTextureRotation"),
             ((input.textureRotation % 360) + 360) % 360,
         )
+        GLES30.glUniform1i(
+            GLES30.glGetUniformLocation(activeProgram, "uPreserveRawExposureCoverage"),
+            if (input.preserveRawExposureCoverage) 1 else 0,
+        )
         quad.bindIdentityTextureMatrix(activeProgram)
         quad.draw(activeProgram)
         RawGlesProgram.logErrors("${input.label} draw")
@@ -179,12 +184,13 @@ internal class RawLinearRcdPass(
             uniform vec2 uAreaSampleFootprint;
             uniform int uUseAreaSampleMaximum;
             uniform int uTextureRotation;
+            uniform bool uPreserveRawExposureCoverage;
 
             ${DcpHueSatMapGl.SHADER_FUNCTIONS}
 
-            vec3 sampleCameraRgb(vec2 center) {
+            vec4 sampleCamera(vec2 center) {
                 if (max(uAreaSampleFootprint.x, uAreaSampleFootprint.y) <= 0.0) {
-                    return texture(uDemosaickedTexture, center).rgb;
+                    return texture(uDemosaickedTexture, center);
                 }
 
                 // MGC constructs the ML-AE RGB surface with an area-kernel resample. Integrate
@@ -204,7 +210,7 @@ internal class RawLinearRcdPass(
                     sourceSizeF
                 );
                 if (sourceMax.x <= sourceMin.x || sourceMax.y <= sourceMin.y) {
-                    return texture(uDemosaickedTexture, center).rgb;
+                    return texture(uDemosaickedTexture, center);
                 }
 
                 ivec2 firstTexel = clamp(
@@ -245,9 +251,10 @@ internal class RawLinearRcdPass(
                         totalWeight += sampleWeight;
                     }
                 }
-                return uUseAreaSampleMaximum != 0
+                vec3 areaSample = uUseAreaSampleMaximum != 0
                     ? aggregate
                     : aggregate / max(totalWeight, 1e-12);
+                return vec4(areaSample, 1.0);
             }
 
             void main() {
@@ -262,7 +269,8 @@ internal class RawLinearRcdPass(
                     orientedCoord = vec2(1.0 - vTexCoord.y, vTexCoord.x);
                 }
                 vec2 sourceCoord = mix(uTextureBounds.xy, uTextureBounds.zw, orientedCoord);
-                vec3 rgb = sampleCameraRgb(sourceCoord);
+                vec4 camera = sampleCamera(sourceCoord);
+                vec3 rgb = camera.rgb;
                 if (uHncsCameraDomainEnabled != 0) {
                     rgb *= uHncsCameraDomainGain;
                     rgb /= uHncsHrTrunc;
@@ -286,7 +294,7 @@ internal class RawLinearRcdPass(
                     );
                 }
                 rgb *= uExposureGain;
-                fragColor = vec4(rgb, 1.0);
+                fragColor = vec4(rgb, uPreserveRawExposureCoverage ? camera.a : 1.0);
             }
         """.trimIndent()
     }

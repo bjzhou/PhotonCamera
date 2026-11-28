@@ -14,12 +14,13 @@ import com.hinnka.mycamera.utils.PLog
 import java.nio.ByteBuffer
 
 /**
- * Bakes the pointwise ISP sRGB -> engine -> linear sRGB mapping when its plan changes.
+ * Bakes the pointwise camera RGB -> engine -> linear sRGB mapping when its plan changes.
  * A 65-cube RGBA16F atlas keeps the expensive RAW shader independent of camera resolution.
  * The color pass interpolates, then clips/encodes sRGB before recipe layers. Retaining signed
  * linear output avoids interpolating across the final display clipping/gamma discontinuity.
  * Original snapshots bypass it entirely.
- * Grid coordinates are encoded sRGB (not linear RGB), retaining dense shadow sampling.
+ * The ISP atlas uses encoded sRGB coordinates. The scene-linear atlas uses sRGB spacing up
+ * to nominal white and logarithmic spacing above it to retain adaptive highlight headroom.
  * Interpolation approximates the engine between grid nodes; capture still renders directly.
  */
 internal class RawEnginePreviewGl {
@@ -27,31 +28,37 @@ internal class RawEnginePreviewGl {
     private var engines = newEnginePass()
     private val inverseAcr = LogInputGl()
     private val fotufilmBake = FotufilmPreviewBake(quad)
-    private val programs = mutableMapOf<RawRenderingEngine, Int>()
+    private val programs = mutableMapOf<Pair<RawRenderingEngine, Boolean>, Int>()
     private var texture = 0
     private var framebuffer = 0
     private var lastPlan: RawEnginePreviewPlan? = null
+    private var lastSceneLinearInput = false
     private var logStartNs = 0L
     private var preparationCount = 0
     private var bakeCount = 0
     private var bakeSubmitNs = 0L
 
-    fun prepare(plan: RawEnginePreviewPlan): Boolean {
+    fun prepare(plan: RawEnginePreviewPlan, sceneLinearInput: Boolean = false): Boolean {
         preparationCount++
-        if (texture != 0 && lastPlan === plan) {
+        if (texture != 0 && lastPlan === plan && lastSceneLinearInput == sceneLinearInput) {
 //            logWork(plan)
             return true
         }
         val startNs = SystemClock.elapsedRealtimeNanos()
-        val program = programs.getOrPut(plan.engine) {
-            quad.createProgram(shader(plan.engine), "previewEngineLut${plan.engine}")
+        val program = programs.getOrPut(plan.engine to sceneLinearInput) {
+            quad.createProgram(
+                shader(plan.engine, sceneLinearInput = sceneLinearInput),
+                "previewEngineLut${plan.engine}/linear=$sceneLinearInput",
+            )
         }
         if (program == 0 || !ensureTarget()) return false
         val fotufilm = plan.resources.fotufilm
         if (fotufilm != null && !fotufilmBake.ensureTargets(ATLAS_WIDTH, ATLAS_HEIGHT)) return false
         GLES30.glUseProgram(program)
-        // Unit 4 is the RAW HDR reference curve's slot, unused by SDR engine resources.
-        inverseAcr.bind(GLES30.glGetUniformLocation(program, "uInverseAcr3Texture"), 4)
+        if (!sceneLinearInput) {
+            // Unit 4 is the RAW HDR reference curve's slot, unused by SDR engine resources.
+            inverseAcr.bind(GLES30.glGetUniformLocation(program, "uInverseAcr3Texture"), 4)
+        }
         engines.bindColorResources(program, plan.resources)
         fun matrix(name: String, value: FloatArray) = GLES30.glUniformMatrix3fv(
             GLES30.glGetUniformLocation(program, name), 1, false,
@@ -61,10 +68,12 @@ internal class RawEnginePreviewGl {
         matrix("uPreviewInput", plan.inputTransform)
         matrix("uPreviewOutput", plan.resources.outputTransform)
         GLES30.glUniform1i(GLES30.glGetUniformLocation(program, "uPreviewClipCamera"), if (plan.cameraClip != null) 1 else 0)
-        GLES30.glUniform3fv(
-            GLES30.glGetUniformLocation(program, "uPreviewCameraWhite"), 1,
-            plan.cameraClip ?: WHITE, 0,
-        )
+        if (!sceneLinearInput) {
+            GLES30.glUniform3fv(
+                GLES30.glGetUniformLocation(program, "uPreviewCameraWhite"), 1,
+                plan.cameraClip ?: WHITE, 0,
+            )
+        }
         // Resource uploads may alter active bindings. Establish all draw inputs explicitly.
         // Fotufilm's input shader leaves scene light, which its own graph then develops.
         GLES30.glBindFramebuffer(
@@ -89,6 +98,7 @@ internal class RawEnginePreviewGl {
             return false
         }
         lastPlan = plan
+        lastSceneLinearInput = sceneLinearInput
         bakeCount++
         bakeSubmitNs += SystemClock.elapsedRealtimeNanos() - startNs
 //        logWork(plan)
@@ -102,9 +112,11 @@ internal class RawEnginePreviewGl {
         GLES30.glUniform1i(location, 5)
     }
 
-    /** Reads the preview's grid nodes as display sRGB in .cube order (red changing fastest). */
+    /** Reads the ISP atlas grid nodes as display sRGB in .cube order (red changing fastest). */
     fun readSrgbCube(pixels: ByteBuffer): FloatArray {
-        check(lastPlan != null && framebuffer != 0) { "Preview engine atlas is not ready" }
+        check(lastPlan != null && framebuffer != 0 && !lastSceneLinearInput) {
+            "Preview engine ISP atlas is not ready"
+        }
         GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, framebuffer)
         try {
             GLES30.glBindBuffer(GLES30.GL_PIXEL_PACK_BUFFER, 0)
@@ -203,6 +215,7 @@ internal class RawEnginePreviewGl {
         texture = 0
         framebuffer = 0
         lastPlan = null
+        lastSceneLinearInput = false
         logStartNs = 0L
         preparationCount = 0
         bakeCount = 0
@@ -227,6 +240,9 @@ internal class RawEnginePreviewGl {
         private const val TILES_PER_ROW = 9
         private const val ATLAS_WIDTH = GRID_SIZE * TILES_PER_ROW
         private const val ATLAS_HEIGHT = GRID_SIZE * ((GRID_SIZE + TILES_PER_ROW - 1) / TILES_PER_ROW)
+        // Pin nominal white at node 48; the remaining 16 intervals cover four EV above it.
+        private const val SCENE_WHITE_COORDINATE = 0.75
+        private const val SCENE_HIGHLIGHT_SCALE = (1.0 - SCENE_WHITE_COORDINATE) / 4.0
         const val ATLAS_READBACK_BYTES = ATLAS_WIDTH * ATLAS_HEIGHT * 4 * Float.SIZE_BYTES
 
         val SAMPLING_GLSL = """
@@ -235,8 +251,8 @@ internal class RawEnginePreviewGl {
                 vec2 tile = vec2(mod(blue, $TILES_PER_ROW.0), floor(blue / $TILES_PER_ROW.0));
                 return (tile * $GRID_SIZE.0 + rg + 0.5) / vec2($ATLAS_WIDTH.0, $ATLAS_HEIGHT.0);
             }
-            vec3 sampleEnginePreview(vec3 srgb) {
-                vec3 position = clamp(srgb, 0.0, 1.0) * ${GRID_SIZE - 1}.0;
+            vec3 sampleEnginePreview(vec3 coordinates) {
+                vec3 position = clamp(coordinates, 0.0, 1.0) * ${GRID_SIZE - 1}.0;
                 float lower = floor(position.b);
                 float upper = min(lower + 1.0, ${GRID_SIZE - 1}.0);
                 vec3 lo = texture(uEnginePreviewLut, engineLutCoordinate(position.rg, lower)).rgb;
@@ -245,17 +261,49 @@ internal class RawEnginePreviewGl {
             }
         """.trimIndent()
 
+        val SCENE_LINEAR_SAMPLING_GLSL = """
+            vec3 sampleSceneLinearEnginePreview(vec3 scene) {
+                vec3 sdr = linearToSrgb(clamp(scene, 0.0, 1.0)) * $SCENE_WHITE_COORDINATE;
+                vec3 highlights = log2(max(scene, vec3(1.0))) * $SCENE_HIGHLIGHT_SCALE;
+                return sampleEnginePreview(sdr + highlights);
+            }
+        """.trimIndent()
+
         // A source variant is retained for direct-render numerical/driver diagnostics.
-        fun shader(engine: RawRenderingEngine, source: PreviewColorTextureSource? = null): String {
+        fun shader(
+            engine: RawRenderingEngine,
+            source: PreviewColorTextureSource? = null,
+            sceneLinearInput: Boolean = false,
+        ): String {
             val definition = RawEngineTonePass.shaderDefinitionFor(engine)
             val external = source == PreviewColorTextureSource.EXTERNAL_OES
             val prepare = if (definition.includeAdobeProfilePipeline) {
-                "color = applyAdobeProfilePipeline(clamp(color, 0.0, 1.0));"
+                val profileColor = if (sceneLinearInput) "max(color, vec3(0.0))" else "clamp(color, 0.0, 1.0)"
+                "color = applyAdobeProfilePipeline($profileColor);"
             } else "color *= uProfileExposureLinearGain;"
+            // Camera and profile white clipping precede PGTM in RAW development. The linear
+            // preview atlas receives the ISP's saturated input with PGTM gain already applied.
+            val clipCamera = if (sceneLinearInput) {
+                "max(restored, vec3(0.0))"
+            } else {
+                "clamp(restored, vec3(0.0), uPreviewCameraWhite)"
+            }
             val output = if (engine.isHncs) {
                 // Same decoding as HncsOutputLinearPass. HNCS FilmCurve output is companded.
                 "color = uPreviewOutput * pow(max(color, vec3(0.0)), vec3(2.2));"
             } else ""
+            val prepareScene = when {
+                !sceneLinearInput -> """
+                    vec3 linear = srgbToLinear(clamp(sampled.rgb, 0.0, 1.0));
+                    vec3 scene = vec3(inverseAcr3(linear.r), inverseAcr3(linear.g), inverseAcr3(linear.b));
+                """.trimIndent()
+                source != null -> "vec3 scene = sampled.rgb;"
+                else -> """
+                    vec3 sdr = srgbToLinear(min(sampled.rgb / $SCENE_WHITE_COORDINATE, 1.0));
+                    vec3 stops = max(sampled.rgb - $SCENE_WHITE_COORDINATE, 0.0) / $SCENE_HIGHLIGHT_SCALE;
+                    vec3 scene = sdr + (exp2(stops) - 1.0);
+                """.trimIndent()
+            }
             return """
                 #version 300 es
                 ${if (external) "#extension GL_OES_EGL_image_external_essl3 : require" else ""}
@@ -270,9 +318,9 @@ internal class RawEnginePreviewGl {
                 uniform mat3 uPreviewInput;
                 uniform mat3 uPreviewOutput;
                 uniform bool uPreviewClipCamera;
-                uniform vec3 uPreviewCameraWhite;
+                ${if (sceneLinearInput) "" else "uniform vec3 uPreviewCameraWhite;"}
                 ${PreviewColorShaderModules.COLOR_TRANSFER_CORE}
-                ${LogInputGl.GLSL}
+                ${if (sceneLinearInput) "" else LogInputGl.GLSL}
                 ${definition.engineUniforms}
                 ${definition.profileUniforms}
                 ${definition.profileFunctions}
@@ -284,10 +332,9 @@ internal class RawEnginePreviewGl {
                     int blue = min(tile.y * $TILES_PER_ROW + tile.x, ${GRID_SIZE - 1});
                     vec4 sampled = vec4(vec3(pixel % $GRID_SIZE, blue) / ${GRID_SIZE - 1}.0, 1.0);
                     """}
-                    vec3 linear = srgbToLinear(clamp(sampled.rgb, 0.0, 1.0));
-                    vec3 scene = vec3(inverseAcr3(linear.r), inverseAcr3(linear.g), inverseAcr3(linear.b));
+                    $prepareScene
                     vec3 restored = uPreviewRestore * scene;
-                    if (uPreviewClipCamera) restored = clamp(restored, vec3(0.0), uPreviewCameraWhite);
+                    if (uPreviewClipCamera) restored = $clipCamera;
                     vec3 color = uPreviewInput * restored;
                     $prepare
                     color = applyEngineTone(color);

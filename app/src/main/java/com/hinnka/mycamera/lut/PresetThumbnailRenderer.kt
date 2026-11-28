@@ -8,6 +8,7 @@ import com.hinnka.mycamera.raw.*
 import com.hinnka.mycamera.raw.fotufilm.FotufilmDocumentStorage
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import java.nio.FloatBuffer
 import java.util.concurrent.atomic.AtomicLong
 
 /** One immutable camera snapshot shared by every preset in a selector session. */
@@ -18,6 +19,8 @@ class PresetThumbnailInput(
     val lensId: String? = null,
     val filmTunings: Map<String, SpectralFilmTuning> = emptyMap(),
     val tone: RawToneMappingParameters = RawToneMappingParameters.DEFAULT,
+    val raw: RawThumbnailSnapshot? = null,
+    val displayRotation: Float = 0f,
 ) {
     val cacheKey: Long = nextKey.incrementAndGet()
 
@@ -26,7 +29,15 @@ class PresetThumbnailInput(
     }
 }
 
-/** Uses the live engine's restoration/atlas, followed by the preset's actual color layers. */
+/** One on-demand readback before forward color calibration, in camera RGB. */
+class RawThumbnailSnapshot internal constructor(
+    internal val width: Int,
+    internal val height: Int,
+    internal val pixels: FloatBuffer,
+    internal val metadata: RawMetadata,
+)
+
+/** Develops a RAW thumbnail with the preset's engine, then applies its color layers. */
 class PresetThumbnailRenderer(private val context: Context) {
     suspend fun render(preset: CameraPreset, input: PresetThumbnailInput, bitmap: Bitmap): Bitmap =
         withContext(Dispatchers.IO) {
@@ -55,7 +66,7 @@ class PresetThumbnailRenderer(private val context: Context) {
                         canonUseR5ColorMatrix = preset.rawCanonUseR5ColorMatrix,
                         leicaUseM9ColorMatrix = preset.rawLeicaUseM9ColorMatrix,
                     ).normalized()
-                    val resolver = RawEnginePreviewResolver(context, RawEnginePreviewSettings(
+                    val settings = RawEnginePreviewSettings(
                         engine = engine,
                         dcp = dcp,
                         exposureEv = preset.rawExposureCompensation,
@@ -68,11 +79,25 @@ class PresetThumbnailRenderer(private val context: Context) {
                             FotufilmDocumentStorage.decode(preset.rawFotufilmDocument, "preset thumbnail ${preset.id}")
                                 ?: FotufilmDocumentStorage.defaultDocument()
                         } else null,
-                    ))
-                    val plan = requireNotNull(resolver.resolve(input.camera)) {
-                        "Camera color metadata unavailable for preset ${preset.id} (${engine.name})"
+                    )
+                    val raw = input.raw
+                    if (raw != null) {
+                        val developed = processor.applyRawPreviewEngine(
+                            raw, settings.copy(tone = tone.withAdaptiveExposureMode(RawAdaptiveExposureMode.OFF)),
+                        )
+                        if (input.displayRotation == 0f) {
+                            replace(developed)
+                        } else {
+                            val rotated = com.hinnka.mycamera.utils.BitmapUtils.rotate(developed, input.displayRotation)
+                            if (rotated !== developed) developed.recycle()
+                            replace(rotated)
+                        }
+                    } else {
+                        val plan = requireNotNull(RawEnginePreviewResolver(context, settings).resolve(input.camera)) {
+                            "Camera color metadata unavailable for preset ${preset.id} (${engine.name})"
+                        }
+                        replace(processor.applyPreviewEngine(current, plan))
                     }
-                    replace(processor.applyPreviewEngine(current, plan))
                     preset.rawBaselineLutId?.takeIf { it != "none" }?.let { id ->
                         replace(processor.applyLut(
                             current,

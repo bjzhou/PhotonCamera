@@ -262,13 +262,9 @@ add_library(my-native-lib SHARED
     spektrafilm/spectral_jni.cpp
     gles_gpu_timer_query_jni.cpp
     gles_hardware_buffer_jni.cpp
-    dng_hdrnet_pgtm_jni.cpp
-    qcom_adrc/qcom_adrc_tmc12.cpp
-    qcom_adrc/qcom_adrc_ltm_pgtm.cpp
-    qcom_adrc/qcom_adrc_pgtm_jni.cpp
     raw_signal_stats_jni.cpp
-    raw10_unpack.cpp
-    raw10_unpack_jni.cpp
+    raw_packed_unpack.cpp
+    raw_packed_unpack_jni.cpp
     mgc_strength_map_scaler.cpp
     mgc_eis_reconstruction_jni.cpp
     "${MGC_EIS_RECONSTRUCTION_DIR}/mgc_eis_reconstruction.cpp"
@@ -316,17 +312,6 @@ set_source_files_properties(
 # This host-side scaler is deliberately independent of the MGC AOT/capsule sources.
 set_source_files_properties(
     mgc_strength_map_scaler.cpp
-    PROPERTIES
-    COMPILE_OPTIONS "-fno-fast-math;-ffp-contract=off"
-)
-
-# The HDRNet PGTM path rejects non-finite model output and follows the Kotlin
-# reference interpolation order. Keep those invariants independent of fast math.
-set_source_files_properties(
-    dng_hdrnet_pgtm_jni.cpp
-    qcom_adrc/qcom_adrc_tmc12.cpp
-    qcom_adrc/qcom_adrc_ltm_pgtm.cpp
-    qcom_adrc/qcom_adrc_pgtm_jni.cpp
     PROPERTIES
     COMPILE_OPTIONS "-fno-fast-math;-ffp-contract=off"
 )

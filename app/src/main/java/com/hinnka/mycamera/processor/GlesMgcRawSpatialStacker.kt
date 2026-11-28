@@ -14,7 +14,6 @@ import com.hinnka.mycamera.camera.MultiFrameConfig
 import com.hinnka.mycamera.model.SafeImage
 import com.hinnka.mycamera.raw.MgcSpatialStrengthMap
 import com.hinnka.mycamera.raw.RawHotPixelShaders
-import com.hinnka.mycamera.raw.RawSceneAERawStats
 import com.hinnka.mycamera.utils.DngCaptureDiagnostics
 import com.hinnka.mycamera.utils.DirectBufferPixelPacker
 import com.hinnka.mycamera.utils.LargeDirectBuffer
@@ -75,7 +74,6 @@ internal class GlesMgcRawSpatialStacker(
     private val exportGpuLinearRgbSource: Boolean,
     private val gpuLinearRgbStorage: GpuLinearRgbStorage = GpuLinearRgbStorage.RGBA16UI,
     private val processorPipeline: MgcRawProcessorPipeline = MgcRawProcessorPipeline.SPATIAL,
-    private val computeFastMomentsRawStats: Boolean = false,
     private val cameraWhite: FloatArray? = null,
 ) {
     private data class TextureLevel(
@@ -562,7 +560,6 @@ internal class GlesMgcRawSpatialStacker(
         var exportedRgbTexture = 0
         var exportedRgbCompletionTimeline: GpuStackCompletionTimeline? = null
         var strengthCapture: StrengthCapture? = null
-        var fastMomentsRawStats: RawSceneAERawStats? = null
         val processStartNs = System.nanoTime()
         val originalThreadPriority = GlesGpuScheduler.lowerCurrentThreadPriority(TAG)
         return try {
@@ -774,29 +771,6 @@ internal class GlesMgcRawSpatialStacker(
             )
             val rawUploadStartNs = System.nanoTime()
             uploadRaw(images.first(), referenceRaw, "reference")
-            if (computeFastMomentsRawStats) {
-                check(supportsComputePrograms) {
-                    "Fast Moments selected-base statistics require GLES 3.1"
-                }
-                val statsStartNs = System.nanoTime()
-                val statsResult = GlesRawAEStats(
-                    width = width,
-                    height = height,
-                    cfaPattern = cfaPattern,
-                    blackLevel = canonicalBlackLevelForFrame(frames.first()),
-                    whiteLevel = sensorWhiteLevelCode,
-                    maxShaderStorageBlockBytes = maxShaderStorageBlockBytes,
-                ).build(referenceRaw)
-                fastMomentsRawStats = statsResult.stats
-                PLog.i(
-                    TAG,
-                    "Fast Moments reused Spatial reference upload size=" +
-                        "${statsResult.stats.width}x${statsResult.stats.height} " +
-                        "source=${width}x$height frame=${frames.first().frameNumber} " +
-                        "submitMs=${statsResult.submitMs} gpuWaitMs=${statsResult.gpuWaitMs} " +
-                        "mapMs=${statsResult.mapMs} totalMs=${elapsedMs(statsStartNs)}",
-                )
-            }
             val rawTextureCount = if (hasAuxiliaryFrames) 2 else 1
             PLog.i(
                 TAG,
@@ -2030,7 +2004,6 @@ internal class GlesMgcRawSpatialStacker(
                 mgcSharpenTuningSnr = bayerKernelTuning.referenceSnr,
                 mgcSharpenAttenuationScale = finishRawSharpenAttenuationScale,
                 mgcSpatialReferenceOnlyDiagnostic = referenceOnly,
-                fastMomentsRawStats = fastMomentsRawStats,
             )
             returned = true
             result

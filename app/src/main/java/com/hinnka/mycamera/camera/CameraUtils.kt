@@ -195,12 +195,12 @@ object CameraUtils {
 
     data class RawCaptureOutput(val format: Int, val size: Size)
 
-    /** Prefer unpacked sensor output, but accept packed RAW10 independently of the RAW capability flag. */
+    /** Select the first supported Bayer format in capture and viewfinder preference order. */
     fun getRawCaptureOutput(
         characteristics: CameraCharacteristics,
         isFormatAllowed: (Int) -> Boolean = { true },
     ): RawCaptureOutput? {
-        for (format in intArrayOf(ImageFormat.RAW_SENSOR, ImageFormat.RAW10)) {
+        for (format in intArrayOf(ImageFormat.RAW_SENSOR, ImageFormat.RAW10, ImageFormat.RAW12)) {
             if (!isFormatAllowed(format)) continue
             val size = getRawCaptureSize(characteristics, format) ?: continue
             return RawCaptureOutput(format, size)
@@ -214,9 +214,10 @@ object CameraUtils {
     private fun getRawCaptureSize(characteristics: CameraCharacteristics, format: Int): Size? {
         return try {
             val map = characteristics.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP)
+            val packed = format == ImageFormat.RAW10 || format == ImageFormat.RAW12
             val sizes = map?.getOutputSizes(format)?.filter {
                 it.width > 0 && it.height > 0 &&
-                        (format != ImageFormat.RAW10 || (it.width % 4 == 0 && it.height % 2 == 0))
+                        (!packed || (it.width % 4 == 0 && it.height % 2 == 0))
             } ?: return null
             
             if (sizes.isEmpty()) return null

@@ -947,8 +947,8 @@
     <string name="settings_raw_profile_tone_map_oppo_master">OPPO Master</string>
     <string name="settings_raw_photon_hdr">Dynamic Range Optimization</string>
     <string name="settings_raw_photon_hdr_edit_description">Apply HDRNet dynamic range optimization to this imported RAW. Off by default.</string>
-    <string name="settings_raw_adaptive_exposure_mode">Dynamic Range Mode</string>
-    <string name="settings_raw_adaptive_exposure_mode_description">Choose how exposure and local tones are adjusted to preserve highlight and shadow detail.</string>
+    <string name="settings_raw_adaptive_exposure_mode">Dynamic Range Optimization</string>
+    <string name="settings_raw_adaptive_exposure_mode_description">Adjusts exposure and local tones in the professional viewfinder and when developing RAW photos.</string>
     <string name="settings_raw_adaptive_exposure_mode_qualcomm_adrc">Qualcomm ADRC</string>
     <string name="settings_raw_adaptive_exposure_mode_photon_hdr">HDRNet</string>
     <string name="settings_raw_agx_white_relative_exposure">AgX White Relative Exposure</string>

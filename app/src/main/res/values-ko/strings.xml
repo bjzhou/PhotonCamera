@@ -292,6 +292,7 @@
     <string name="refresh_success">미리보기 새로고침됨</string>
     <string name="refresh_failed">미리보기 새로고침 실패</string>
     <string name="settings_dro_mode">RAW 동적 범위 최적화 도구 (DRO)</string>
+    <string name="settings_raw_adaptive_exposure_mode">동적 범위 최적화</string>
     <string name="settings_dro_off">꺼짐</string>
     <string name="settings_dro_dr100">DR100</string>
     <string name="settings_dro_dr200">DR200</string>

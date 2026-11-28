@@ -1345,9 +1345,6 @@ fun CameraScreen(
                         state.isAutoFocus &&
                         !state.isHyperfocalFocusEnabled &&
                         (state.focusPoint == null || state.focusPointSource == FocusPointSource.EYE)
-                    val portraitMaskActive = state.captureMode == CaptureMode.PHOTO &&
-                        state.useRaw &&
-                        state.isRawSupported
                     val showFocusMagnifier = focusMagnifierEnabled &&
                         state.isPreviewActive &&
                         !state.isAutoFocus &&
@@ -1370,7 +1367,7 @@ fun CameraScreen(
                             calibrationOffset = calibrationOffset,
                             baselineLut = viewModel.currentBaselineLutConfig,
                             currentLut = currentLutLook.config,
-                            enginePreviewPlan = viewModel.currentEnginePreviewPlan,
+                            enginePreviewSettings = viewModel.currentEnginePreviewSettings,
                             baselineColorRecipeParams = currentBaselineRecipeParams,
                             colorRecipeParams = previewRecipeParams,
                             focusPoint = state.focusPoint,
@@ -1418,7 +1415,7 @@ fun CameraScreen(
                                     hy
                                 )
                             },
-                            onEyeFocusInputAvailable = if (eyeFocusActive || portraitMaskActive) {
+                            onEyeFocusInputAvailable = if (eyeFocusActive) {
                                 viewModel::handleEyeFocusInputUpdate
                             } else {
                                 null

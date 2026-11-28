@@ -27,6 +27,9 @@
 #include "dng_lossless_jpeg.h"
 #include "dng_memory.h"
 #include "dng_memory_stream.h"
+#include "dng_tag_codes.h"
+#include "dng_tag_types.h"
+#include "dng_tag_values.h"
 #include "libraw/libraw.h"
 #include "math_utils.h"
 #include "fixed_raw_calibration.h"
@@ -582,6 +585,7 @@ struct DngRawTagInfo {
   float asShotWhiteXY[2] = {0.0f, 0.0f};
   bool hasShadowScale = false;
   float shadowScale = 1.0f;
+  bool dngOutputReferred = false;
   int maskedAreaCount = 0;
   int blackRepeatRows = 0;
   int blackRepeatCols = 0;
@@ -2810,6 +2814,9 @@ static void parseDngRawTagIfd(std::ifstream &file, bool littleEndian,
         info.hasShadowScale = true;
         info.shadowScale = static_cast<float>(value);
       }
+    } else if (depth == 0 && tag == tcColorimetricReference && type == ttShort &&
+               count == 1) {
+      info.dngOutputReferred = tiffReadU16(entry + 8, littleEndian) != crSceneReferred;
     } else if (tag == 0x014a &&
                tiffEntryData(file, entry, littleEndian, type, count, data)) {
       const uint32_t childCount =
@@ -2854,7 +2861,7 @@ static bool parseDngRawTagInfo(const char *path, DngRawTagInfo &info) {
   const uint32_t firstIfd = tiffReadU32(header + 4, littleEndian);
   parseDngRawTagIfd(file, littleEndian, firstIfd, info, 0);
   return info.hasActiveArea || info.hasDefaultCropOrigin || info.hasDefaultCropSize ||
-         info.hasAsShotWhiteXY || info.hasShadowScale || !info.blackLevel.empty() ||
+          info.hasAsShotWhiteXY || info.hasShadowScale || info.dngOutputReferred || !info.blackLevel.empty() ||
          !info.blackDeltaH.empty() || !info.blackDeltaV.empty();
 }
 
@@ -3531,7 +3538,7 @@ Java_com_hinnka_mycamera_raw_RawDemosaicProcessor_processDngNative(
   jclass dngDataClass = env->FindClass("com/hinnka/mycamera/raw/DngRawData");
   jmethodID constructor =
       env->GetMethodID(dngDataClass, "<init>",
-                       "(Ljava/nio/ByteBuffer;IIIIF[F[F[F[F[F[FLjava/lang/String;Ljava/lang/String;IIFF[FII[FFIJF[I[I[F[F[ILandroid/graphics/Bitmap;Lcom/hinnka/mycamera/raw/RawCameraCalibration;Z)V");
+                       "(Ljava/nio/ByteBuffer;IIIIF[F[F[F[F[F[FLjava/lang/String;Ljava/lang/String;IIFF[FII[FFIJF[I[I[F[F[ILandroid/graphics/Bitmap;Lcom/hinnka/mycamera/raw/RawCameraCalibration;ZZ)V");
 
   jfloatArray blackLevelArray = env->NewFloatArray(4);
   for (int i = 0; i < 4; i++) {
@@ -3969,7 +3976,8 @@ Java_com_hinnka_mycamera_raw_RawDemosaicProcessor_processDngNative(
       shutterSpeedLong, aperture, activeArray, defaultCropArray, noiseProfileArray,
       warpRectilinearArray, warpRectilinearFlagsArray,
       embeddedPreviewBitmap, rawCameraCalibration,
-      static_cast<jboolean>(dngRawTagInfo.hasAsShotWhiteXY));
+      static_cast<jboolean>(dngRawTagInfo.hasAsShotWhiteXY),
+      static_cast<jboolean>(isDngInput && dngRawTagInfo.dngOutputReferred));
 
   // 释放资源
   env->ReleaseStringUTFChars(filePath, path);

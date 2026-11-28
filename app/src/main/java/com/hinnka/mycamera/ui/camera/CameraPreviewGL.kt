@@ -25,7 +25,7 @@ import com.hinnka.mycamera.livephoto.LivePhotoRecorder
 import com.hinnka.mycamera.camera.FocusPointSource
 import com.hinnka.mycamera.camera.MeteringMode
 import com.hinnka.mycamera.lut.LutConfig
-import com.hinnka.mycamera.raw.RawEnginePreviewPlan
+import com.hinnka.mycamera.raw.RawEnginePreviewSettings
 import kotlinx.coroutines.flow.StateFlow
 import com.hinnka.mycamera.model.ColorRecipeParams
 import com.hinnka.mycamera.preview.EyeFocusPreviewFrame
@@ -53,7 +53,7 @@ fun CameraPreviewGL(
     calibrationOffset: Int,
     baselineLut: LutConfig?,
     currentLut: LutConfig?,
-    enginePreviewPlan: StateFlow<RawEnginePreviewPlan?>,
+    enginePreviewSettings: StateFlow<RawEnginePreviewSettings?>,
     baselineColorRecipeParams: ColorRecipeParams,
     colorRecipeParams: ColorRecipeParams,
     focusPoint: Pair<Float, Float>?,
@@ -101,9 +101,9 @@ fun CameraPreviewGL(
     val currentOnLongPress by rememberUpdatedState(onLongPress)
 
     // AWB/CCM changes update only the engine pass, not the entire Compose/LUT layer.
-    LaunchedEffect(glSurfaceViewRef, enginePreviewPlan, resumeGeneration) {
+    LaunchedEffect(glSurfaceViewRef, enginePreviewSettings, resumeGeneration) {
         val view = glSurfaceViewRef ?: return@LaunchedEffect
-        enginePreviewPlan.collect { view.setEnginePreview(it) }
+        enginePreviewSettings.collect { view.setEnginePreview(it) }
     }
 
     DisposableEffect(lifecycleOwner) {
@@ -320,7 +320,7 @@ fun CameraPreviewGL(
                         }
                         val baselineColorRecipeEnabled = !baselineColorRecipeParams.isDefault()
                         // 更新 LUT 设置
-                        glSurfaceView.setEnginePreview(enginePreviewPlan.value)
+                        glSurfaceView.setEnginePreview(enginePreviewSettings.value)
                         glSurfaceView.setBaselineLut(baselineLut)
                         glSurfaceView.setBaselineLutEnabled(baselineLut != null)
                         glSurfaceView.setCreativeLook(currentLut, colorRecipeParams)

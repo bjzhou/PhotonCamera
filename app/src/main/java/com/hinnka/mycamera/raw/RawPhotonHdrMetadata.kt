@@ -1,6 +1,6 @@
 package com.hinnka.mycamera.raw
 
-/** Versioned HDRNet ML AE recipe shared by gallery metadata and the embedded Photon XMP summary. */
+/** Versioned HDRNet exposure recipe shared by gallery metadata and embedded Photon XMP. */
 internal object RawPhotonHdrMetadata {
     private const val PROPERTY = "photonHdrNetRatio"
     private const val CONTRACT_PROPERTY = "photonHdrNetRatioContract"

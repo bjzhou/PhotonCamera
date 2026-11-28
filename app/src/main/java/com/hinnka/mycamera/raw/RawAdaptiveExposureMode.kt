@@ -3,9 +3,8 @@ package com.hinnka.mycamera.raw
 /**
  * The mutually exclusive capture/development modes for adaptive RAW exposure handling.
  *
- * [QUALCOMM_ADRC] is the default mode: it runs pure scene-linear Qualcomm ADRC/TMC12 curve solving
- * plus multi-scale Guided Filter LTM directly into a standard DNG ProfileGainTableMap2.
- * [PHOTON_HDR] (displayed as HDRNet) runs ML AE metering plus HDRNet into a ProfileGainTableMap2.
+ * [QUALCOMM_ADRC] runs scene-linear Qualcomm ADRC/TMC12 and multi-scale Guided Filter LTM.
+ * [PHOTON_HDR] is the default and uses GPU exposure metering with HDRNet bilateral tone mapping.
  * [OFF] disables adaptive exposure and local tone mapping.
  */
 enum class RawAdaptiveExposureMode(val persistedValue: String) {
@@ -23,7 +22,7 @@ enum class RawAdaptiveExposureMode(val persistedValue: String) {
         get() = usesQualcommAdrc || usesPhotonHdr
 
     companion object {
-        val DEFAULT: RawAdaptiveExposureMode = QUALCOMM_ADRC
+        val DEFAULT: RawAdaptiveExposureMode = PHOTON_HDR
 
         fun resolve(
             usePhotonHdr: Boolean,

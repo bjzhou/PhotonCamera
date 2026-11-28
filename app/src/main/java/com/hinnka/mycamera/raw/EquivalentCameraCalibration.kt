@@ -44,6 +44,10 @@ internal class EquivalentCameraCalibration(private val target: EquivalentCameraT
         }.also { bundledProfile = it }
     }
 
+    fun prewarm(context: Context) {
+        targetProfile(context)
+    }
+
     /** An uncalibrated imported RAW is interpreted directly in the target sensor domain. */
     fun directCameraWhiteXy(context: Context, metadata: RawMetadata): FloatArray =
         requireNotNull(DngSdkColorSpec.whiteXyForProfile(targetProfile(context), metadata)) {

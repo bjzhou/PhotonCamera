@@ -204,6 +204,11 @@ class HncsProfileManager(private val context: Context) {
 
     fun getAvailableProfiles(): List<HncsProfileInfo> = manifestProfiles()
 
+    internal fun prewarm(filmCurveMode: HncsFilmCurveMode) {
+        manifestProfiles().firstOrNull { it.id == DEFAULT_PROFILE_ID }?.let(::parseProfile)
+        resolveFilmCurve(filmCurveMode)
+    }
+
     internal fun resolveLutRenderPlan(
         colorTemperature: Float?,
         filmCurveMode: HncsFilmCurveMode = HncsFilmCurveMode.Standard

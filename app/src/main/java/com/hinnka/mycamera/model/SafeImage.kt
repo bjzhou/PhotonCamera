@@ -3,7 +3,7 @@ package com.hinnka.mycamera.model
 import android.graphics.ImageFormat
 import android.media.Image
 import com.hinnka.mycamera.camera.Camera2Controller
-import com.hinnka.mycamera.raw.Raw10Unpacker
+import com.hinnka.mycamera.raw.RawPackedUnpacker
 import com.hinnka.mycamera.utils.LargeDirectBuffer
 import java.nio.ByteBuffer
 import java.util.concurrent.atomic.AtomicBoolean
@@ -16,6 +16,7 @@ class SafeImage(val image: Image, private val camera2Controller: Camera2Controll
 
     /** Original camera output; [format] and [planes] describe the processing representation. */
     val sourceFormat: Int = image.format
+    private val packedRaw = sourceFormat == ImageFormat.RAW10 || sourceFormat == ImageFormat.RAW12
 
     interface Plane {
         val buffer: ByteBuffer
@@ -28,16 +29,18 @@ class SafeImage(val image: Image, private val camera2Controller: Camera2Controll
     val height: Int
         get() = image.height
     val format: Int
-        get() = if (sourceFormat == ImageFormat.RAW10) ImageFormat.RAW_SENSOR else sourceFormat
+        get() = if (packedRaw) ImageFormat.RAW_SENSOR else sourceFormat
     val planes: Array<Plane>
         get() = synchronized(this) {
             check(!closed.get()) { "Image is already closed" }
             processingPlanes?.let { return@synchronized it }
             validateBufferLayout()
-            val resolved = if (sourceFormat == ImageFormat.RAW10) {
+            val resolved = if (packedRaw) {
                 // Decode on first pixel access, on the processing thread rather than the camera callback.
                 val sourcePlane = image.planes.single()
-                val unpacked = Raw10Unpacker.unpack(sourcePlane.buffer, width, height, sourcePlane.rowStride)
+                val unpacked = RawPackedUnpacker.unpack(
+                    sourceFormat, sourcePlane.buffer, width, height, sourcePlane.rowStride,
+                )
                 unpackedRawBuffer = unpacked
                 val unpackedRowStride = width * 2
                 arrayOf<Plane>(object : Plane {
@@ -65,8 +68,8 @@ class SafeImage(val image: Image, private val camera2Controller: Camera2Controll
     internal fun validateBufferLayout() {
         check(!closed.get()) { "Image is already closed" }
         if (bufferLayoutValidated) return
-        if (sourceFormat == ImageFormat.RAW10) {
-            Raw10Unpacker.validateImageLayout(image)
+        if (packedRaw) {
+            RawPackedUnpacker.validateImageLayout(image)
         }
         bufferLayoutValidated = true
     }

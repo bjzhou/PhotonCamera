@@ -91,8 +91,6 @@ data class RawDngCaptureProfileInput(
     val metadata: RawMetadata,
     val meteringRenderPlan: DcpRenderPlan,
     val gpuLinearRgbSource: GpuLinearRgbSource? = null,
-    val fastMomentsRawStats: RawSceneAERawStats? = null,
-    val sceneExposureDeviceLimits: RawSceneExposureDeviceLimits? = null,
 )
 
 /**
@@ -108,9 +106,9 @@ data class GpuDemosaicedRawSource(
 )
 
 data class RawDngCaptureProfileResult(
-    /** HDRNet long/short TET ratio from ML AE; null outside HDRNet mode. */
+    /** HDRNet long/short exposure ratio, present in HDRNet mode. */
     val hdrRatio: Float?,
-    /** Physical source/short gain from ML AE; null outside HDRNet mode. */
+    /** Physical source-to-short gain, present in HDRNet mode. */
     val finalShortGain: Float?,
     /** Capture-time MGC AE inputs and results serialized as photon:SummaryText in the DNG XMP. */
     val rawSceneExposureSummaryText: String? = null,

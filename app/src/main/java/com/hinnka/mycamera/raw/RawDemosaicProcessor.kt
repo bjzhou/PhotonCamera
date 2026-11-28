@@ -9,7 +9,6 @@ import android.graphics.Canvas
 import android.graphics.Paint
 import android.graphics.Rect
 import android.media.Image
-import android.hardware.camera2.CameraMetadata
 import android.opengl.EGL14
 import android.opengl.EGLConfig
 import android.opengl.EGLContext
@@ -17,7 +16,6 @@ import android.opengl.EGLDisplay
 import android.opengl.EGLSurface
 import android.opengl.GLES30
 import android.opengl.GLES31
-import android.util.Half
 import android.util.Size
 import androidx.core.graphics.createBitmap
 import com.hinnka.mycamera.camera.AspectRatio
@@ -193,7 +191,8 @@ class RawDemosaicProcessor {
             lensShadingMapHeight = dngRawData.lensShadingMapHeight,
             lensShadingMapGrid = dngRawData.lensShadingMapGrid,
             baselineExposure = DngBaselineExposure.sanitize(dngRawData.baselineExposure),
-            shadowScale = sanitizeDngShadowScale(dngRawData.shadowScale),
+            shadowScale = RawProfileExposureGl.sanitizeShadowScale(dngRawData.shadowScale),
+            dngOutputReferred = dngRawData.dngOutputReferred,
             exposureBias = if (dngRawData.exposureBias == 0f) {
                 if (baseMetadata != null && baseMetadata.exposureBias != 0f) baseMetadata.exposureBias else exposureBias
             } else dngRawData.exposureBias,
@@ -380,7 +379,7 @@ class RawDemosaicProcessor {
             ready
         }
 
-    /** Executes the capture-time metering shader paths that drivers may compile lazily. */
+    /** Executes capture input shaders that drivers may compile lazily. */
     private fun prewarmCaptureProfilePasses(
         captureWidth: Int,
         captureHeight: Int,
@@ -402,12 +401,10 @@ class RawDemosaicProcessor {
             cameraWhite = floatArrayOf(1f, 1f, 1f),
             frameCount = 1,
         )
-        val textures = IntArray(2)
+        val textures = IntArray(1)
         GLES30.glGenTextures(textures.size, textures, 0)
-        val previousRawTextureId = rawTextureId
         return try {
             val linearRawTexture = textures[0]
-            val meteringRawTexture = textures[1]
             createCaptureWarmupTexture(
                 textureId = linearRawTexture,
                 internalFormat = GLES30.GL_RGBA16UI,
@@ -417,26 +414,6 @@ class RawDemosaicProcessor {
                 height = programSize.height,
                 pixels = null,
             )
-            createCaptureWarmupTexture(
-                textureId = meteringRawTexture,
-                internalFormat = GLES30.GL_R16UI,
-                format = GLES30.GL_RED_INTEGER,
-                type = GLES30.GL_UNSIGNED_SHORT,
-                width = programSize.width,
-                height = programSize.height,
-                pixels = null,
-            )
-            rawTextureId = meteringRawTexture
-            setupFullResFramebuffer(
-                (programSize.width + 1) / 2,
-                (programSize.height + 1) / 2,
-            )
-            runHalfResolutionMeteringDemosaic(
-                metadata = metadata,
-                width = programSize.width,
-                height = programSize.height,
-            )
-            rawTextureId = previousRawTextureId
             setupFullResFramebuffer(programSize.width, programSize.height)
             renderLinearRawRgbToTexture(
                 sourceTextureId = linearRawTexture,
@@ -446,25 +423,6 @@ class RawDemosaicProcessor {
                 height = programSize.height,
             )
 
-            val exposureReady = renderSceneExposureRequest(
-                request = RawSceneExposureRequest {
-                    RawSceneExposureResult(
-                        hdrRatio = 1f,
-                        finalShortTetMs = 1f,
-                        finalLongTetMs = 1f,
-                        finalShortGain = 1f,
-                        safeUnderexposure = 1f,
-                        fractionPixelsClippedAtFinalShortTet = 0f,
-                    )
-                },
-                metadata = metadata,
-                sourceTextureId = demosaicTextureId,
-                rawTextureIdForStats = meteringRawTexture,
-                rawSamplesPerPixel = 1,
-                colorCorrectionMatrix = identity,
-                profileToLinearSrgbTransform = identity,
-                outputSourceBounds = Rect(0, 0, programSize.width, programSize.height),
-            ) != null
             // Execute only a small viewport to force deferred driver compilation.
             renderLinearRcdPass(
                 metadata = metadata,
@@ -487,9 +445,8 @@ class RawDemosaicProcessor {
                     "resource=${programSize.width}x${programSize.height} " +
                     "programViewport=${programSize.width}x${programSize.height}",
             )
-            exposureReady
+            true
         } finally {
-            rawTextureId = previousRawTextureId
             GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, 0)
             GLES30.glDeleteTextures(textures.size, textures, 0)
         }
@@ -1435,8 +1392,6 @@ class RawDemosaicProcessor {
     private val warpRectilinearPass = RawWarpRectilinearPass(fullscreenQuad)
     private val linearRcdPass = RawLinearRcdPass(fullscreenQuad)
     private val hdrReferencePass = RawHdrReferencePass(engineTonePass)
-    private val meteringDemosaicAlgorithm = RawMeteringDemosaicAlgorithm()
-    private val fastMomentsStatsAlgorithm = RawAEStatsAlgorithm()
     private val quadBayerDemosaicAlgorithm = QuadBayerDemosaicAlgorithm()
     private val vgnDemosaicAlgorithm = VgnDemosaicAlgorithm()
     private val demosaicNoisePropagationCalibrator = DemosaicNoisePropagationCalibrator(
@@ -1496,11 +1451,6 @@ class RawDemosaicProcessor {
     private var adjustmentTextureId = 0
     private var adjustmentWidth = 0
     private var adjustmentHeight = 0
-
-    private var linearExposurePreviewFramebufferId = 0
-    private var linearExposurePreviewTextureId = 0
-    private var linearExposurePreviewWidth = 0
-    private var linearExposurePreviewHeight = 0
 
     private var hdrReferenceFramebufferId = 0
     private var hdrReferenceTextureId = 0
@@ -1938,7 +1888,7 @@ class RawDemosaicProcessor {
         aspectRatio: AspectRatio?,
         cropRegion: Rect?,
         rotation: Int,
-        sceneExposureRequest: RawSceneExposureRequest?,
+        hdrNetMaxRatio: Float,
         generatePhotonPgtm: Boolean,
         useQualcommAdrcPgtm: Boolean = false,
         statsBounds: Rect?,
@@ -1958,7 +1908,6 @@ class RawDemosaicProcessor {
                 rowStride = input.rowStride,
                 samplesPerPixel = input.samplesPerPixel,
                 gpuLinearRgbSource = input.gpuLinearRgbSource,
-                fastMomentsRawStats = input.fastMomentsRawStats,
                 metadata = input.metadata.copy(profileGainTableMap = null),
                 aspectRatio = aspectRatio,
                 cropRegion = cropRegion,
@@ -1979,7 +1928,7 @@ class RawDemosaicProcessor {
                     RawProfileToneMapMode.Default
                 ).withPhotonHdr(false),
                 rawBlackBorderCrop = rawBlackBorderCrop,
-                sceneExposureRequest = sceneExposureRequest,
+                captureHdrNetMaxRatio = hdrNetMaxRatio,
                 captureProfilePreparationRequested = true,
                 capturePhotonPgtmRequested = generatePhotonPgtm,
                 captureQualcommAdrcPgtmRequested = useQualcommAdrcPgtm,
@@ -2273,7 +2222,6 @@ class RawDemosaicProcessor {
         samplesPerPixel: Int = 1,
         gpuLinearRgbSource: GpuLinearRgbSource? = null,
         gpuDemosaicedRawSource: GpuDemosaicedRawSource? = null,
-        fastMomentsRawStats: RawSceneAERawStats? = null,
         metadata: RawMetadata? = null,
         aspectRatio: AspectRatio?,
         cropRegion: Rect?,
@@ -2320,7 +2268,7 @@ class RawDemosaicProcessor {
         dngFile: File? = null,
         onMetadata: ((RawMetadata) -> Unit)? = null,
         includeHdrReference: Boolean = false,
-        sceneExposureRequest: RawSceneExposureRequest? = null,
+        captureHdrNetMaxRatio: Float = RawSceneExposureMath.FAST_MOMENTS_MAX_HDR_RATIO,
         captureProfilePreparationRequested: Boolean = false,
         capturePhotonPgtmRequested: Boolean = false,
         captureQualcommAdrcPgtmRequested: Boolean = false,
@@ -2580,7 +2528,7 @@ class RawDemosaicProcessor {
                 .rawNoiseProfileManager
                 .fallbackProfile,
         )
-        val captureProfilePass = sceneExposureRequest != null || captureProfilePreparationRequested
+        val captureProfilePass = captureProfilePreparationRequested
         if (!captureProfilePass) {
             actualMetadata = actualMetadata?.withMgcRenderTuning(
                 rawData = actualRawData,
@@ -2794,17 +2742,7 @@ class RawDemosaicProcessor {
                 (rawPhysicalOutputSize != null &&
                     RawTilePlanner.shouldTile(outputGeometry.width, outputGeometry.height))
         val hasActiveWarp = applicableDngWarpRectilinear?.isNotEmpty() == true
-        val captureExposureRequested = sceneExposureRequest != null
-        val captureNeedsContinuousDemosaic =
-            captureExposureRequested || captureQualcommAdrcPgtmRequested
-        val prepareCaptureProfile = captureProfilePass
-        val useHalfResolutionMeteringDemosaic =
-            sceneExposureRequest != null &&
-                !capturePhotonPgtmRequested &&
-                actualSamplesPerPixel == 1 &&
-                actualMetadata.frameCount == 1 &&
-                actualMetadata.cfaPattern in RawMetadata.CFA_RGGB..RawMetadata.CFA_BGGR &&
-                !hasActiveWarp
+        val captureNeedsContinuousDemosaic = captureProfilePass && capturePhotonPgtmRequested
         val tileBlockingReason = when {
             !highResolutionOutput -> null
             actualSamplesPerPixel !in setOf(1, 3, 4) ->
@@ -2928,11 +2866,6 @@ class RawDemosaicProcessor {
                 (denoiseValue ?: 0f) > 0f || (chromaDenoiseValue ?: 0f) > 0f
             if (rawRenderTiles.isEmpty()) {
                 when {
-                    useHalfResolutionMeteringDemosaic -> setupFullResFramebuffer(
-                        (actualWidth + 1) / 2,
-                        (actualHeight + 1) / 2,
-                    )
-
                     !captureProfilePreparationRequested || captureNeedsContinuousDemosaic ->
                         setupFullResFramebuffer(actualWidth, actualHeight)
                 }
@@ -3088,10 +3021,6 @@ class RawDemosaicProcessor {
             activeDcpRenderPlan?.supportsOverrange == true
         val clampProfileRgb = useAdobeProfilePipeline
         val engineWorkingColorSpace = colorEngine.workingColorSpace
-        val profileToLinearSrgbTransform = computeWorkingToOutputTransform(
-            profileWorkingColorSpace,
-            ColorSpace.SRGB,
-        )
         val directCameraInput = targetCamera != null &&
             (!cameraColorMatchingEnabled || actualMetadata.cameraCalibration == null)
         val sourceColorCorrectionMatrix = if (directCameraInput) {
@@ -3111,7 +3040,7 @@ class RawDemosaicProcessor {
                 "Equivalent camera rendering requires the source white point"
             },
         )
-        // Every shared consumer (ML AE, HDRNet, PGTM, tiled and continuous rendering)
+        // Every shared consumer (HDRNet, PGTM, tiled and continuous rendering)
         // requires actual linear ProPhoto. Native's WB-only matrix is not that space.
         val linearColorCorrectionMatrix = if (directCameraInput) {
             requireNotNull(targetCameraColorTransform).sensorToProPhoto(
@@ -3243,12 +3172,6 @@ class RawDemosaicProcessor {
                                 demosaicCalculationWbGains(actualMetadata),
                             )
                     }
-                } else if (useHalfResolutionMeteringDemosaic) {
-                    runHalfResolutionMeteringDemosaic(
-                        metadata = actualMetadata,
-                        width = actualWidth,
-                        height = actualHeight,
-                    )
                 } else if (
                     captureProfilePreparationRequested &&
                     !captureNeedsContinuousDemosaic &&
@@ -3315,7 +3238,6 @@ class RawDemosaicProcessor {
                 applicableDngWarpRectilinear
                     ?.takeUnless {
                         borrowedDemosaicSource != null ||
-                        useHalfResolutionMeteringDemosaic ||
                             (captureProfilePreparationRequested && !captureNeedsContinuousDemosaic)
                     }
                     ?.let { warps ->
@@ -3350,53 +3272,16 @@ class RawDemosaicProcessor {
                 }
             }
 
-            if (prepareCaptureProfile) {
-                val captureUsesHdrNet = sceneExposureRequest != null
-                val captureUsesQualcommAdrc = captureQualcommAdrcPgtmRequested && !captureUsesHdrNet
+            if (captureProfilePass) {
+                val captureUsesHdrNet = capturePhotonPgtmRequested && !captureQualcommAdrcPgtmRequested
                 val processingBounds = captureProfileStatsBounds ?: outputSourceBounds
-                val solvedSceneExposure = sceneExposureRequest?.let { request ->
-                    renderSceneExposureRequest(
-                        request = request,
-                        metadata = actualMetadata,
-                        sourceTextureId = demosaicTextureId,
-                        rawTextureIdForStats = rawTextureId,
-                        rawSamplesPerPixel = actualSamplesPerPixel,
-                        suppliedFastMomentsRawStats = fastMomentsRawStats,
-                        colorCorrectionMatrix = linearColorCorrectionMatrix,
-                        profileToLinearSrgbTransform = profileToLinearSrgbTransform,
-                        outputSourceBounds = processingBounds,
-                        stackCompletionTimeline = borrowedGpuSource?.stackCompletionTimeline,
-                    )
-                }
-                solvedSceneExposure?.let { solution ->
-                    PLog.i(
-                        TAG,
-                        "RAW_SCENE_EXPOSURE stage=INFERENCE_COMPLETE " +
-                            "pgtm=$capturePhotonPgtmRequested " +
-                            "processingBounds=$processingBounds " +
-                            "sourceBaselineEv=${actualMetadata.baselineExposure} " +
-                            "hdrRatio=${solution.hdrRatio} " +
-                            "finalShortTetMs=${solution.finalShortTetMs} " +
-                            "finalLongTetMs=${solution.finalLongTetMs} " +
-                            "finalShortGain=${solution.finalShortGain} " +
-                            "safeUnderexposure=${solution.safeUnderexposure} " +
-                            "fractionPixelsClippedAtFinalShortTet=" +
-                            "${solution.fractionPixelsClippedAtFinalShortTet}",
-                    )
-                }
                 val initialBaselineExposureEv = DngBaselineExposure.sanitize(
                     actualMetadata.baselineExposure,
                 )
                 val dcpBaselineExposureOffsetEv =
                     dcpBaselineExposureOffsetOrZero(activeDcpRenderPlan)
-                val captureHdrRatio = solvedSceneExposure?.hdrRatio
-                    ?.takeIf { it.isFinite() && it >= 1f }
-                val captureSourceToShortGain = solvedSceneExposure?.finalShortGain
-                    ?.takeIf { it.isFinite() && it > 0f }
                 val captureProfileOutput = when {
-                    capturePhotonPgtmRequested && captureUsesHdrNet &&
-                        captureHdrRatio != null &&
-                        captureSourceToShortGain != null -> {
+                    captureUsesHdrNet -> {
                         generateProfileGainTableMapOnGpu(
                             mode = DngPhotonProfileGainTableAlgorithm.Mode.HDR_NET,
                             context = context.applicationContext,
@@ -3409,13 +3294,12 @@ class RawDemosaicProcessor {
                             statsBounds = processingBounds,
                             rendererBaselineExposureEv = initialBaselineExposureEv +
                                 dcpBaselineExposureOffsetEv,
-                            hdrRatio = captureHdrRatio,
-                            sourceToShortGain = captureSourceToShortGain,
+                            hdrNetMaxRatio = captureHdrNetMaxRatio,
                             colorCorrectionMatrix = linearColorCorrectionMatrix,
                             warpRectilinear = null,
                         )
                     }
-                    capturePhotonPgtmRequested && captureUsesQualcommAdrc -> {
+                    capturePhotonPgtmRequested && captureQualcommAdrcPgtmRequested -> {
                         generateProfileGainTableMapOnGpu(
                             mode = DngPhotonProfileGainTableAlgorithm.Mode.QUALCOMM_ADRC,
                             context = context.applicationContext,
@@ -3428,52 +3312,34 @@ class RawDemosaicProcessor {
                             statsBounds = processingBounds,
                             rendererBaselineExposureEv = initialBaselineExposureEv +
                                 dcpBaselineExposureOffsetEv,
-                            hdrRatio = 1f,
-                            sourceToShortGain = 1f,
                             colorCorrectionMatrix = linearColorCorrectionMatrix,
                             warpRectilinear = null,
                         )
                     }
-                    else -> {
-                        if (capturePhotonPgtmRequested) {
-                            PLog.e(
-                                TAG,
-                                when {
-                                    captureUsesHdrNet ->
-                                        "HDRNet PGTM unavailable: ML AE HDR ratio or final-short gain is missing"
-                                    captureUsesQualcommAdrc ->
-                                        "Qualcomm ADRC PGTM generation failed during capture profile"
-                                    else ->
-                                        "Adaptive exposure PGTM mode unsupported during capture profile"
-                                },
-                            )
-                        }
-                        null
-                    }
+                    else -> null
                 }
                 val captureProfileGainTableMap = captureProfileOutput?.map
-                val selectedCaptureHdrRatio = captureProfileOutput?.hdrRatio ?: captureHdrRatio
-                val selectedCaptureSourceToShortGain =
-                    captureProfileOutput?.sourceToShortGain ?: captureSourceToShortGain
-                val captureSummaryText = solvedSceneExposure?.summaryText?.let { summary ->
-                    val output = captureProfileOutput ?: return@let summary
-                    val outputShortGain = output.sourceToShortGain ?: return@let summary
-                    val outputHdrRatio = output.hdrRatio ?: return@let summary
+                val selectedCaptureHdrRatio = captureProfileOutput?.hdrRatio
+                val selectedCaptureSourceToShortGain = captureProfileOutput?.sourceToShortGain
+                val captureSummaryText = if (
+                    selectedCaptureSourceToShortGain != null && selectedCaptureHdrRatio != null
+                ) {
                     buildString {
-                        append(summary.trimEnd())
-                        appendLine()
-                        appendLine("hdrNetExposureTarget=ML_AE")
-                        appendLine("hdrNetFinalShortGain=$outputShortGain")
-                        appendLine("hdrNetFinalLongGain=${outputShortGain * outputHdrRatio}")
-                        appendLine("hdrNetFinalHdrRatio=$outputHdrRatio")
-                    }.trimEnd()
+                        appendLine("PhotonCamera RAW AE SummaryText v1")
+                        appendLine("hdrNetExposureTarget=GPU_AE")
+                        appendLine("hdrNetFinalShortGain=$selectedCaptureSourceToShortGain")
+                        appendLine("hdrNetFinalLongGain=${selectedCaptureSourceToShortGain * selectedCaptureHdrRatio}")
+                        append("hdrNetFinalHdrRatio=$selectedCaptureHdrRatio")
+                    }
+                } else {
+                    null
                 }
                 val captureProfileFailed =
                     capturePhotonPgtmRequested && captureProfileGainTableMap == null
                 val reusableDemosaicSource = if (
                     !captureProfileFailed &&
+                    captureNeedsContinuousDemosaic &&
                     actualSamplesPerPixel == 1 &&
-                    !useHalfResolutionMeteringDemosaic &&
                     demosaicTextureId != 0 &&
                     demosaicWidth == actualWidth && demosaicHeight == actualHeight
                 ) {
@@ -3503,73 +3369,23 @@ class RawDemosaicProcessor {
                 val persistedHdrRatio = photonHdrRatio?.takeIf { it.isFinite() && it >= 1f }
                 val persistedSourceToShortGain = photonSourceToShortGain
                     ?.takeIf { it.isFinite() && it > 0f }
-                val usePersistedCaptureAe =
-                    persistedHdrRatio != null && persistedSourceToShortGain != null
-                val estimatedExposure = if (usePersistedCaptureAe) {
-                    null
+                val canMeterExposure = actualMetadata.iso > 0 && actualMetadata.shutterSpeed > 0L &&
+                    actualMetadata.aperture.isFinite() && actualMetadata.aperture > 0f &&
+                    actualMetadata.exposureCompensation.isFinite()
+                val exposureOverride = when {
+                    persistedSourceToShortGain != null && persistedHdrRatio != null ->
+                        persistedSourceToShortGain to persistedHdrRatio
+                    // Old recipes can contain a ratio alone. Preserve their default short gain
+                    // when the source DNG also lacks the physical exposure needed for metering.
+                    persistedHdrRatio != null && !canMeterExposure -> 1f to persistedHdrRatio
+                    else -> null
+                }
+                val maxHdrRatio = if (exposureOverride == null) {
+                    ContentRepository.getInstance(context)
+                        .userPreferencesRepository.userPreferences.firstOrNull()?.mlAeMaxHdrRatio
                 } else {
-                    renderSceneExposureRequest(
-                        request = RawSceneExposureMatcher.createRequest(
-                            context = context,
-                            metadata = actualMetadata,
-                            maxHdrRatio = ContentRepository.getInstance(context)
-                                .userPreferencesRepository.userPreferences.firstOrNull()
-                                ?.mlAeMaxHdrRatio
-                                ?: RawSceneExposureMath.FAST_MOMENTS_MAX_HDR_RATIO,
-                        ),
-                        metadata = actualMetadata,
-                        sourceTextureId = demosaicTextureId,
-                        rawTextureIdForStats = rawTextureId,
-                        rawSamplesPerPixel = actualSamplesPerPixel,
-                        colorCorrectionMatrix = linearColorCorrectionMatrix,
-                        profileToLinearSrgbTransform = profileToLinearSrgbTransform,
-                        outputSourceBounds = outputSourceBounds,
-                        stackCompletionTimeline = borrowedGpuSource?.stackCompletionTimeline,
-                        restoreSourceBaselineExposure = false,
-                    )
-                }
-                val estimatedHdrRatio = estimatedExposure?.hdrRatio
-                    ?.takeIf { it.isFinite() && it >= 1f }
-                val estimatedSourceToShortGain = estimatedExposure?.finalShortGain
-                    ?.takeIf { it.isFinite() && it > 0f }
-                val useEstimatedAe = !usePersistedCaptureAe &&
-                    estimatedHdrRatio != null && estimatedSourceToShortGain != null
-                val regenerationHdrRatio = when {
-                    usePersistedCaptureAe -> persistedHdrRatio
-                    useEstimatedAe -> estimatedHdrRatio
-                    else -> persistedHdrRatio
-                }
-                if (regenerationHdrRatio == null) {
-                    PLog.e(
-                        TAG,
-                        "HDRNet PGTM regeneration could not resolve an ML AE HDR ratio",
-                    )
-                    return@withContext null
-                }
-                val regenerationSourceToShortGain = when {
-                    usePersistedCaptureAe -> checkNotNull(persistedSourceToShortGain)
-                    useEstimatedAe -> checkNotNull(estimatedSourceToShortGain)
-                    else -> persistedSourceToShortGain ?: 1f
-                }
-                val regenerationAeSource = when {
-                    usePersistedCaptureAe -> "PERSISTED_CAPTURE_AE"
-                    useEstimatedAe -> "MGC_ML_AE_REFRESH"
-                    else -> "LEGACY_RATIO_SHORT_UNITY_FALLBACK"
-                }
-                val regenerationLongGain =
-                    regenerationSourceToShortGain * regenerationHdrRatio
-                PLog.i(
-                    TAG,
-                    "HDRNet PGTM regeneration " +
-                        "trigger=$photonPgtmRegenerationTrigger " +
-                        "hdrRatio=$regenerationHdrRatio " +
-                        "finalShortGain=$regenerationSourceToShortGain " +
-                        "finalLongGain=$regenerationLongGain " +
-                        "aeSource=$regenerationAeSource " +
-                        "sourceBaselineEv=${actualMetadata.baselineExposure} " +
-                        "sourceBaselineGain=${exactDngBaselineExposureGain(actualMetadata)} " +
-                        "statsBounds=$outputSourceBounds",
-                )
+                    null
+                } ?: RawSceneExposureMath.FAST_MOMENTS_MAX_HDR_RATIO
                 val regeneratedPhotonPgtm = generateProfileGainTableMapOnGpu(
                     mode = DngPhotonProfileGainTableAlgorithm.Mode.HDR_NET,
                     context = context.applicationContext,
@@ -3582,8 +3398,8 @@ class RawDemosaicProcessor {
                     statsBounds = outputSourceBounds,
                     rendererBaselineExposureEv = actualMetadata.baselineExposure +
                         dcpBaselineExposureOffsetOrZero(activeDcpRenderPlan),
-                    hdrRatio = regenerationHdrRatio,
-                    sourceToShortGain = regenerationSourceToShortGain,
+                    hdrNetMaxRatio = maxHdrRatio,
+                    hdrNetExposureOverride = exposureOverride,
                     colorCorrectionMatrix = linearColorCorrectionMatrix,
                     warpRectilinear = null,
                 )
@@ -3621,8 +3437,6 @@ class RawDemosaicProcessor {
                     statsBounds = outputSourceBounds,
                     rendererBaselineExposureEv = actualMetadata.baselineExposure +
                         dcpBaselineExposureOffsetOrZero(activeDcpRenderPlan),
-                    hdrRatio = 1f,
-                    sourceToShortGain = 1f,
                     colorCorrectionMatrix = linearColorCorrectionMatrix,
                     warpRectilinear = null,
                 )
@@ -3644,7 +3458,7 @@ class RawDemosaicProcessor {
                 )
             }
 
-            // Newly generated HDRNet maps contain the downstream Dehaze + DHA curve. The DCP
+            // HDRNet maps already contain the GPU tone response. The DCP
             // color map must therefore execute after PGTM; Local Laplacian and ordinary DNG
             // profile maps retain their existing ordering.
             val deferDcpHueSatUntilAfterPgtm =
@@ -3690,7 +3504,6 @@ class RawDemosaicProcessor {
                     "defaultBlackRender=${resolveProfileDefaultBlackRender(
                         metadata = actualMetadata,
                         dcpRenderPlan = activeDcpRenderPlan,
-                        applyDngBaselineExposure = applyProfileDngBaselineExposure,
                         useRamp = useProfileExposureRamp,
                     )} " +
                     "profileRampBlack=${profileExposureUniforms.rampBlack} " +
@@ -3794,8 +3607,7 @@ class RawDemosaicProcessor {
                     rawExposureCompensation = 0f,
                     colorCorrectionMatrix = linearColorCorrectionMatrix,
                     cameraWhite = linearCameraWhite,
-                    // HDRNet's PGTM contains HDRNet -> Dehaze/DHA, so its DCP color map is deferred
-                    // to the profile pass. Other paths retain their established linear-pass order.
+                    // Apply HDRNet's DCP color map after the baked tone response.
                     hueSatMap = activeDcpRenderPlan?.hueSatMap
                         ?.takeUnless { deferDcpHueSatUntilAfterPgtm },
                     applyDngBaselineExposure = applyLinearDngBaselineExposure,
@@ -3815,8 +3627,7 @@ class RawDemosaicProcessor {
                 rawExposureCompensation = 0f,
                 colorCorrectionMatrix = linearColorCorrectionMatrix,
                 cameraWhite = linearCameraWhite,
-                // HDRNet's PGTM contains HDRNet -> Dehaze/DHA, so its DCP color map is deferred
-                // to the profile pass. Other paths retain their established linear-pass order.
+                // Apply HDRNet's DCP color map after the baked tone response.
                 hueSatMap = activeDcpRenderPlan?.hueSatMap
                     ?.takeUnless { deferDcpHueSatUntilAfterPgtm },
                 applyDngBaselineExposure = applyLinearDngBaselineExposure,
@@ -5018,9 +4829,9 @@ class RawDemosaicProcessor {
         metadata: RawMetadata,
         statsBounds: Rect?,
         rendererBaselineExposureEv: Float,
-        hdrRatio: Float,
-        sourceToShortGain: Float,
         colorCorrectionMatrix: FloatArray,
+        hdrNetMaxRatio: Float = RawSceneExposureMath.FAST_MOMENTS_MAX_HDR_RATIO,
+        hdrNetExposureOverride: Pair<Float, Float>? = null,
         warpRectilinear: FloatArray? = null,
     ): DngPhotonProfileGainTableAlgorithm.Output? {
         return profileGainTableAlgorithm.execute(
@@ -5035,8 +4846,8 @@ class RawDemosaicProcessor {
                 metadata = metadata,
                 statsBounds = statsBounds,
                 rendererBaselineExposureEv = rendererBaselineExposureEv,
-                hdrRatio = hdrRatio,
-                sourceToShortGain = sourceToShortGain,
+                hdrNetMaxRatio = hdrNetMaxRatio,
+                hdrNetExposureOverride = hdrNetExposureOverride,
                 colorCorrectionMatrix = colorCorrectionMatrix,
                 warpRectilinear = warpRectilinear,
                 installProfileGainTableTexture = ::installProfileGainTableTexture,
@@ -6036,45 +5847,6 @@ class RawDemosaicProcessor {
         )
     }
 
-    /**
-     * Collapses each standard Bayer 2x2 cell to one camera-RGB texel for capture-side exposure
-     * matching. The result stays in the same un-white-balanced, lens-shading-corrected domain as
-     * the full VGN output, so the existing DCP/default-curve preview path remains authoritative.
-     */
-    private fun runHalfResolutionMeteringDemosaic(
-        metadata: RawMetadata,
-        width: Int,
-        height: Int,
-    ) {
-        val outputWidth = (width + 1) / 2
-        val outputHeight = (height + 1) / 2
-        check(demosaicWidth == outputWidth && demosaicHeight == outputHeight) {
-            "RAW metering target mismatch: ${demosaicWidth}x$demosaicHeight, " +
-                "expected=${outputWidth}x$outputHeight"
-        }
-        val blackLevel4 = FloatArray(4) { index ->
-            metadata.blackLevel.getOrElse(index) {
-                metadata.blackLevel.firstOrNull() ?: 0f
-            }.coerceAtLeast(0f)
-        }
-        checkNotNull(
-            meteringDemosaicAlgorithm.execute(
-                RawMeteringDemosaicAlgorithm.Input(
-                    rawTextureId = rawTextureId,
-                    outputTextureId = demosaicTextureId,
-                    width = width,
-                    height = height,
-                    cfaPattern = metadata.cfaPattern,
-                    blackLevel = blackLevel4,
-                    whiteLevel = metadata.whiteLevel,
-                    bindLensShading = { program ->
-                        bindLensShadingForProgram(program, metadata)
-                    },
-                ),
-            )
-        ) { "RAW metering half-resolution program is unavailable" }
-    }
-
     private fun runStandardBayerVgnDemosaic(
         metadata: RawMetadata,
         width: Int,
@@ -6635,56 +6407,6 @@ class RawDemosaicProcessor {
         GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_MAG_FILTER, GLES30.GL_NEAREST)
         GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_WRAP_S, GLES30.GL_CLAMP_TO_EDGE)
         GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_WRAP_T, GLES30.GL_CLAMP_TO_EDGE)
-    }
-
-    private fun setupLinearExposurePreviewFramebuffer(width: Int, height: Int) {
-        if (linearExposurePreviewWidth == width &&
-            linearExposurePreviewHeight == height &&
-            linearExposurePreviewFramebufferId != 0
-        ) {
-            return
-        }
-
-        if (linearExposurePreviewTextureId != 0) {
-            GLES30.glDeleteTextures(1, intArrayOf(linearExposurePreviewTextureId), 0)
-        }
-        if (linearExposurePreviewFramebufferId != 0) {
-            GLES30.glDeleteFramebuffers(1, intArrayOf(linearExposurePreviewFramebufferId), 0)
-        }
-
-        linearExposurePreviewWidth = width
-        linearExposurePreviewHeight = height
-
-        val textures = IntArray(1)
-        GLES30.glGenTextures(1, textures, 0)
-        linearExposurePreviewTextureId = textures[0]
-        GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, linearExposurePreviewTextureId)
-        GLES30.glTexStorage2D(GLES30.GL_TEXTURE_2D, 1, GLES30.GL_RGBA16F, width, height)
-        GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_MIN_FILTER, GLES30.GL_LINEAR)
-        GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_MAG_FILTER, GLES30.GL_LINEAR)
-        GLES30.glTexParameteri(
-            GLES30.GL_TEXTURE_2D,
-            GLES30.GL_TEXTURE_WRAP_S,
-            GLES30.GL_CLAMP_TO_EDGE
-        )
-        GLES30.glTexParameteri(
-            GLES30.GL_TEXTURE_2D,
-            GLES30.GL_TEXTURE_WRAP_T,
-            GLES30.GL_CLAMP_TO_EDGE
-        )
-
-        val framebuffers = IntArray(1)
-        GLES30.glGenFramebuffers(1, framebuffers, 0)
-        linearExposurePreviewFramebufferId = framebuffers[0]
-        GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, linearExposurePreviewFramebufferId)
-        GLES30.glFramebufferTexture2D(
-            GLES30.GL_FRAMEBUFFER,
-            GLES30.GL_COLOR_ATTACHMENT0,
-            GLES30.GL_TEXTURE_2D,
-            linearExposurePreviewTextureId,
-            0
-        )
-        checkGlError("setupLinearExposurePreviewFramebuffer")
     }
 
     private fun setupHdrReferenceFramebuffer(width: Int, height: Int) {
@@ -7872,7 +7594,6 @@ class RawDemosaicProcessor {
         val defaultBlackRender = resolveProfileDefaultBlackRender(
             metadata = metadata,
             dcpRenderPlan = dcpRenderPlan,
-            applyDngBaselineExposure = useAdobeProfilePipeline,
             useRamp = useProfileExposureRamp,
         )
         val dcpBaselineExposureOffset = if (applyDcpBaselineExposureOffset) {
@@ -7919,18 +7640,6 @@ class RawDemosaicProcessor {
         return if (offset.isFinite() && abs(offset) > 1e-6f) offset else 0f
     }
 
-    private fun sanitizeDngShadowScale(shadowScale: Float): Float {
-        return if (shadowScale.isFinite() && shadowScale > 0f) {
-            shadowScale
-        } else {
-            1f
-        }
-    }
-
-    private fun dcpDefaultBlackRenderOrAuto(dcpRenderPlan: DcpRenderPlan?): DcpDefaultBlackRender {
-        return dcpRenderPlan?.defaultBlackRender ?: DcpDefaultBlackRender.Auto
-    }
-
     private fun formatMatrix3x3(matrix: FloatArray): String {
         if (matrix.size != 9) return "invalid"
         return matrix.joinToString(prefix = "[", postfix = "]") { value ->
@@ -7963,7 +7672,6 @@ class RawDemosaicProcessor {
             defaultBlackRender = resolveProfileDefaultBlackRender(
                 metadata = metadata,
                 dcpRenderPlan = dcpRenderPlan,
-                applyDngBaselineExposure = applyDngBaselineExposure,
                 useRamp = useRamp,
             ),
             shadowScale = metadata.shadowScale,
@@ -7975,18 +7683,12 @@ class RawDemosaicProcessor {
     private fun resolveProfileDefaultBlackRender(
         metadata: RawMetadata,
         dcpRenderPlan: DcpRenderPlan?,
-        applyDngBaselineExposure: Boolean,
         useRamp: Boolean,
     ): DcpDefaultBlackRender {
         if (!useRamp) return DcpDefaultBlackRender.None
-        val dngBaselineExposure = if (applyDngBaselineExposure) {
-            DngBaselineExposure.sanitize(metadata.baselineExposure)
-        } else {
-            0f
-        }
         return RawProfileExposureGl.resolveDefaultBlackRender(
-            dngBaselineExposure = dngBaselineExposure,
-            requested = dcpDefaultBlackRenderOrAuto(dcpRenderPlan),
+            requested = dcpRenderPlan?.defaultBlackRender ?: DcpDefaultBlackRender.Auto,
+            outputReferred = metadata.dngOutputReferred,
         )
     }
 
@@ -8269,372 +7971,6 @@ class RawDemosaicProcessor {
         profileGainTableTextureSource = null
     }
 
-    private fun renderSceneExposureRequest(
-        request: RawSceneExposureRequest,
-        metadata: RawMetadata,
-        sourceTextureId: Int,
-        rawTextureIdForStats: Int,
-        rawSamplesPerPixel: Int,
-        suppliedFastMomentsRawStats: RawSceneAERawStats? = null,
-        colorCorrectionMatrix: FloatArray,
-        profileToLinearSrgbTransform: FloatArray,
-        outputSourceBounds: Rect,
-        stackCompletionTimeline: GpuStackCompletionTimeline? = null,
-        restoreSourceBaselineExposure: Boolean = false,
-    ): RawSceneExposureResult? {
-        return try {
-            val width = RawSceneExposureMath.INPUT_WIDTH
-            val height = RawSceneExposureMath.INPUT_HEIGHT
-            val normalizedBounds = floatArrayOf(
-                outputSourceBounds.left.toFloat() / metadata.width.toFloat(),
-                outputSourceBounds.top.toFloat() / metadata.height.toFloat(),
-                outputSourceBounds.right.toFloat() / metadata.width.toFloat(),
-                outputSourceBounds.bottom.toFloat() / metadata.height.toFloat(),
-            )
-            // RawToLoResRgb and mode-2 ComputeSafeUnderexposure consume the RawWriteView itself;
-            // DefaultCrop belongs to rendering and must not silently crop either AE input.
-            val rawAeBounds = RawDefaultCropOverride.alignToBayerPhase(
-                crop = Rect(0, 0, metadata.width, metadata.height),
-                width = metadata.width,
-                height = metadata.height,
-            ) ?: return null
-            val normalizedRawAeBounds = floatArrayOf(
-                rawAeBounds.left.toFloat() / metadata.width.toFloat(),
-                rawAeBounds.top.toFloat() / metadata.height.toFloat(),
-                rawAeBounds.right.toFloat() / metadata.width.toFloat(),
-                rawAeBounds.bottom.toFloat() / metadata.height.toFloat(),
-            )
-            val camera2Gains = metadata.camera2ColorCorrectionGains
-                ?.takeIf { values ->
-                    values.size >= 4 && values.take(4).all { value ->
-                        value.isFinite() && value > 0f
-                    }
-                }
-            val gains = camera2Gains ?: metadata.whiteBalanceGains
-            fun positiveGain(index: Int, fallback: Float): Float {
-                val value = gains.getOrElse(index) { fallback }
-                return value.takeIf { it.isFinite() && it > 0f } ?: fallback
-            }
-            val greenEvenGain = positiveGain(1, 1f)
-            val greenOddGain = positiveGain(2, greenEvenGain)
-            val rawRgbGains = floatArrayOf(
-                positiveGain(0, 1f),
-                0.5f * (greenEvenGain + greenOddGain),
-                positiveGain(3, 1f),
-            )
-            val camera2Transform = metadata.camera2ColorCorrectionTransform
-                ?.takeIf { matrix ->
-                    metadata.camera2ColorCorrectionMode ==
-                        CameraMetadata.COLOR_CORRECTION_MODE_TRANSFORM_MATRIX &&
-                        matrix.size == 9 && matrix.all(Float::isFinite)
-                }
-            val rgbGains: FloatArray
-            val meteringRgbTransform: FloatArray
-            if (camera2Transform != null) {
-                rgbGains = rawRgbGains
-                meteringRgbTransform = camera2Transform
-            } else {
-                // Normalize pre-matrix WB gains so min(R, G, B) == 1.0, matching MGC's
-                // AwbInfo.gains contract. HALs reporting G > 1.0 would otherwise clip
-                // highlights early at 1/G before diag(1/rgbGains) divides the factor out.
-                val minGain = minOf(rawRgbGains[0], rawRgbGains[1], rawRgbGains[2])
-                rgbGains = floatArrayOf(
-                    rawRgbGains[0] / minGain,
-                    rawRgbGains[1] / minGain,
-                    rawRgbGains[2] / minGain,
-                )
-                // A standalone DNG does not retain Camera2's per-frame rgb2rgb matrix. Keep the
-                // DNG color-spec reconstruction as an explicit regeneration fallback. Factor its
-                // white balance out so the common path can retain MGC's pre-matrix clamp ordering.
-                val combinedTransform = multiplyMatrix3x3(
-                    profileToLinearSrgbTransform,
-                    colorCorrectionMatrix,
-                )
-                meteringRgbTransform = multiplyMatrix3x3(
-                    combinedTransform,
-                    floatArrayOf(
-                        1f / rgbGains[0], 0f, 0f,
-                        0f, 1f / rgbGains[1], 0f,
-                        0f, 0f, 1f / rgbGains[2],
-                    ),
-                )
-            }
-            val baseFrameMetering = suppliedFastMomentsRawStats
-                ?.baseFrameMetering
-                ?.takeIf { metering ->
-                    metering.sensorRgb.size == width * height * 3 &&
-                        metering.sensorRgb.all(Float::isFinite)
-                }
-            val restoreFallbackBaselineExposure =
-                baseFrameMetering == null && restoreSourceBaselineExposure
-            val sourceBaselineGain = if (restoreFallbackBaselineExposure) {
-                exactDngBaselineExposureGain(metadata)
-            } else {
-                1f
-            }
-            val cameraRgb: FloatArray
-            val lensShadingStats: RawSceneAERawStats?
-            if (baseFrameMetering != null) {
-                cameraRgb = baseFrameMetering.sensorRgb
-                lensShadingStats = suppliedFastMomentsRawStats
-            } else {
-                // Regenerated/standalone DNGs cannot recover the selected burst base frame. The
-                // demosaic output is camera RGB with LSC already applied, so only use it as an
-                // explicit fallback and keep all remaining MGC color operations on the CPU.
-                lensShadingStats = null
-                val areaSampleFootprint = floatArrayOf(
-                    (normalizedBounds[2] - normalizedBounds[0]) / width.toFloat(),
-                    (normalizedBounds[3] - normalizedBounds[1]) / height.toFloat(),
-                )
-                setupLinearExposurePreviewFramebuffer(width, height)
-                renderLinearRcdPass(
-                    metadata = metadata,
-                    sourceTextureId = sourceTextureId,
-                    targetFramebufferId = linearExposurePreviewFramebufferId,
-                    viewportWidth = width,
-                    viewportHeight = height,
-                    rawExposureCompensation = 0f,
-                    colorCorrectionMatrix = identityMatrix3x3(),
-                    cameraWhite = floatArrayOf(1f, 1f, 1f),
-                    hueSatMap = null,
-                    applyDngBaselineExposure = restoreFallbackBaselineExposure,
-                    clampProfileRgb = false,
-                    hueSatMapSupportsOverrange = false,
-                    textureBounds = normalizedBounds,
-                    areaSampleFootprint = areaSampleFootprint,
-                    textureRotation = 0,
-                    label = "RawSceneExposureCameraRgbPass",
-                )
-                GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, 0)
-                GLES31.glMemoryBarrier(
-                    GLES31.GL_FRAMEBUFFER_BARRIER_BIT or GLES31.GL_TEXTURE_FETCH_BARRIER_BIT,
-                )
-                cameraRgb = readSceneExposureChannels(
-                    width = width,
-                    height = height,
-                    stackCompletionTimeline = stackCompletionTimeline,
-                    label = "RAW scene exposure camera RGB fallback",
-                ) ?: return null
-            }
-            val meteringMetadata = if (baseFrameMetering != null) {
-                metadata.copy(
-                    lensShadingMap = baseFrameMetering.lensShadingMap,
-                    lensShadingMapWidth = baseFrameMetering.lensShadingMapWidth,
-                    lensShadingMapHeight = baseFrameMetering.lensShadingMapHeight,
-                    lensShadingMapGrid = baseFrameMetering.lensShadingMapGrid,
-                )
-            } else {
-                metadata
-            }
-            val meteringRgb = RawSceneExposureMath.prepareFastMomentsMeteringRgb(
-                cameraRgb = cameraRgb,
-                width = width,
-                height = height,
-                metadata = meteringMetadata,
-                rgbGains = rgbGains,
-                rgbTransform = meteringRgbTransform,
-                lensShadingStats = lensShadingStats,
-            ) ?: return null
-
-            val fastMomentsStats = suppliedFastMomentsRawStats ?: if (
-                rawSamplesPerPixel == 1 && rawTextureIdForStats != 0
-            ) {
-                // MGC's mode-2 ProcessAeStats consumes a RAW clipping mask at 1/16 scale. Preserve
-                // all four CFA channels before demosaic/highlight reconstruction can hide a clip.
-                val rawStatsBounds = rawAeBounds
-                val statsWidth = (
-                    rawStatsBounds.width() +
-                        RawSceneExposureMath.FAST_MOMENTS_RAW_STATS_DOWNSAMPLE - 1
-                    ) / RawSceneExposureMath.FAST_MOMENTS_RAW_STATS_DOWNSAMPLE
-                val statsHeight = (
-                    rawStatsBounds.height() +
-                        RawSceneExposureMath.FAST_MOMENTS_RAW_STATS_DOWNSAMPLE - 1
-                    ) / RawSceneExposureMath.FAST_MOMENTS_RAW_STATS_DOWNSAMPLE
-                setupLinearExposurePreviewFramebuffer(statsWidth, statsHeight)
-                if (!fastMomentsStatsAlgorithm.execute(
-                        RawAEStatsAlgorithm.Input(
-                            rawTextureId = rawTextureIdForStats,
-                            outputTextureId = linearExposurePreviewTextureId,
-                            width = metadata.width,
-                            height = metadata.height,
-                            sourceBounds = rawStatsBounds,
-                            cfaPattern = metadata.cfaPattern,
-                            blackLevel = FloatArray(4) { channel ->
-                                metadata.blackLevel.getOrElse(channel) {
-                                    metadata.blackLevel.firstOrNull() ?: 0f
-                                }
-                            },
-                            whiteLevel = metadata.whiteLevel,
-                        ),
-                    )
-                ) {
-                    return null
-                }
-                val channelMax = readSceneExposureChannels(
-                    width = statsWidth,
-                    height = statsHeight,
-                    stackCompletionTimeline = null,
-                    label = "RAW Fast Moments sensor statistics",
-                    channelCount = 4,
-                ) ?: return null
-                if (restoreFallbackBaselineExposure) {
-                    for (index in channelMax.indices) {
-                        channelMax[index] *= sourceBaselineGain
-                    }
-                }
-                RawSceneAERawStats(
-                    width = statsWidth,
-                    height = statsHeight,
-                    sourceWidth = rawStatsBounds.width(),
-                    sourceHeight = rawStatsBounds.height(),
-                    channelMax = channelMax,
-                    sensorNormalized = true,
-                    sourceBounds = normalizedRawAeBounds,
-                    sourceRotationDegrees = 0,
-                )
-            } else {
-                // LinearRaw RGB has no CFA plane. Retain the same mode-2 state machine and use the
-                // un-white-balanced camera-domain maximum surface as its explicit fallback input.
-                val orientedSourceWidth = outputSourceBounds.width()
-                val orientedSourceHeight = outputSourceBounds.height()
-                val statsWidth = (
-                    orientedSourceWidth +
-                        RawSceneExposureMath.FAST_MOMENTS_RAW_STATS_DOWNSAMPLE - 1
-                    ) / RawSceneExposureMath.FAST_MOMENTS_RAW_STATS_DOWNSAMPLE
-                val statsHeight = (
-                    orientedSourceHeight +
-                        RawSceneExposureMath.FAST_MOMENTS_RAW_STATS_DOWNSAMPLE - 1
-                    ) / RawSceneExposureMath.FAST_MOMENTS_RAW_STATS_DOWNSAMPLE
-                val statsAreaSampleFootprint = floatArrayOf(
-                    (normalizedBounds[2] - normalizedBounds[0]) /
-                        statsWidth.toFloat(),
-                    (normalizedBounds[3] - normalizedBounds[1]) /
-                        statsHeight.toFloat(),
-                )
-                setupLinearExposurePreviewFramebuffer(statsWidth, statsHeight)
-                renderLinearRcdPass(
-                    metadata = metadata,
-                    sourceTextureId = sourceTextureId,
-                    targetFramebufferId = linearExposurePreviewFramebufferId,
-                    viewportWidth = statsWidth,
-                    viewportHeight = statsHeight,
-                    rawExposureCompensation = 0f,
-                    colorCorrectionMatrix = identityMatrix3x3(),
-                    cameraWhite = floatArrayOf(1f, 1f, 1f),
-                    hueSatMap = null,
-                    applyDngBaselineExposure = restoreFallbackBaselineExposure,
-                    clampProfileRgb = false,
-                    hueSatMapSupportsOverrange = false,
-                    textureBounds = normalizedBounds,
-                    areaSampleFootprint = statsAreaSampleFootprint,
-                    useAreaSampleMaximum = true,
-                    textureRotation = 0,
-                    label = "RawSceneExposureCameraStatsPass",
-                )
-                GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, 0)
-                GLES31.glMemoryBarrier(
-                    GLES31.GL_FRAMEBUFFER_BARRIER_BIT or GLES31.GL_TEXTURE_FETCH_BARRIER_BIT,
-                )
-                val cameraRgbMax = readSceneExposureChannels(
-                    width = statsWidth,
-                    height = statsHeight,
-                    stackCompletionTimeline = null,
-                    label = "RAW scene exposure camera statistics",
-                ) ?: return null
-                val channelMax = FloatArray(statsWidth * statsHeight * 4)
-                for (pixel in 0 until statsWidth * statsHeight) {
-                    channelMax[pixel * 4] = cameraRgbMax[pixel * 3]
-                    channelMax[pixel * 4 + 1] = cameraRgbMax[pixel * 3 + 1]
-                    channelMax[pixel * 4 + 2] = cameraRgbMax[pixel * 3 + 1]
-                    channelMax[pixel * 4 + 3] = cameraRgbMax[pixel * 3 + 2]
-                }
-                RawSceneAERawStats(
-                    width = statsWidth,
-                    height = statsHeight,
-                    sourceWidth = orientedSourceWidth,
-                    sourceHeight = orientedSourceHeight,
-                    channelMax = channelMax,
-                    sensorNormalized = false,
-                    sourceBounds = normalizedBounds,
-                    sourceRotationDegrees = 0,
-                )
-            }
-            request.solve(
-                RawSceneLinearFrame(
-                    width = width,
-                    height = height,
-                    rgb = meteringRgb,
-                    fastMomentsStats = fastMomentsStats,
-                ),
-            )
-        } catch (error: Throwable) {
-            PLog.e(TAG, "Failed to prepare RAW scene exposure input", error)
-            null
-        }
-    }
-
-    private fun readSceneExposureChannels(
-        width: Int,
-        height: Int,
-        stackCompletionTimeline: GpuStackCompletionTimeline?,
-        label: String,
-        channelCount: Int = 3,
-    ): FloatArray? {
-        require(channelCount in 1..4)
-        val pixelCount = width * height
-        val byteCount = pixelCount * 4 * Short.SIZE_BYTES
-        val readback = LargeDirectBuffer.allocate(
-            byteCount.toLong(),
-            "$label readback",
-        ) ?: return null
-        return try {
-            readback.clear()
-            GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, linearExposurePreviewFramebufferId)
-            GLES30.glBindBuffer(GLES30.GL_PIXEL_PACK_BUFFER, 0)
-            GLES30.glPixelStorei(GLES30.GL_PACK_ALIGNMENT, 1)
-            val upstreamTiming = stackCompletionTimeline?.awaitPending(
-                syncPoint = "RAW_SCENE_EXPOSURE",
-                checkGlError = ::checkGlError,
-            )
-            val queueWaitMs = GlesGpuCompletion.awaitSubmittedWork(
-                label = "$label ${width}x$height",
-                checkGlError = ::checkGlError,
-            )
-            val transferStartNs = System.nanoTime()
-            GLES30.glReadPixels(
-                0,
-                0,
-                width,
-                height,
-                GLES30.GL_RGBA,
-                GLES30.GL_HALF_FLOAT,
-                readback,
-            )
-            val transferMs = (System.nanoTime() - transferStartNs) / 1_000_000L
-            checkGlError("$label readback")
-            readback.position(0)
-            val half = readback.order(ByteOrder.nativeOrder()).asShortBuffer()
-            val channels = FloatArray(pixelCount * channelCount)
-            for (pixel in 0 until pixelCount) {
-                val sourceOffset = pixel * 4
-                val targetOffset = pixel * channelCount
-                for (channel in 0 until channelCount) {
-                    channels[targetOffset + channel] =
-                        Half.toFloat(half.get(sourceOffset + channel))
-                }
-            }
-            PLog.d(
-                TAG,
-                "$label timing size=${width}x$height " +
-                    "upstreamStackGpuWait=${upstreamTiming?.totalWaitMs ?: 0L}ms " +
-                    "gpuQueueWait=${queueWaitMs}ms pixelTransfer=${transferMs}ms",
-            )
-            channels
-        } finally {
-            LargeDirectBuffer.free(readback)
-        }
-    }
-
     private data class ExposurePreviewSize(
         val width: Int,
         val height: Int
@@ -8894,8 +8230,6 @@ class RawDemosaicProcessor {
         vgnDemosaicAlgorithm.release()
         quadBayerDemosaicAlgorithm.release()
         profileGainTableAlgorithm.release()
-        meteringDemosaicAlgorithm.release()
-        fastMomentsStatsAlgorithm.release()
         linearRcdPass.release()
         warpRectilinearPass.release()
         linearUintToFloatPass.release()
@@ -8948,16 +8282,6 @@ class RawDemosaicProcessor {
         if (adjustmentFramebufferId != 0) GLES30.glDeleteFramebuffers(
             1,
             intArrayOf(adjustmentFramebufferId),
-            0
-        )
-        if (linearExposurePreviewTextureId != 0) GLES30.glDeleteTextures(
-            1,
-            intArrayOf(linearExposurePreviewTextureId),
-            0
-        )
-        if (linearExposurePreviewFramebufferId != 0) GLES30.glDeleteFramebuffers(
-            1,
-            intArrayOf(linearExposurePreviewFramebufferId),
             0
         )
         if (hdrReferenceTextureId != 0) GLES30.glDeleteTextures(

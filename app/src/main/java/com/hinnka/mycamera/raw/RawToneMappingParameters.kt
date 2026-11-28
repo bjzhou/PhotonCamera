@@ -9,8 +9,8 @@ data class RawToneMappingParameters(
     val filmicWhiteRelativeExposure: Float = FILMIC_WHITE_RELATIVE_EXPOSURE_DEFAULT,
     val useProfileToneMap: Boolean = true,
     val useOppoMasterToneMap: Boolean = false,
-    val usePhotonHdr: Boolean = PHOTON_HDR_DEFAULT,
-    val useQualcommAdrc: Boolean = QUALCOMM_ADRC_DEFAULT,
+    val usePhotonHdr: Boolean = RawAdaptiveExposureMode.DEFAULT.usesPhotonHdr,
+    val useQualcommAdrc: Boolean = RawAdaptiveExposureMode.DEFAULT.usesQualcommAdrc,
     val lumixPhotoStyle: LumixPhotoStyle = LumixPhotoStyle.Standard,
     val canonPictureStyle: CanonPictureStyle = CanonPictureStyle.Standard,
     val canonExposureCompensationEv: Float = CANON_EXPOSURE_COMPENSATION_DEFAULT,
@@ -125,8 +125,6 @@ data class RawToneMappingParameters(
             if (value.isFinite()) value.coerceIn(CANON_EXPOSURE_COMPENSATION_MIN, CANON_EXPOSURE_COMPENSATION_MAX)
             else CANON_EXPOSURE_COMPENSATION_DEFAULT
 
-        const val QUALCOMM_ADRC_DEFAULT = true
-        const val PHOTON_HDR_DEFAULT = false
         const val MIN_DYNAMIC_RANGE_EV = 0.2f
 
         const val AGX_BLACK_RELATIVE_EXPOSURE_MIN = -20f

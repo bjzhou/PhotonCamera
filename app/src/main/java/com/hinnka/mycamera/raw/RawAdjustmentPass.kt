@@ -9,6 +9,7 @@ import kotlin.math.max
 /** Applies the optional linear-domain shadows/highlights and black/white adjustments. */
 internal class RawAdjustmentPass(
     private val quad: RawFullscreenQuad,
+    private val logDiagnostics: Boolean = true,
 ) {
     data class Input(
         val textureId: Int,
@@ -39,13 +40,15 @@ internal class RawAdjustmentPass(
             return null
         }
 
-        PLog.d(
-            TAG,
-            "RAW adjustments: highlights=${input.highlights} shadows=${input.shadows} " +
-                "blacks=${input.blacks} whites=${input.whites} " +
-                "source=${input.textureId} target=${input.targetTextureId} " +
-                "size=${input.width}x${input.height}",
-        )
+        if (logDiagnostics) {
+            PLog.d(
+                TAG,
+                "RAW adjustments: highlights=${input.highlights} shadows=${input.shadows} " +
+                    "blacks=${input.blacks} whites=${input.whites} " +
+                    "source=${input.textureId} target=${input.targetTextureId} " +
+                    "size=${input.width}x${input.height}",
+            )
+        }
         val shadowsHighlightsActive =
             ShadowsHighlightsShader.isActive(input.highlights, input.shadows)
         if (shadowsHighlightsActive &&
@@ -94,7 +97,7 @@ internal class RawAdjustmentPass(
             highlights = input.highlights,
             shadows = input.shadows,
         )
-        if (!loggedUniformLocations) {
+        if (logDiagnostics && !loggedUniformLocations) {
             loggedUniformLocations = true
             PLog.d(
                 TAG,

@@ -16,8 +16,12 @@ import kotlin.math.max
  * [ShadowsHighlightsShader] operator with the [ToneBaseGl] pyramid in every host.
  */
 internal class PreviewLiteEffectsGl(private val tag: String) {
-    private var oesProgram = 0
-    private var texture2dProgram = 0
+    private data class DownsampleVariant(
+        val oes: Boolean,
+        val sceneLinearInput: Boolean,
+    )
+
+    private val programs = mutableMapOf<DownsampleVariant, Int>()
     private var texture = 0
     private var framebuffer = 0
     private var width = 0
@@ -30,8 +34,13 @@ internal class PreviewLiteEffectsGl(private val tag: String) {
         sourceWidth: Int,
         sourceHeight: Int,
         drawQuad: (Int) -> Unit,
+        sceneLinearInput: Boolean = false,
     ): Int {
-        val program = ensureProgram(sourceTarget)
+        val variant = DownsampleVariant(
+            oes = sourceTarget == GLES11Ext.GL_TEXTURE_EXTERNAL_OES,
+            sceneLinearInput = sceneLinearInput,
+        )
+        val program = ensureProgram(variant)
         if (program == 0) return 0
         if (!ensureTarget(max(1, sourceWidth / DOWNSAMPLE), max(1, sourceHeight / DOWNSAMPLE))) return 0
 
@@ -55,8 +64,7 @@ internal class PreviewLiteEffectsGl(private val tag: String) {
     }
 
     fun reset() {
-        oesProgram = 0
-        texture2dProgram = 0
+        programs.clear()
         texture = 0
         framebuffer = 0
         width = 0
@@ -64,28 +72,25 @@ internal class PreviewLiteEffectsGl(private val tag: String) {
     }
 
     fun release() {
-        GlUtils.deleteProgram(oesProgram)
-        GlUtils.deleteProgram(texture2dProgram)
+        programs.values.forEach(GlUtils::deleteProgram)
         releaseTarget()
         reset()
     }
 
-    private fun ensureProgram(sourceTarget: Int): Int {
-        val oes = sourceTarget == GLES11Ext.GL_TEXTURE_EXTERNAL_OES
-        if (oes && oesProgram != 0) return oesProgram
-        if (!oes && texture2dProgram != 0) return texture2dProgram
+    private fun ensureProgram(variant: DownsampleVariant): Int {
+        programs[variant]?.let { return it }
         val vertexShader = GlUtils.compileShader(GLES30.GL_VERTEX_SHADER, Shaders.SIMPLE_VERTEX_SHADER)
-        val fragmentShader = GlUtils.compileShader(GLES30.GL_FRAGMENT_SHADER, downsampleShader(oes))
+        val fragmentShader = GlUtils.compileShader(GLES30.GL_FRAGMENT_SHADER, downsampleShader(variant))
         if (vertexShader == 0 || fragmentShader == 0) {
             if (vertexShader != 0) GLES30.glDeleteShader(vertexShader)
             if (fragmentShader != 0) GLES30.glDeleteShader(fragmentShader)
-            PLog.e(tag, "Failed to compile preview lite downsample (oes=$oes)")
+            PLog.e(tag, "Failed to compile preview lite downsample ($variant)")
             return 0
         }
         val program = GlUtils.linkProgram(vertexShader, fragmentShader)
         GLES30.glDeleteShader(vertexShader)
         GLES30.glDeleteShader(fragmentShader)
-        if (oes) oesProgram = program else texture2dProgram = program
+        if (program != 0) programs[variant] = program
         return program
     }
 
@@ -132,25 +137,35 @@ internal class PreviewLiteEffectsGl(private val tag: String) {
         private const val DOWNSAMPLE = 4
 
         // Four bilinear taps cover the 4x4 source footprint of each quarter-resolution texel.
-        private fun downsampleShader(oes: Boolean): String = """
-            #version 300 es
-            ${if (oes) "#extension GL_OES_EGL_image_external_essl3 : require" else ""}
-            precision highp float;
-            in vec2 vTexCoord;
-            out vec4 fragColor;
-            uniform ${if (oes) "samplerExternalOES" else "sampler2D"} uSource;
-            uniform vec2 uSourceTexel;
-            void main() {
-                vec2 d = uSourceTexel;
-                vec3 color = texture(uSource, vTexCoord + vec2(-d.x, -d.y)).rgb;
-                color += texture(uSource, vTexCoord + vec2(d.x, -d.y)).rgb;
-                color += texture(uSource, vTexCoord + vec2(-d.x, d.y)).rgb;
-                color += texture(uSource, vTexCoord + vec2(d.x, d.y)).rgb;
-                color = clamp(color * 0.25, 0.0, 1.0);
-                float y = dot(color, vec3(0.299, 0.587, 0.114));
-                fragColor = vec4(color, clamp((y - $BLOOM_THRESHOLD) / (1.0 - $BLOOM_THRESHOLD), 0.0, 1.0));
-            }
-        """.trimIndent()
+        private fun downsampleShader(variant: DownsampleVariant): String {
+            val develop = if (variant.sceneLinearInput) "linearToSrgb(clamp(color, 0.0, 1.0))" else "color"
+            return """
+                #version 300 es
+                ${if (variant.oes) "#extension GL_OES_EGL_image_external_essl3 : require" else ""}
+                precision highp float;
+                in vec2 vTexCoord;
+                out vec4 fragColor;
+                uniform highp ${if (variant.oes) "samplerExternalOES" else "sampler2D"} uSource;
+                uniform vec2 uSourceTexel;
+                ${if (variant.sceneLinearInput) PreviewColorShaderModules.COLOR_TRANSFER_CORE else ""}
+
+                vec3 sampleSource(vec2 uv) {
+                    vec3 color = texture(uSource, uv).rgb;
+                    return $develop;
+                }
+
+                void main() {
+                    vec2 d = uSourceTexel;
+                    vec3 color = sampleSource(vTexCoord + vec2(-d.x, -d.y));
+                    color += sampleSource(vTexCoord + vec2(d.x, -d.y));
+                    color += sampleSource(vTexCoord + vec2(-d.x, d.y));
+                    color += sampleSource(vTexCoord + vec2(d.x, d.y));
+                    color = clamp(color * 0.25, 0.0, 1.0);
+                    float y = dot(color, vec3(0.299, 0.587, 0.114));
+                    fragColor = vec4(color, clamp((y - $BLOOM_THRESHOLD) / (1.0 - $BLOOM_THRESHOLD), 0.0, 1.0));
+                }
+            """.trimIndent().trimStart()
+        }
 
         private const val BLOOM_THRESHOLD = "0.598"
 

@@ -17,6 +17,9 @@ internal object PreviewColorShader {
         val needsClassifiers = variant.includeLchMixer || variant.includeLutMask
         val needsLogInput = variant.includeVideoLog ||
             variant.includeExtendedLutCurves
+        val prepareSource = if (variant.sceneLinearInput) {
+            "sampled.rgb = linearToSrgb(clamp(sampled.rgb, 0.0, 1.0));"
+        } else ""
         fun op(bit: Int, code: String) = if (variant.recipeOps and bit != 0) code else ""
         return """
             #version 300 es
@@ -32,7 +35,7 @@ internal object PreviewColorShader {
             out vec4 fragColor;
 
             uniform highp $sampler uCameraTexture;
-            uniform mediump sampler3D uLutTexture;
+            uniform highp sampler3D uLutTexture;
 
             uniform float uLutSize;
             uniform float uLutIntensity;
@@ -115,10 +118,9 @@ internal object PreviewColorShader {
             ${PreviewColorShaderModules.PRIMARY_CALIBRATION}
             ${PreviewColorShaderModules.LUT_COLOR_SPACE}
 
-            ${if (variant.includeEnginePreview) RawEnginePreviewGl.SAMPLING_GLSL else ""}
             vec4 samplePreviewSource(vec2 uv) {
                 vec4 sampled = texture(uCameraTexture, uv);
-                ${if (variant.includeEnginePreview) "sampled.rgb = sampleEnginePreview(sampled.rgb);" else ""}
+                $prepareSource
                 return sampled;
             }
 

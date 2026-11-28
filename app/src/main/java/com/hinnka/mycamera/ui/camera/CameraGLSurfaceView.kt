@@ -11,9 +11,12 @@ import android.util.AttributeSet
 import android.view.Surface
 import com.hinnka.mycamera.livephoto.LivePhotoRecorder
 import com.hinnka.mycamera.camera.MeteringMode
+import com.hinnka.mycamera.camera.PreviewRawFrameChannel
 import com.hinnka.mycamera.lut.LutConfig
 import com.hinnka.mycamera.lut.LutRenderer
-import com.hinnka.mycamera.raw.RawEnginePreviewPlan
+import com.hinnka.mycamera.lut.RawThumbnailSnapshot
+import com.hinnka.mycamera.raw.RawEnginePreviewSettings
+import com.hinnka.mycamera.raw.RawAdaptiveExposureMode
 import com.hinnka.mycamera.preview.EyeFocusPreviewFrame
 import com.hinnka.mycamera.preview.EyeFocusProcessingTiming
 import com.hinnka.mycamera.lut.PreviewCaptureSource
@@ -251,8 +254,27 @@ class CameraGLSurfaceView @JvmOverloads constructor(
         }
     }
 
-    fun setEnginePreview(plan: RawEnginePreviewPlan?) {
-        if (renderer.setEnginePreview(plan)) requestRender()
+    private var currentEnginePreviewSettings: RawEnginePreviewSettings? = null
+
+    fun setEnginePreview(settings: RawEnginePreviewSettings?) {
+        if (currentEnginePreviewSettings == settings) return
+        currentEnginePreviewSettings = settings
+        queueEvent {
+            renderer.setEnginePreview(settings)
+            requestRender()
+        }
+    }
+
+    fun setPreviewRawChannel(channel: PreviewRawFrameChannel) {
+        queueEvent {
+            renderer.setPreviewRawChannel(channel)
+            requestRender()
+        }
+    }
+
+    fun setAdaptivePreviewMode(mode: RawAdaptiveExposureMode, maxHdrRatio: Float) {
+        renderer.setAdaptivePreviewMode(mode, maxHdrRatio)
+        requestRender()
     }
 
     fun setBaselineLut(lutConfig: LutConfig?) {
@@ -408,13 +430,13 @@ class CameraGLSurfaceView @JvmOverloads constructor(
         }
     }
 
-    fun captureOriginalPreviewFrame(callback: (Bitmap?) -> Unit) {
-        capturePreviewFrameInternal(
-            maxLongEdge = null,
-            source = PreviewCaptureSource.Original,
-            requestRenderImmediately = true,
-            callback = callback
-        )
+    fun captureOriginalPreviewFrame(callback: (Bitmap, RawThumbnailSnapshot?) -> Unit) {
+        queueEvent {
+            renderer.captureOriginalPreviewFrame { bitmap, raw ->
+                post { callback(bitmap, raw) }
+            }
+            requestRender()
+        }
     }
 
     /** Capture both representations from the same rendered frame, with callbacks on the main thread. */

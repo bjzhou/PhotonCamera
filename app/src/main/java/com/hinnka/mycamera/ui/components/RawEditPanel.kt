@@ -160,8 +160,6 @@ fun RawEditPanel(
     ) {
         if (showAdaptiveExposureControl) {
             val modeOptions = listOf(
-                RawAdaptiveExposureMode.QUALCOMM_ADRC.persistedValue to
-                    stringResource(R.string.settings_raw_adaptive_exposure_mode_qualcomm_adrc),
                 RawAdaptiveExposureMode.PHOTON_HDR.persistedValue to
                     stringResource(R.string.settings_raw_adaptive_exposure_mode_photon_hdr),
                 RawAdaptiveExposureMode.OFF.persistedValue to

@@ -290,6 +290,7 @@
     <string name="refresh_success">Visualização atualizada</string>
     <string name="refresh_failed">Falha ao atualizar a visualização</string>
     <string name="settings_dro_mode">Otimizador de Faixa Dinâmica RAW (DRO)</string>
+    <string name="settings_raw_adaptive_exposure_mode">Otimização da faixa dinâmica</string>
     <string name="settings_dro_off">Desativado</string>
     <string name="settings_dro_dr100">DR100</string>
     <string name="settings_dro_dr200">DR200</string>

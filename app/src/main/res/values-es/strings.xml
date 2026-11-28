@@ -935,8 +935,8 @@
     <string name="settings_raw_profile_tone_map_oppo_master">OPPO Master</string>
     <string name="settings_raw_photon_hdr">Optimización de rango dinámico</string>
     <string name="settings_raw_photon_hdr_edit_description">Optimiza el rango dinámico de este RAW importado con HDRNet. Está desactivado de forma predeterminada.</string>
-    <string name="settings_raw_adaptive_exposure_mode">Modo de rango dinámico</string>
-    <string name="settings_raw_adaptive_exposure_mode_description">Elige cómo se ajustan la exposición y los tonos locales para conservar el detalle en las altas luces y las sombras.</string>
+    <string name="settings_raw_adaptive_exposure_mode">Optimización de rango dinámico</string>
+    <string name="settings_raw_adaptive_exposure_mode_description">Ajusta la exposición y los tonos locales en el visor del modo profesional y durante el revelado RAW.</string>
     <string name="settings_raw_adaptive_exposure_mode_qualcomm_adrc">Qualcomm ADRC</string>
     <string name="settings_raw_adaptive_exposure_mode_photon_hdr">HDRNet</string>
     <string name="settings_raw_agx_white_relative_exposure">Exposición relativa del blanco (AgX)</string>
